@@ -20,7 +20,8 @@ WALLTIME=22:30:00
 MEMORY=96GB
 INSFILE=global_cf.ins
 INPUT_MODULE=cf
-GRIDLIST="gridlist_oz_cf.txt"
+# Read gridlist file name from the .ins file.
+GRIDLIST="$(sed -E -n -e 's/^.*"file_gridlist_cf" \(str "([^"]+)"\)\r?$/\1/p' "${INSFILE}")"
 OUTFILES='*.out'
 QUEUE=normal
 BINARY="guess"
