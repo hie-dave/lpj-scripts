@@ -1,0 +1,55 @@
+!
+! Instruction file with global PFTs to be used with the
+! CRU I/O module.
+!
+
+import "global.ins"
+
+!///////////////////////////////////////////////////////////////////////////////////////
+! Forcing Data & gridlists
+!
+
+param "file_gridlist_cf" (str "gridlist_oz_cf.txt")
+
+param "file_co2"      (str "/scratch/hw83/jk8585/LPJ_forcing/co2/co2_1901_2018.txt")
+param "file_cru"      (str "/scratch/hw83/jk8585/LPJ_forcing/cruncepv7cruP_2/cruncep_1901_2015.bin")
+param "file_cru_misc" (str "/scratch/hw83/jk8585/LPJ_forcing/cruncepv7cruP_2/cruncep_1901_2015misc.bin")
+
+param "file_temp"     (str "/scratch/hw83/jk8585/LPJ_forcing/nc_forcing_data/CRU_JRA_v20/processed/crujra.v2.0.temp.nc")
+param "file_prec"     (str "/scratch/hw83/jk8585/LPJ_forcing/nc_forcing_data/CRU_JRA_v20/processed/crujra.v2.0.prec.nc")
+param "file_insol"    (str "/scratch/hw83/jk8585/LPJ_forcing/nc_forcing_data/CRU_JRA_v20/processed/crujra.v2.0.insol.nc")
+param "file_wind"     (str "/scratch/hw83/jk8585/LPJ_forcing/nc_forcing_data/CRU_JRA_v20/processed/crujra.v2.0.wind.nc")
+param "file_relhum"  (str "/scratch/hw83/jk8585/LPJ_forcing/nc_forcing_data/CRU_JRA_v20/processed/crujra.v2.0.rhum.nc")
+!param "file_relhum"   (str "")
+
+! Needed if relative humidity is not supplied
+param "file_pres"     (str "/scratch/hw83/jk8585/LPJ_forcing/nc_forcing_data/CRU_JRA_v20/processed/crujra.v2.0.pres.nc")
+param "file_specifichum" (str "/scratch/hw83/jk8585/LPJ_forcing/nc_forcing_data/CRU_JRA_v20/processed/crujra.v2.0.specifichum.nc")
+
+param "variable_temp" (str "temp")
+param "variable_prec" (str "prec")
+param "variable_insol" (str "insol")
+param "variable_wind"  (str "wind")
+param "variable_relhum" (str "rhum")
+
+! Needed if relative humidity is not supplied
+param "variable_pres" (str "pres")
+param "variable_specifichum" (str "specifichum")
+
+param "file_wetdays"     (str "")
+param "file_min_temp"    (str "/scratch/hw83/jk8585/LPJ_forcing/nc_forcing_data/CRU_JRA_v20/processed/crujra.v2.0.tmin.nc")
+param "file_max_temp"    (str "/scratch/hw83/jk8585/LPJ_forcing/nc_forcing_data/CRU_JRA_v20/processed/crujra.v2.0.tmax.nc")
+
+param "variable_wetdays" (str "")
+param "variable_min_temp" (str "tmin")
+param "variable_max_temp" (str "tmax")
+
+! N deposition (blank string to use constant pre-industrial level of 2 kgN/ha/year)
+param "file_ndep"     (str "/scratch/hw83/jk8585/LPJ_forcing/ndep/GlobalNitrogenDeposition.bin")
+
+! SIMFIRE-BLAZE related files
+param "file_simfire"  (str "/scratch/hw83/jk8585/LPJ_forcing/fire/SimfireInput.bin")
+
+! Soil map
+param "file_soildata" (str "/scratch/hw83/jk8585/LPJ_forcing/soil/soilmap_center_interpolated.dat")
+!param "file_soildata" (str "../env/soils_lpj.dat")
