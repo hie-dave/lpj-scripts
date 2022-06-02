@@ -76,6 +76,54 @@ INSFILE="$(get_absolute_path "${INSFILE}")"
 GRIDLIST="$(sed -E -n -e 's/^.*"file_gridlist_cf" \(str "([^"]+)"\)\r?$/\1/p' "${INSFILE}")"
 GRIDLIST="$(get_absolute_path "${GRIDLIST}")"
 
+echo OUT_DIR=${OUT_DIR}
+echo CODE_DIR=${CODE_DIR}
+echo EXPERIMENT=${EXPERIMENT}
+echo
+echo NPROCESS=${NPROCESS}
+echo WALLTIME=${WALLTIME}
+echo MEMORY=${MEMORY}
+echo QUEUE=${QUEUE}
+echo PROJECT=${PROJECT}
+echo EMAIL=${EMAIL}
+echo JOB_NAME=${JOB_NAME}
+echo BINARY=${BINARY}
+echo
+echo INSFILE=${INSFILE}
+echo INPUT_MODULE=${INPUT_MODULE}
+echo GRIDLIST=${GRIDLIST}
+echo
+
+# Input checking/validation.
+
+# This function will perform the specified check on the given file, and if the
+# check fails, will print the specified message and exit.
+#
+# Arguments:
+# - An argument to the test command - e.g. -f to check if file exists.
+# - The file path
+# - Error message
+check_permission() {
+  if [ ! $1 "$2" ]
+  then
+    echo $3
+    exit 1
+  fi
+}
+
+check_exists() { check_permission -f $1 "Error: $1 does not exist"; }
+check_read() { check_permission -r $1 "Error: $1 does not have read permission"; }
+check_execute() { check_permission -x $1 "Error: $1 does not have execute permission"; }
+
+check_exists "${BINARY}"
+check_exists "${INSFILE}"
+check_exists "${GRIDLIST}"
+check_read "${BINARY}"
+check_read "${INSFILE}"
+check_read "${GRIDLIST}"
+check_execute "${BINARY}"
+
+exit 0
 # Output path for this run.
 RUN_OUT_DIR="${OUT_DIR}/${EXPERIMENT}"
 
