@@ -27,6 +27,12 @@ SUBMIT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P )
 
 # ------------------------------------------------------------------------------
 # Input variables - change these as required.
+#
+# These can of course be modified in the script, but the recommended way is to
+# create a separate file which sets these variables, and pass that file to this
+# script with the -s command line argument. E.g.
+#
+# ./submit_to_gadi.sh -s myconfig.ini
 # ------------------------------------------------------------------------------
 
 # File paths
