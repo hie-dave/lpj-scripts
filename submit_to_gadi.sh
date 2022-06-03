@@ -41,6 +41,7 @@ MEMORY=96GB                         # Total amount of memory available to job.
 QUEUE=normal                        # PBS queue priority(?).
 PROJECT=hw83                        # Project name.
 EMAIL=j.knauer@westernsydney.edu.au # Email address of job owner.
+EMAIL_NOTIFICATIONS=1               # 1 to receive notifications, 0 otherwise.
 JOB_NAME=guess                      # Job name (overriden by -n CLI option).
 
 # LPJ-Guess Settings
@@ -85,6 +86,7 @@ echo MEMORY=${MEMORY}
 echo QUEUE=${QUEUE}
 echo PROJECT=${PROJECT}
 echo EMAIL=${EMAIL}
+echo EMAIL_NOTIFICATIONS=${EMAIL_NOTIFICATIONS}
 echo JOB_NAME=${JOB_NAME}
 echo
 echo INSFILE=${INSFILE}
@@ -186,6 +188,13 @@ done
 
 split_gridlist
 
+if [ ${EMAIL_NOTIFICATIONS} -eq 1 ]
+then
+  EMAIL_OPT=abe
+else
+  EMAIL_OPT=n
+fi
+
 # Create PBS script to request place in queue
 guess_cmd="${RUN_OUT_DIR}/guess.cmd"
 cat <<EOF > "${guess_cmd}"
@@ -195,7 +204,7 @@ cat <<EOF > "${guess_cmd}"
 #PBS -l mem=${MEMORY}
 #PBS -q ${QUEUE}
 #PBS -P ${PROJECT}
-#PBS -m n
+#PBS -m ${EMAIL_OPT}
 #PBS -M ${EMAIL}
 #PBS -j oe
 #PBS -l wd
@@ -218,7 +227,8 @@ cat <<EOF > "${append_cmd}"
 #PBS -q normal
 #PBS -l wd
 #PBS -j oe
-#PBS -m n
+#PBS -m ${EMAIL_OPT}
+#PBS -M ${EMAIL}
 #PBS -W umask=0022
 set -e
 function append_files {
