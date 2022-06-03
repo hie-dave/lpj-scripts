@@ -255,8 +255,9 @@ cat run*/guess.log > guess.log
 EOF
 
 # Submit guess job
-append_dependency=$(qsub -N "${JOB_NAME}" "${guess_cmd}")
-echo JOB_ID=${append_dependency}
+JOB_ID=$(qsub -N "${JOB_NAME}" "${guess_cmd}")
+echo JOB_ID=${JOB_ID}
 
 # Submit append job
-qsub -W depend=afterok:${append_dependency} -N "${JOB_NAME}_append" "${append_cmd}"
+APPEND_JOB_ID=$(qsub -W depend=afterok:${JOB_ID} -N "${JOB_NAME}_append" "${append_cmd}")
+echo APPEND_JOB_ID=${APPEND_JOB_ID}
