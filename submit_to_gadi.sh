@@ -31,7 +31,7 @@ SUBMIT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P )
 
 # File paths
 OUT_DIR="/scratch/hw83/jk8585/LPJ_runs" # Outut path.
-CODE_DIR="/home/599/jk8585/LPJ_code/trunk_r8538" # Path to LPJ-Guess repository.
+BINARY="/home/599/jk8585/LPJ_code/trunk_r8538/guess" # Path to LPJ-Guess binary.
 EXPERIMENT="test_run"               # Experiment name.
 
 # PBS/Cluster Settings
@@ -42,7 +42,6 @@ QUEUE=normal                        # PBS queue priority(?).
 PROJECT=hw83                        # Project name.
 EMAIL=j.knauer@westernsydney.edu.au # Email address of job owner.
 JOB_NAME=guess                      # Job name (overriden by -n CLI option).
-BINARY="${CODE_DIR}/guess"          # Path to LPJ-Guess binary.
 
 # LPJ-Guess Settings
 INSFILE="${SUBMIT_DIR}/global_cf.ins" # path to ins file from run directory.
@@ -77,7 +76,7 @@ GRIDLIST="$(sed -E -n -e 's/^.*"file_gridlist_cf" \(str "([^"]+)"\)\r?$/\1/p' "$
 GRIDLIST="$(get_absolute_path "${GRIDLIST}")"
 
 echo OUT_DIR=${OUT_DIR}
-echo CODE_DIR=${CODE_DIR}
+echo BINARY=${BINARY}
 echo EXPERIMENT=${EXPERIMENT}
 echo
 echo NPROCESS=${NPROCESS}
@@ -87,7 +86,6 @@ echo QUEUE=${QUEUE}
 echo PROJECT=${PROJECT}
 echo EMAIL=${EMAIL}
 echo JOB_NAME=${JOB_NAME}
-echo BINARY=${BINARY}
 echo
 echo INSFILE=${INSFILE}
 echo INPUT_MODULE=${INPUT_MODULE}
