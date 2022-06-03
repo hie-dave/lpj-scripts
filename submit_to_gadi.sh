@@ -123,7 +123,6 @@ check_read "${INSFILE}"
 check_read "${GRIDLIST}"
 check_execute "${BINARY}"
 
-exit 0
 # Output path for this run.
 RUN_OUT_DIR="${OUT_DIR}/${EXPERIMENT}"
 
