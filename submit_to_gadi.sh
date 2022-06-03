@@ -246,6 +246,7 @@ EOF
 
 # Submit guess job
 append_dependency=$(qsub -N "${JOB_NAME}" "${guess_cmd}")
+echo JOB_ID=${append_dependency}
 
 # Submit append job
 qsub -W depend=afterok:${append_dependency} -N "${JOB_NAME}_append" "${append_cmd}"
