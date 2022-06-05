@@ -77,6 +77,8 @@ get_absolute_path() {
 # Convert INSFILE to an absolute path since we will be starting the
 # guess instances from different directories.
 INSFILE="$(get_absolute_path "${INSFILE}")"
+BINARY="$(get_absolute_path "${BINARY}")"
+OUT_DIR="$(get_absolute_path "${OUT_DIR}")"
 
 # Read gridlist file name from the .ins file.
 GRIDLIST="$(sed -E -n -e 's/^.*"file_gridlist_cf" \(str "([^"]+)"\)\r?$/\1/p' "${INSFILE}")"
