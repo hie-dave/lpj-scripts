@@ -119,10 +119,34 @@ check_permission() {
   fi
 }
 
-check_exists() { check_permission -f $1 "Error: $1 does not exist"; }
-check_read() { check_permission -r $1 "Error: $1 does not have read permission"; }
-check_execute() { check_permission -x $1 "Error: $1 does not have execute permission"; }
+# Check if a file exists. If it does not, print an error message and return
+# non-zero exit code.
+#
+# Arguments:
+# - The file to be checked
+check_exists() {
+  check_permission -f $1 "Error: $1 does not exist"
+}
 
+# Check if a file or directory has read permission for the current user. If it
+# doesn't, print an error message and return a non-zero exit code.
+#
+# Arguments:
+# - The file to be checked
+check_read() {
+  check_permission -r $1 "Error: $1 does not have read permission"
+}
+
+# Check if a file or directory has execute permission for the current user. If
+# it doesn't, print an error message and return a non-zero exit code.
+#
+# Arguments:
+# - The file to be checked
+check_execute() {
+  check_permission -x $1 "Error: $1 does not have execute permission"
+}
+
+# Ensure the input files exist and have the required permissions.
 check_exists "${BINARY}"
 check_exists "${INSFILE}"
 check_exists "${GRIDLIST}"
@@ -194,8 +218,11 @@ do
     echo "tail \${DIR}/run${a}/guess.log" >> "${progress_sh}"
 done
 
+# Split the grid list into equally sized chunks, 1 chunk per CPU.
 split_gridlist
 
+# Get PBS options for email notifications.
+# Check the qsub man page for more details.
 if [ ${EMAIL_NOTIFICATIONS} -eq 1 ]
 then
   EMAIL_OPT=abe
@@ -226,6 +253,8 @@ umask 022
 mpirun ${BINARY} -parallel -input ${INPUT_MODULE} ${INSFILE}
 EOF
 
+# Create PBS script to generate combined output files. This will be run after
+# the main job has finished running.
 append_cmd="${RUN_OUT_DIR}/append.cmd"
 cat <<EOF > "${append_cmd}"
 #!/bin/bash
