@@ -74,14 +74,13 @@ get_absolute_path() {
   echo $( cd "$(dirname "$1")"; pwd -P )/$(basename "$1")
 }
 
-# Convert INSFILE to an absolute path since we will be starting the
-# guess instances from different directories.
+# Read gridlist file name from the .ins file.
+GRIDLIST="$(sed -E -n -e 's/^.*"file_gridlist_cf" \(str "([^"]+)"\)\r?$/\1/p' "${INSFILE}")"
+
+# Convert to absolute paths.
 INSFILE="$(get_absolute_path "${INSFILE}")"
 BINARY="$(get_absolute_path "${BINARY}")"
 OUT_DIR="$(get_absolute_path "${OUT_DIR}")"
-
-# Read gridlist file name from the .ins file.
-GRIDLIST="$(sed -E -n -e 's/^.*"file_gridlist_cf" \(str "([^"]+)"\)\r?$/\1/p' "${INSFILE}")"
 GRIDLIST="$(get_absolute_path "${GRIDLIST}")"
 
 echo OUT_DIR=${OUT_DIR}
