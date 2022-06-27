@@ -20,3 +20,17 @@ The input is a netcdf file as created by running 'aggregate_soil.sh' (see above)
 all required soil parameters and also acts as a 'land mask', i.e. only grid cells containing
 land according to the input map are added to the list. The soil params are converted from 2D to 1D and
 additionally cropped to a bounding box specified in the script. 
+
+
+copy_files.sh
+
+script to efficiently copy files (such as climate forcing) from one gadi location to another gadi location.
+Can be used as a template for similar jobs in the future.
+
+
+process_climate_input.sh
+
+script to process climate forcing files into a format directly useable by LPJ-GUESS.
+At the moment specific to NARCliM data (which don't require much modifications). But
+can be extended for different data sets, whcih may require regrdidding, unit conversions,
+time axis adjustments, renaming etc.
