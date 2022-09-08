@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+#PBS -N aggregate_lpj_guess_metdata
+#PBS -P vl59
+#PBS -q normal
+#PBS -l walltime=04:59:59
+#PBS -l mem=192GB
+#PBS -l ncpus=1
+#PBS -l storage=scratch/hw83
+#PBS -r y
+#PBS -l wd
+#PBS -j oe
+#PBS -m abe
+#PBS -M d.holzworth@westernsydney.edu.au
+#
+# Aggregates narclim climate data into 1 file per variable, suitable
+# for consumption by LPJ-Guess.
+#
+# Drew Holzworth, September 2022
+#
+set -euo pipefail
+
+input_dir="/scratch/hw83/jk8585/NARCliM1.5_processed"
+output_dir="/scratch/hw83/dh7190/narclim-lpjg"
+
+# global models
+globmods="CCCma-CanESM2 CSIRO-BOM-ACCESS1-0 CSIRO-BOM-ACCESS1-3"
+
+# regional (downscaled) climate models 
+regmods="UNSW-WRF360J UNSW-WRF360K"
+
+# climate scenarios
+scenarios="historical rcp45 rcp85"
+
+# variables
+vars="hurs pr rsds sfcWind tas"
+
+version="v1"
+freq="day"
+
+function get_start_year() {
+	if [[ "${1}" == "historical" ]] ; then
+		echo 1951
+	else
+		echo 2006
+	fi
+}
+
+function get_end_year() {
+	if [[ "${1}" == "historical" ]] ; then
+		echo 2005
+	else
+		echo 2099
+	fi
+}
+
+for scenario in ${scenarios}
+do
+	# Start/end year depends on scenario.
+	start_year="$(get_start_year "${scenario}")"
+	end_year="$(get_end_year "${scenario}")"
+	for var in ${vars}
+	do
+		dir="${input_dir}/${scenario}/${var}"
+		for globmod in ${globmods}
+		do
+			for regmod in ${regmods}
+			do
+				# hurs_historical_CSIRO-BOM-ACCESS1-3_UNSW-WRF360K_day_2005.nc
+				files="${dir}/${var}_${scenario}_${globmod}_${regmod}_day_*.nc"
+				out_File="${out_dir}/${var}_${scenario}_${globmod}_${regmod}_daily_${start_year}_${end_year}.nc"
+				echo "Aggregating data into ${out_file}..."
+				cdo mergetime $files "${out_file}"
+			done
+		done
+	done
+done
+
+echo "Data aggregated successfully."
