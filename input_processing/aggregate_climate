@@ -19,7 +19,10 @@
 #
 set -euo pipefail
 
-input_dir="/scratch/hw83/jk8585/NARCliM1.5_processed"
+module load cdo
+
+input_dir="/scratch/hw83/dh7190/narclim-in/NARCliM1.5_processed"
+
 output_dir="/scratch/hw83/dh7190/narclim-lpjg"
 
 # global models
@@ -67,7 +70,7 @@ do
 			do
 				# hurs_historical_CSIRO-BOM-ACCESS1-3_UNSW-WRF360K_day_2005.nc
 				files="${dir}/${var}_${scenario}_${globmod}_${regmod}_day_*.nc"
-				out_File="${out_dir}/${var}_${scenario}_${globmod}_${regmod}_daily_${start_year}_${end_year}.nc"
+				out_file="${output_dir}/${var}_${scenario}_${globmod}_${regmod}_daily_${start_year}_${end_year}.nc"
 				echo "Aggregating data into ${out_file}..."
 				cdo mergetime $files "${out_file}"
 			done
