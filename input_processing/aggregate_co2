@@ -37,7 +37,7 @@ NUM_LINES_DATA=$(echo "${NUM_LINES_TOTAL} - ${NUM_HEADING_LINES}" | bc)
 # - only grab the year/co2 columns
 # - store output in the designated file
 tail -n${NUM_LINES_DATA} "${IN_FILE}" \
-| sed -r 's/ +/\t/gmp' \
+| sed -r 's/ +/\t/g' \
 | sed -r 's/^\t+//g' \
 | cut -f${YEAR_COLUMN},${CO2_COLUMN} \
 > "${OUT_FILE}"
