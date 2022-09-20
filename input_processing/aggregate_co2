@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+#
+# This script converts RCP co2 concentration from the CMIP5 dataset to
+# a format suitable for consumption by lpj-guess.
+#
+# Usage: ./aggregate_co2 input_file output_file
+#
+set -euo pipefail
+
+USAGE="Usage: ${0} <input_file> <output_file>"
+if [ $# -ne 2 ]
+then
+	echo "${USAGE}"
+	exit 1
+fi
+
+IN_FILE="${1}"
+OUT_FILE="${2}"
+
+if [ ! -f "${IN_FILE}" ]
+then
+	echo "Input file '${IN_FILE}' doesn't exist or is missing read permission"
+fi
+
+# 1-indexed column indices, as that's what cut wants.
+YEAR_COLUMN=1
+CO2_COLUMN=4
+
+REGEX='^[ \t]*YEARS[ \t]*'
+NUM_HEADING_LINES=$(grep -Enm 1 "${REGEX}" "${IN_FILE}" | cut -d: -f1)
+NUM_LINES_TOTAL=$(wc -l "${IN_FILE}" | cut -d' ' -f1)
+NUM_LINES_DATA=$(echo "${NUM_LINES_TOTAL} - ${NUM_HEADING_LINES}" | bc)
+
+# - remove header lines
+# - replace all spaces with tabs
+# - trim whitespace from start of line
+# - only grab the year/co2 columns
+# - store output in the designated file
+tail -n${NUM_LINES_DATA} "${IN_FILE}" \
+| sed -r 's/ +/\t/gmp' \
+| sed -r 's/^\t+//g' \
+| cut -f${YEAR_COLUMN},${CO2_COLUMN} \
+> "${OUT_FILE}"
