@@ -6,14 +6,11 @@
 #
 # Usage:
 #
-# submit_to_gadi.sh [-n <name>] [-s <file>] [-i <ins-file>]
+# submit_to_gadi.sh -s <config-file> [-h]
 #
-# All arguments are optional and interpreted as:
-#
-#   name     = the name of the job (shown in PBS queue)
-#   file     = filename of a file which can override the input variables. If
-#              set, this file should contain lines of the form VARIABLE=Value
-#   ins-file = instruction file to use, overrides the hardcoded INSFILE
+# -s  Path to the configuration file, which provides run settings such as
+#     number of CPUs, instruction file path, etc.
+# -h  Display this help info
 #
 
 # Exit immediately if:
@@ -25,48 +22,28 @@ set -euo pipefail
 # Get directory containing this script.
 SUBMIT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P )"
 
-# ------------------------------------------------------------------------------
-# Input variables - change these as required.
-#
-# These can of course be modified in the script, but the recommended way is to
-# create a separate file which sets these variables, and pass that file to this
-# script with the -s command line argument. E.g.
-#
-# ./submit_to_gadi.sh -s myconfig.ini
-# ------------------------------------------------------------------------------
-
-# File paths
-OUT_DIR="/scratch/hw83/jk8585/LPJ_runs" # Outut path.
-BINARY="/home/599/jk8585/LPJ_code/trunk_r8538/guess" # Path to LPJ-Guess binary.
-EXPERIMENT="test_run"               # Experiment name.
-
-# PBS/Cluster Settings
-NPROCESS=48                         # Number of processes in parallel job.
-WALLTIME=22:30:00                   # maximum wall (real) time for job hh:mm:ss
-MEMORY=96GB                         # Total amount of memory available to job.
-QUEUE=normal                        # PBS queue priority(?).
-PROJECT=hw83                        # Project name.
-EMAIL=j.knauer@westernsydney.edu.au # Email address of job owner.
-EMAIL_NOTIFICATIONS=1               # 1 to receive notifications, 0 otherwise.
-JOB_NAME=guess                      # Job name (overriden by -n CLI option).
-
-# LPJ-Guess Settings
-INSFILE="${SUBMIT_DIR}/global_cf.ins" # path to ins file from run directory.
-INPUT_MODULE=cf                     # Input module to use.
-OUTFILES='*.out'                    # List of LPJ-Guess output files.
-
-# ------------------------------------------------------------------------------
-# End input variables section.
-# ------------------------------------------------------------------------------
-
 # Parse the command line arguments
-while getopts ":n:s:i:" opt; do
+CONF=
+USAGE="Usage: ${0} -s <config-file> [-h]
+
+-s  Path to the configuration file, which provides run settings such as
+    number of CPUs, instruction file path, etc.
+-h  Display this help info
+"
+while getopts ":s:h" opt; do
     case $opt in
-	n ) JOB_NAME=$OPTARG ;;
-	s ) source $OPTARG ;;
-	i ) INSFILE=$OPTARG ;;
+      s ) source $OPTARG; CONF=1 ;;
+      h ) echo "${USAGE}"; exit 0 ;;
     esac
 done
+
+# Exit if no config file provided.
+if [ -z "${CONF:-}" ];
+then
+  echo "Error: no config file supplied."
+  echo "${USAGE}"
+  exit 1
+fi
 
 # This function will print the absolute path to the given filename.
 # We could use readlink, but it's a Linux tool - not available on MacOS (afaik).
@@ -74,8 +51,46 @@ get_absolute_path() {
   echo $( cd "$(dirname "$1")"; pwd -P )/$(basename "$1")
 }
 
+# Function which prints the name of all instruction files imported,
+# recursively, by the specified instruction file.
+function get_all_insfiles() {
+	echo $1
+	# import "file.ins"
+	local rx='^[ \t]*import[ \t]*"([^"]+)"\r?'
+	local referenced_files="$(sed -rn "s/${rx}/\1/gmp" $1)"
+	for file in "${referenced_files}"
+	do
+		if [ -n "${file}" ]
+		then
+			get_all_insfiles "${file}"
+		fi
+	done
+}
+
+# Function which prints the name of the gridlist file in the specified ins file.
+function get_gridlist() {
+	local gridlist_variable_name='file_gridlist_cf'
+	# param "file_gridlist_cf" (str "CFA_gridlist.txt")
+	local gridlist_regex="[ \t]*param[ \t]*\"${gridlist_variable_name}\"[ \t]*\(str[ \t]*\"([^\"]+)\"[ \t]*\)\r?"
+
+	# Note: this will not work if any of the instruction file names contain
+	# a newline character.
+	while IFS=$'\n' read ins_file
+	do
+		local gridlist="$(sed -rn "s/${gridlist_regex}/\1/gmp" "${ins_file}")"
+		if [ -n "${gridlist}" ]
+		then
+			echo "${gridlist}"
+			return 0
+		fi
+	done < <(get_all_insfiles $1)
+
+	# Gridlist not found.
+	return 1
+}
+
 # Read gridlist file name from the .ins file.
-GRIDLIST="$(sed -E -n -e 's/^.*"file_gridlist_cf" \(str "([^"]+)"\)\r?$/\1/p' "${INSFILE}")"
+GRIDLIST="$(get_gridlist "${INSFILE}")"
 
 # Convert to absolute paths.
 INSFILE="$(get_absolute_path "${INSFILE}")"
@@ -124,7 +139,7 @@ check_permission() {
 # Arguments:
 # - The file to be checked
 check_exists() {
-  check_permission -f $1 "Error: $1 does not exist"
+  check_permission -f $1 "Error: $1 does not exist or is not a file"
 }
 
 # Check if a file or directory has read permission for the current user. If it
@@ -244,19 +259,23 @@ cat <<EOF > "${guess_cmd}"
 #PBS -l wd
 #PBS -W umask=0022
 #PBS -S /bin/bash
-#PBS -l storage=scratch/pt17
+#PBS -l storage=gdata/vl59
+#PBS -l jobfs=40GB
 set -e
 module purge
-module load intel-mpi/2019.6.166
+module load openmpi
+module load netcdf
 umask 022
-mpirun ${BINARY} -parallel -input ${INPUT_MODULE} ${INSFILE}
+cd "${RUN_OUT_DIR}"
+mpirun -np ${NPROCESS} ${BINARY} -parallel -input ${INPUT_MODULE} ${INSFILE}
 EOF
+chmod a+x "${guess_cmd}"
 
 # Create PBS script to generate combined output files. This will be run after
 # the main job has finished running.
 append_cmd="${RUN_OUT_DIR}/append.cmd"
 cat <<EOF > "${append_cmd}"
-#!/bin/bash
+#!/usr/bin/env bash
 #PBS -l ncpus=1
 #PBS -l walltime=${WALLTIME}
 #PBS -l mem=${MEMORY}
@@ -266,7 +285,8 @@ cat <<EOF > "${append_cmd}"
 #PBS -m ${EMAIL_OPT}
 #PBS -M ${EMAIL}
 #PBS -W umask=0022
-set -e
+set -euo pipefail
+cd "${RUN_OUT_DIR}"
 function append_files {
     local number_of_jobs=\$1
     local file=\$2
@@ -289,6 +309,7 @@ do
 done
 cat run*/guess.log > guess.log
 EOF
+chmod a+x "${append_cmd}"
 
 # Submit guess job
 JOB_ID=$(qsub -N "${JOB_NAME}" "${guess_cmd}")
