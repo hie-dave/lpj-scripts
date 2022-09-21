@@ -189,14 +189,10 @@ function split_gridlist {
         echo > "${RUN_OUT_DIR}/run${a}/${GRIDLIST_FILENAME}"
     done
 
-    # Figure out suitable number of lines per gridlist, get the number of
-    # lines in original gridlist file, divide by NPROCESS and round up.
-    local lines_per_run=$(wc -l ${GRIDLIST} | \
-	awk '{ x = $1/'${NPROCESS}'; d = (x == int(x)) ? x : int(x)+1; print d}')
-
     # Use the split command to split the files into temporary files
+    # Splitting using r/N mode for round-robin distribution.
     local tmp_prefix=tmpSPLITGRID_
-    split --suffix-length=4 --lines ${lines_per_run} ${GRIDLIST} "${tmp_prefix}"
+    split -dn r/${NPROCESS} ${GRIDLIST} "${tmp_prefix}"
 
     # Move the temporary files into the runX-directories.
     local files="${tmp_prefix}*"
