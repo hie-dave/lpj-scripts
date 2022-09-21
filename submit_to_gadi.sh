@@ -6,11 +6,13 @@
 #
 # Usage:
 #
-# submit_to_gadi.sh -s <config-file> [-h]
+# submit_to_gadi.sh -s <config-file> [-h] [-d]
 #
 # -s  Path to the configuration file, which provides run settings such as
 #     number of CPUs, instruction file path, etc.
 # -h  Display this help info
+# -d  Dry run. Create the run directory but don't actually submit the
+#     job to PBS.
 #
 
 # Exit immediately if:
@@ -24,16 +26,20 @@ SUBMIT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P )
 
 # Parse the command line arguments
 CONF=
-USAGE="Usage: ${0} -s <config-file> [-h]
+DRY_RUN=0
+USAGE="Usage: ${0} -s <config-file> [-h] [-d]
 
 -s  Path to the configuration file, which provides run settings such as
     number of CPUs, instruction file path, etc.
 -h  Display this help info
-"
-while getopts ":s:h" opt; do
+-d  Dry run. Create the run directory but don't actually submit the job
+    to PBS."
+
+while getopts ":s:hd" opt; do
     case $opt in
       s ) source $OPTARG; CONF=1 ;;
       h ) echo "${USAGE}"; exit 0 ;;
+      d ) DRY_RUN=1
     esac
 done
 
@@ -306,6 +312,13 @@ done
 cat run*/guess.log > guess.log
 EOF
 chmod a+x "${append_cmd}"
+
+if [ ${DRY_RUN} -eq 1 ]
+then
+  echo "Dry run completed (job not submitted). Job run directory created at:"
+  echo "${RUN_OUT_DIR}"
+  exit 0
+fi
 
 # Submit guess job
 JOB_ID=$(qsub -N "${JOB_NAME}" "${guess_cmd}")
