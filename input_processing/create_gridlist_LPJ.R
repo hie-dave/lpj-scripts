@@ -17,10 +17,10 @@ outname.soilparams  <- "LPJ_soilparams.dat"  # name of soil parameter file (with
 outname.gridlist    <- "CFA_gridlist.txt"    # name of gridlist file (with extension)
 
 ## bounding box
-lonmin <- 140.8
-lonmax <- 150
-latmin <- -39.2
-latmax <- -33.9
+lonmin <- 133.85
+lonmax <- 154.95
+latmin <- -39.65
+latmax <- -22.45
 
 soilvars      <- c("clay","silt","sand","orgC","CN","pH")
 prec_lonlat   <- 2  # precision of lon and lat in output file
