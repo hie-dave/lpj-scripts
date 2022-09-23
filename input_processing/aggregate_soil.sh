@@ -97,9 +97,17 @@ for var in $vars ; do
   
      ncrename -v Band1,${varname} ${var}_${outfile_tag}.nc
   fi
-    
+
 done
 
+
+#sum_tmp		  = slt + cly + snd
+#resid_tmp	  = slt + cly + snd - 100
+#sltfrac_tmp  = slt_tmp / sum_tmp = slt / (slt + cly + snd)
+#addslt_tmp	  = -1 * sltfrac_tmp * resid_tmp
+#			        = -1 * (snd / (slt + cly + snd)) * (slt + cly + snd - 100)
+#sltnew_tmp	  = (addslt_tmp + slt_tmp) / 100
+#     			  = (-1 * (snd / (slt + cly + snd)) * (slt + cly + snd - 100) + slt) / 100
 
 ## ensure that sand, silt and clay add up to 100% at the original resolution
 cdo -s enssum snd_tmp.nc slt_tmp.nc cly_tmp.nc sum_tmp.nc
@@ -111,7 +119,7 @@ cdo -s div cly_tmp.nc sum_tmp.nc clyfrac_tmp.nc
 cdo -s mulc,-1 -mul sndfrac_tmp.nc resid_tmp.nc addsnd_tmp.nc
 cdo -s mulc,-1 -mul sltfrac_tmp.nc resid_tmp.nc addslt_tmp.nc
 cdo -s mulc,-1 -mul clyfrac_tmp.nc resid_tmp.nc addcly_tmp.nc
-     
+
 cdo -s -divc,100 -add addsnd_tmp.nc snd_tmp.nc sndnew_tmp.nc
 cdo -s -divc,100 -add addslt_tmp.nc slt_tmp.nc sltnew_tmp.nc
 cdo -s -divc,100 -add addcly_tmp.nc cly_tmp.nc clynew_tmp.nc
