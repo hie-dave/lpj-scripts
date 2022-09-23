@@ -212,14 +212,66 @@ function split_gridlist {
 
 # Create header of progress.sh script
 # The progress script will print the progress of each run/process.
-progress_sh="${RUN_OUT_DIR}/progress.sh"
-echo "##############################################################" > "${progress_sh}"
-echo "# PROGRESS.SH" >> "${progress_sh}"
-echo "# Upload current guess.log files from local nodes and check" >> "${progress_sh}"
-echo "# Usage: sh progress.sh" >> "${progress_sh}"
-echo >> "${progress_sh}"
-echo 'DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P )"' >> "${progress_sh}"
-echo >> "${progress_sh}"
+progress_sh="${RUN_OUT_DIR}/check_progress"
+cat <<EOF > "${progress_sh}"
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Change to the directory containing this script.
+DIR="\$( cd "\$( dirname "\${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P )"
+cd "\${DIR}"
+
+if [ ! -d run1 ]
+then
+  echo "Error: This script must be placed within the run directory"
+  exit 1
+fi
+
+# Get total number of jobs.
+num_jobs=\$(ls -ld run* | wc -l)
+
+# Regex for parsing guess logfiles, which look like this:
+#   6% complete, 00:07:37 elapsed, 01:49:57 remaining
+elapsed_regex="^[^[0-9]]*([0-9]+)% complete.*\$"
+
+# Now loop through the files and scan their logfiles to get percentage complete values.
+percent_total=0
+
+# Get the percentage complete for the first node. This should in theory
+# be similar to the progress of the other nodes.
+expected_percent=\$(tail -n10 run1/guess.log | sed -rn "s/\$elapsed_regex/\1/p" | tail -n1)
+
+echo "Job is probably around \${expected_percent}% complete"
+
+i=0
+for r in run*
+do
+  file="\${r}/guess.log"
+  if grep "Finished" "\${file}" >/dev/null
+  then
+    run_percent=100
+  else
+    # - get last few lines of file
+    # - scan for "x% complete"
+    # - get last match only (ie most recent progress report)
+    run_percent=\$(tail -n10 "\${file}" | sed -rn "s/\$elapsed_regex/\1/p" | tail -n1)
+  fi
+
+  # Add this run's percentage complete to the total.
+  percent_total=\$(echo "\${percent_total} + \${run_percent}" | bc)
+
+  i=\$(echo "\${i} + 1" | bc)
+  progress=\$(echo "100.0 * \${i} / \${num_jobs}" | bc -l)
+  printf "\rParsing guess logfiles: %.2f%%" \${progress}
+done
+printf "\n"
+
+# Overal progress = sum / count
+percent_total=\$(echo "\${percent_total} / \${num_jobs}" | bc)
+
+echo "\${percent_total}% complete"
+EOF
+chmod a+x "${progress_sh}"
 
 # Create a run subdirectory for each process, clean up any existing files, and
 # append code to the progress script which reports progress of this run.
