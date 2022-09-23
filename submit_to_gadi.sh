@@ -313,7 +313,7 @@ cat <<EOF > "${guess_cmd}"
 #PBS -l wd
 #PBS -W umask=0022
 #PBS -S /bin/bash
-#PBS -l storage=gdata/vl59
+#PBS -l storage=gdata/${PROJECT}+scratch/${PROJECT}
 #PBS -l jobfs=40GB
 set -e
 module purge
@@ -339,6 +339,7 @@ cat <<EOF > "${append_cmd}"
 #PBS -m ${EMAIL_OPT}
 #PBS -M ${EMAIL}
 #PBS -W umask=0022
+#PBS -l storage=gdata/${PROJECT}+scratch/${PROJECT}
 set -euo pipefail
 cd "${RUN_OUT_DIR}"
 function append_files {
