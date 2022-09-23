@@ -62,7 +62,7 @@ write.table(soilparams,file=outname.soilparams,quote=F,row.names=F)
 
 ## Now create actual gridlist file (not sure what exact format is required at this point)
 
-gridlist <- data.frame(apply(soilparams,1,function(x) paste0("(",x['lon'],",",x['lat'],")")))
+gridlist <- data.frame(apply(soilparams,1,function(x) paste(x['lon'],x['lat'])))
 write.table(gridlist,file=outname.gridlist,quote=F,row.names=F,col.names=F)
 
 
