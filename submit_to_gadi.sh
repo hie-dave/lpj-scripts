@@ -332,7 +332,7 @@ cat <<EOF > "${append_cmd}"
 #!/usr/bin/env bash
 #PBS -l ncpus=1
 #PBS -l walltime=${WALLTIME}
-#PBS -l mem=${MEMORY}
+#PBS -l mem=8GB
 #PBS -q normal
 #PBS -l wd
 #PBS -j oe
