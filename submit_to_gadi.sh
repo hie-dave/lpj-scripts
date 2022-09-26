@@ -64,7 +64,7 @@ function get_all_insfiles() {
 	# import "file.ins"
 	local rx='^[ \t]*import[ \t]*"([^"]+)"\r?'
 	local referenced_files="$(sed -rn "s/${rx}/\1/gmp" $1)"
-	for file in "${referenced_files}"
+	for file in ${referenced_files}
 	do
 		if [ -n "${file}" ]
 		then
