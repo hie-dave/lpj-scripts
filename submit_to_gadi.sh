@@ -99,6 +99,7 @@ function get_gridlist() {
 	done < <(get_all_insfiles $1)
 
 	# Gridlist not found.
+  echo "Unable to parse gridlist file from .ins file ${ins_file}"
 	return 1
 }
 
