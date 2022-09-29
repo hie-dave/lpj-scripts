@@ -44,7 +44,7 @@ USAGE="Usage: ${0} -s <config-file> [-h] [-d]
 
 while getopts ":s:hd" opt; do
     case $opt in
-      s ) source $OPTARG; CONF=1 ;;
+      s ) source "${OPTARG}"; CONF=1 CONFIG_FILE="${OPTARG}" ;;
       h ) echo "${USAGE}"; exit 0 ;;
       d ) DRY_RUN=1
     esac
@@ -112,23 +112,26 @@ BINARY="$(get_absolute_path "${BINARY}")"
 OUT_DIR="$(get_absolute_path "${OUT_DIR}")"
 GRIDLIST="$(get_absolute_path "${GRIDLIST}")"
 
-echo OUT_DIR=${OUT_DIR}
-echo BINARY=${BINARY}
-echo EXPERIMENT=${EXPERIMENT}
-echo
-echo NPROCESS=${NPROCESS}
-echo WALLTIME=${WALLTIME}
-echo MEMORY=${MEMORY}
-echo QUEUE=${QUEUE}
-echo PROJECT=${PROJECT}
-echo EMAIL=${EMAIL}
-echo EMAIL_NOTIFICATIONS=${EMAIL_NOTIFICATIONS}
-echo JOB_NAME=${JOB_NAME}
-echo
-echo INSFILE=${INSFILE}
-echo INPUT_MODULE=${INPUT_MODULE}
-echo GRIDLIST=${GRIDLIST}
-echo
+function print_settings() {
+  echo OUT_DIR=${OUT_DIR}
+  echo BINARY=${BINARY}
+  echo EXPERIMENT=${EXPERIMENT}
+  echo
+  echo NPROCESS=${NPROCESS}
+  echo WALLTIME=${WALLTIME}
+  echo MEMORY=${MEMORY}
+  echo QUEUE=${QUEUE}
+  echo PROJECT=${PROJECT}
+  echo EMAIL=${EMAIL}
+  echo EMAIL_NOTIFICATIONS=${EMAIL_NOTIFICATIONS}
+  echo JOB_NAME=${JOB_NAME}
+  echo
+  echo INSFILE=${INSFILE}
+  echo INPUT_MODULE=${INPUT_MODULE}
+  echo GRIDLIST=${GRIDLIST}
+  echo
+}
+print_settings
 
 # Input checking/validation.
 
@@ -302,6 +305,23 @@ echo "\${percent_total}% complete"
 EOF
 chmod a+x "${progress_sh}"
 
+# Copy the config and .ins files into the run directory, and also create
+# a readme file there. This is not really necessary, but it's useful to
+# have this sort of metadata readily accessible for archival purposes.
+INPUTS_DIR="${RUN_OUT_DIR}/inputs"
+mkdir -p "${INPUTS_DIR}"
+cp "${CONFIG_FILE}" "${INPUTS_DIR}/"
+
+# This won't work if any of the .ins file names contain a newline.
+while IFS=$'\n' read ins_file
+do
+  cp "${ins_file}" "${INPUTS_DIR}/"
+done < <(get_all_insfiles "${INSFILE}")
+
+README_FILE="${RUN_OUT_DIR}/README.md"
+echo "Job submitted $(date) with the following settings:" >"${README_FILE}"
+print_settings >>"${README_FILE}"
+
 # Create a run subdirectory for each process, clean up any existing files, and
 # append code to the progress script which reports progress of this run.
 for ((a=1; a <= NPROCESS ; a++))
@@ -371,7 +391,7 @@ cat <<EOF > "${append_cmd}"
 #PBS -W umask=0022
 #PBS -l storage=gdata/${PROJECT}+scratch/${PROJECT}
 set -euo pipefail
-cd "${RUN_OUT_DIR}"
+cd "${RUNS_DIR}"
 function append_files {
     local number_of_jobs=\$1
     local file=\$2
