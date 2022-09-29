@@ -216,7 +216,19 @@ function split_gridlist {
     # Use the split command to split the files into temporary files
     # Splitting using r/N mode for round-robin distribution.
     local tmp_prefix=tmpSPLITGRID_
-    split -dn r/${NPROCESS} ${GRIDLIST} "${tmp_prefix}"
+
+    # By default, split will use a suffix of 2 digits. This will
+    # obviously be insufficient if we have >99 CPUs. We could just use
+    # an excessively large suffix (ie 30 - we're never going to have
+    # 10^30 CPUs), but I think we can be a bit more elegant than that.
+    # Here we compute the number of digits required for the suffix as
+    # log10(NCPU) + 1. The only complication is that there is no builtin
+    # log10 function in bash, so I've implemented a simple integer log
+    # function here.
+    log(){ local x=$1 n=2 l=-1;if [ "$2" != "" ];then n=$x;x=$2;fi;while((x));do let l+=1 x/=n;done;echo $l; }
+    local num_digits_required=$(echo "`log 10 ${NPROCESS}` + 1" | bc)
+
+    split -a${num_digits_required} -dn r/${NPROCESS} ${GRIDLIST} "${tmp_prefix}"
 
     # Move the temporary files into the runX-directories.
     local files="${tmp_prefix}*"
