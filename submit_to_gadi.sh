@@ -282,8 +282,6 @@ do
 
     # Delete any existing log files.
     cd "${RUN_OUT_DIR}/run${a}"; rm -f guess.log; rm -f ${GRIDLIST_FILENAME}; cd ..
-    echo "echo '********** Last few lines of ./run${a}/guess.log: **********'" >> "${progress_sh}"
-    echo "tail \${DIR}/run${a}/guess.log" >> "${progress_sh}"
 done
 
 # Split the grid list into equally sized chunks, 1 chunk per CPU.
