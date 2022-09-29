@@ -382,7 +382,7 @@ function append_files {
     for ((i=2; i <= number_of_jobs; i++))
     do
       if [ -f run\$i/\$file ]; then
-        cat run\$i/\$file | awk 'NR!=1 || NF==0 || \$1 == \$1+0 { print \$0 }' >>"\${out_file}
+        cat run\$i/\$file | awk 'NR!=1 || NF==0 || \$1 == \$1+0 { print \$0 }' >>"\${out_file}"
       fi
     done
 }
