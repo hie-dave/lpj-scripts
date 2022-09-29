@@ -313,7 +313,7 @@ cat <<EOF > "${guess_cmd}"
 #PBS -l wd
 #PBS -W umask=0022
 #PBS -S /bin/bash
-#PBS -l storage=gdata/${PROJECT}+scratch/${PROJECT}
+#PBS -l storage=gdata/${PROJECT}+scratch/${PROJECT}+scratch/hw83
 #PBS -l jobfs=40GB
 set -e
 module purge
