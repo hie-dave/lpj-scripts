@@ -178,9 +178,19 @@ check_execute "${BINARY}"
 # Output path for this run.
 RUN_OUT_DIR="${OUT_DIR}/${EXPERIMENT}"
 
+# Path to which individual run directories will be created.
+RUNS_DIR="${RUN_OUT_DIR}/runs"
+
+# Path to which output will be aggregated.
+OUTPUT_DIR="${RUN_OUT_DIR}/output"
+
+# Path to which log files will be aggregated.
+LOGS_DIR="${RUN_OUT_DIR}/logs"
+
 # Create links and directories.
-mkdir -p "${RUN_OUT_DIR}/output"
-mkdir -p "${RUN_OUT_DIR}/logs"
+mkdir -p "${OUTPUT_DIR}"
+mkdir -p "${LOGS_DIR}"
+mkdir -p "${RUNS_DIR}"
 
 # Get the file name (without path) of the gridlist file.
 GRIDLIST_FILENAME=$(basename ${GRIDLIST})
@@ -191,8 +201,8 @@ function split_gridlist {
     # Create empty gridlists first to make sure each run gets one.
     for ((a=1; a <= NPROCESS ; a++))
     do
-        mkdir -p "${RUN_OUT_DIR}/run${a}"
-        echo > "${RUN_OUT_DIR}/run${a}/${GRIDLIST_FILENAME}"
+        mkdir -p "${RUNS_DIR}/run${a}"
+        echo > "${RUNS_DIR}/run${a}/${GRIDLIST_FILENAME}"
     done
 
     # Use the split command to split the files into temporary files
@@ -205,7 +215,7 @@ function split_gridlist {
     local i=1
     for file in ${files}
     do
-      mv ${file} "${RUN_OUT_DIR}/run${i}/${GRIDLIST_FILENAME}"
+      mv ${file} "${RUNS_DIR}/run${i}/${GRIDLIST_FILENAME}"
       i=$((i+1))
     done
 }
@@ -217,13 +227,12 @@ cat <<EOF > "${progress_sh}"
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Change to the directory containing this script.
-DIR="\$( cd "\$( dirname "\${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P )"
-cd "\${DIR}"
+# Change to the runs directory containing this script.
+cd "${RUNS_DIR}"
 
 if [ ! -d run1 ]
 then
-  echo "Error: This script must be placed within the run directory"
+  echo "Error: Runs directory is empty. Submit script didn't run or is buggy."
   exit 1
 fi
 
@@ -278,10 +287,10 @@ chmod a+x "${progress_sh}"
 for ((a=1; a <= NPROCESS ; a++))
 do
     # Ensure the directory exists for this run.
-    mkdir -p "${RUN_OUT_DIR}/run${a}"
+    mkdir -p "${RUNS_DIR}/run${a}"
 
     # Delete any existing log files.
-    cd "${RUN_OUT_DIR}/run${a}"; rm -f guess.log; rm -f ${GRIDLIST_FILENAME}; cd ..
+    cd "${RUNS_DIR}/run${a}"; rm -f guess.log; rm -f ${GRIDLIST_FILENAME}; cd ..
 done
 
 # Split the grid list into equally sized chunks, 1 chunk per CPU.
@@ -313,18 +322,20 @@ cat <<EOF > "${guess_cmd}"
 #PBS -S /bin/bash
 #PBS -l storage=gdata/${PROJECT}+scratch/${PROJECT}+scratch/hw83
 #PBS -l jobfs=40GB
+#PBS -o ${RUN_OUT_DIR}/${JOB_NAME}
 set -e
 module purge
 module load openmpi
 module load netcdf
 umask 022
-cd "${RUN_OUT_DIR}"
+cd "${RUNS_DIR}"
 mpirun -np ${NPROCESS} ${BINARY} -parallel -input ${INPUT_MODULE} ${INSFILE}
 EOF
 chmod a+x "${guess_cmd}"
 
 # Create PBS script to generate combined output files. This will be run after
 # the main job has finished running.
+APPEND_JOB_NAME="${JOB_NAME}_append"
 append_cmd="${RUN_OUT_DIR}/append.cmd"
 cat <<EOF > "${append_cmd}"
 #!/usr/bin/env bash
@@ -336,6 +347,7 @@ cat <<EOF > "${append_cmd}"
 #PBS -j oe
 #PBS -m ${EMAIL_OPT}
 #PBS -M ${EMAIL}
+#PBS -o ${RUN_OUT_DIR}/${APPEND_JOB_NAME}.log
 #PBS -W umask=0022
 #PBS -l storage=gdata/${PROJECT}+scratch/${PROJECT}
 set -euo pipefail
@@ -343,12 +355,14 @@ cd "${RUN_OUT_DIR}"
 function append_files {
     local number_of_jobs=\$1
     local file=\$2
-    cp run1/\$file \$file
+    local out_dir="\$3"
+    local out_file="\${out_dir}/\$file"
+    cp run1/\$file "\${out_file}"
     local i=""
     for ((i=2; i <= number_of_jobs; i++))
     do
       if [ -f run\$i/\$file ]; then
-        cat run\$i/\$file | awk 'NR!=1 || NF==0 || \$1 == \$1+0 { print \$0 }' >> \$file
+        cat run\$i/\$file | awk 'NR!=1 || NF==0 || \$1 == \$1+0 { print \$0 }' >>"\${out_file}
       fi
     done
 }
@@ -358,9 +372,11 @@ outfiles_expanded=\$(echo \$outfiles_unexpanded)
 popd &> /dev/null
 for file in \$outfiles_expanded
 do
-  append_files ${NPROCESS} \$file
+  append_files ${NPROCESS} "\$file" "${OUTPUT_DIR}"
 done
-cat run*/guess.log > guess.log
+
+# Now combine the log files.
+cat run*/guess.log > "${LOGS_DIR}/guess.log"
 EOF
 chmod a+x "${append_cmd}"
 
@@ -376,5 +392,5 @@ JOB_ID=$(qsub -N "${JOB_NAME}" "${guess_cmd}")
 echo JOB_ID=${JOB_ID}
 
 # Submit append job
-APPEND_JOB_ID=$(qsub -W depend=afterok:${JOB_ID} -N "${JOB_NAME}_append" "${append_cmd}")
+APPEND_JOB_ID=$(qsub -W depend=afterok:${JOB_ID} -N "${APPEND_JOB_NAME}" "${append_cmd}")
 echo APPEND_JOB_ID=${APPEND_JOB_ID}
