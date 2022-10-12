@@ -1,0 +1,366 @@
+#!/usr/bin/env python
+from argparse import ArgumentParser
+
+from construct import Switch
+from netCDF4 import Dataset, Variable
+from enum import IntEnum
+from sys import argv, stdout, stderr
+from typing import Callable
+
+VERSION = "0.1"
+CHUNK_SIZE = 1024
+
+class LogLevel(IntEnum):
+	NONE = 0,
+	ERROR = 1,
+	WARNING = 2,
+	INFORMATION = 3,
+	DIAGNOSTIC = 4,
+	DEBUG = 5
+
+#######################################################################
+# Constants related to .nc format/processing
+#######################################################################
+
+OUT_VARIABLE_FORCING_NAME = "forcing_data"
+OUT_VARIABLE_FORCING_FORMAT = "f8"
+OUT_DIM_NAME_FORCINGS = "forcings"
+OUT_DIM_NAME_TIME = "time"
+
+NC_FORMAT = "NETCDF4"
+
+class Forcing(IntEnum):
+	"""
+	Indices of variables in the output .nc file.
+	"""
+	SWDOWN = 0,
+	PARDF = 1,
+	PARDR = 2,
+	LWDOWN = 3,
+	PRECLS = 4,
+	PRECCO = 5,
+	TAIR = 6,
+	UAIR = 7,
+	VAIR = 8,
+	QAIR = 9,
+	PSURF = 10
+	# Insert new values here
+	NFORCINGS = 11 # This must always be the last/highest enum value
+
+outdata_forcing_names = {
+	Forcing.SWDOWN: "swdown",
+	Forcing.PARDF: "pardf",
+	Forcing.PARDR: "pardr",
+	Forcing.LWDOWN: "lwdown",
+	Forcing.PRECLS: "precls",
+	Forcing.PRECCO: "precco",
+	Forcing.TAIR: "tair",
+	Forcing.UAIR: "uair",
+	Forcing.VAIR: "vair",
+	Forcing.QAIR: "qair",
+	Forcing.PSURF: "psurf"
+}
+
+indata_forcing_names = {
+	Forcing.SWDOWN: "Fsd", # ?
+	Forcing.PARDF: "zero", # ?
+	Forcing.PARDR: "zero", # ?
+	Forcing.LWDOWN: "Fld", # ?
+	Forcing.PRECLS: "Precip", # ?
+	Forcing.PRECCO: "zero", # ?
+	Forcing.TAIR: "Ta", # ?
+	Forcing.UAIR: "Ws", # ?
+	Forcing.VAIR: "zero", # ?
+	Forcing.QAIR: "SH", # ?
+	Forcing.PSURF: "ps", # ?
+}
+
+# From DMB:
+# > Radiation (SWDOWN, PARDF, PARDR, LWDOWN)-> W/m^2
+# > Precipitation (PRECLS, PRECCO) -> kg/m^2/s
+# > Air temperature (TAIR) -> K
+# > Wind speed (UAIR, VAIR) -> m/s (u = eastward, v = northward)
+# > Air specific humidity (QAIR) -> kg/kg (unitless)
+# > Pressure (PSURF) -> Pa
+forcing_units = {
+	Forcing.SWDOWN: "W/m2",
+	Forcing.PARDF: "W/m2",
+	Forcing.PARDR: "W/m2",
+	Forcing.LWDOWN: "W/m2",
+	Forcing.PRECLS: "kg/m2/s",
+	Forcing.PRECCO: "kg/m2/s",
+	Forcing.TAIR: "K",
+	Forcing.UAIR: "m/s",
+	Forcing.VAIR: "m/s",
+	Forcing.QAIR: "",
+	Forcing.PSURF: "Pa"
+}
+
+units_synonyms = [
+	["W/m2", "W/m^2", "Wm^-2"],
+	["kg/m2/s", "kg/m^2/s", "kgm^-2s^-1"],
+	["K", "k"],
+	["m/s", "ms^-1"],
+	["Pa", "pa"],
+]
+
+g2kg = 1e-3
+
+# Recipes for unit conversions.
+units_conversions = {
+	# E.g.
+	("g", "kg"): lambda x: x * g2kg
+}
+
+#######################################################################
+# End of .nc constants
+#######################################################################
+
+class Options:
+	"""
+	Class for storing CLI arguments from the user.
+	"""
+	def __init__(self, log_level : LogLevel, in_file: str, out_file: str, report_progress: bool):
+		self.log_level = log_level
+		self.in_file = in_file
+		self.out_file = out_file
+		self.report_progress = report_progress
+
+global_log_level: LogLevel
+
+def log(msg: str, log_level: LogLevel):
+	"""
+	Write a log message.
+	"""
+	if log_level <= global_log_level:
+		file = stderr if log_level == LogLevel.ERROR else stdout
+		print(msg, file = file)
+
+def log_error(msg: str):
+	log(msg, LogLevel.ERROR)
+
+def log_warning(msg: str):
+	log(msg, LogLevel.WARNING)
+
+def log_information(msg: str):
+	log(msg, LogLevel.INFORMATION)
+
+def log_diagnostic(msg: str):
+	log(msg, LogLevel.DIAGNOSTIC)
+
+def log_debug(msg: str):
+	log(msg, LogLevel.DEBUG)
+
+def get_variable_names(nc_file: Dataset):
+	return nc_file.variables.keys()
+
+def print_variable_names(nc_file: Dataset):
+	for (key, value) in nc_file.variables.items():
+		print("%s: %s" % (key, value.long_name))
+
+def dump_netcdf(nc_file: Dataset):
+	print_variable_names(nc_file)
+
+def open_netcdf(filename: str) -> Dataset:
+	return Dataset(filename, "r", format="NETCDF4")
+
+def dump_netcdf_file(filename):
+	with open(filename) as nc_file:
+		dump_netcdf(nc_file)
+
+def get_units(var_id: Variable) -> str:
+	"""
+	Get the units for the specified variable in the .nc file.
+	"""
+	# tbi
+	return var_id.units
+
+def log_progress(progress: float):
+	"""
+	Report progress to the user.
+
+	@param Progress: Current overall progress [0-1].
+	"""
+	if opts.report_progress:
+		print("Working: %.2f%%\r" % (100.0 * progress), end = "")
+
+def copy_data(in_file: Dataset, variable: Variable):
+	"""
+	Copy all data from the input file to the output variable.
+
+	@param input file: Opened .nc file.
+	@param variable: The newly-created and initialised forcing variable.
+	"""
+	# 0. Get variable IDs.
+	i = 0
+	for forcing in Forcing:
+		log_information("Reading %s data" % outdata_forcing_names[forcing])
+		data = get_data(in_file, forcing, lambda p: log_progress((i + p / 2) / Forcing.NFORCINGS))
+
+		# 3. Write data to out file.
+		log_information("Writing %s data" % outdata_forcing_names[forcing])
+		write_data(variable, data, forcing, lambda p: log_progress((i + 0.5 + p / 2) / Forcing.NFORCINGS))
+		i += 1
+
+def write_data(variable: Variable, data: list[float], forcing: Forcing, progress_callback: Callable[[float], None]):
+	"""
+	Write data to the output file.
+	"""
+	n = len(data)
+	chunk_size = CHUNK_SIZE
+	for i in range(n):
+		row = i
+		col = forcing
+		index = row * Forcing.NFORCINGS + col
+		variable[index] = data[i]
+
+		if i % chunk_size == 0:
+			progress_callback(i / n)
+
+	log_diagnostic("Successfully wrote %d items of %s" % (n, forcing))
+
+def find_units_conversion(current_units: str, desired_units: str) -> Callable[[float], float]:
+	"""
+	Find a conversion between two different units. Throw if not found.
+	The return value is a function which takes and returns a float.
+	"""
+	# units_conversions is a dict mapping unit combos to a conversion.
+	# units_conversions: dict[tuple[str, str], Callable[[float],float]]
+	combination = (current_units, desired_units)
+	if combination in units_conversions:
+		return units_conversions[combination]
+	raise ValueError("No unit conversion exists from '%s' to '%s'" % (current_units, desired_units))
+
+def fix_units(data: list[float], current_units: str, desired_units: str, progress_callback: Callable[[float], None]) -> list[float]:
+	"""
+	Convert data to the units required for the output file.
+	This will modify the existing array.
+	"""
+	conversion = find_units_conversion(current_units, desired_units)
+	n = len(data)
+	for i in range(n):
+		data[i] = conversion(data[i])
+		if i % CHUNK_SIZE == 0:
+			progress_callback(i / n)
+	return data
+
+def read_data(variable: Variable, progress_callback: Callable[[float], None]) -> list[float]:
+	"""
+	Read all data for a variable from the .nc input file.
+	"""
+	arr = [float] * variable.size
+	n = len(arr)
+	for i in range(n):
+		arr[i] = variable[i]
+		if i % CHUNK_SIZE == 0:
+			progress_callback(i / n)
+	return arr
+
+def zeroes(n: int) -> list[float]:
+	x = [float] * n
+	for i in range(n):
+		x[i] = 0
+	return x
+
+def units_match(unit0: str, unit1: str) -> str:
+	"""
+	Check if the two units are equivalent.
+	E.g. m/s and ms^-1 would return true, but not m and kg.
+	"""
+	for case in units_synonyms:
+		if unit0 in case and unit1 in case:
+			return True
+	return False
+
+def get_data(in_file: Dataset, forcing: Forcing, progress_callback: Callable[[float], None]) -> list[float]:
+		# 0. Get variable ID from variable name.
+		in_name = indata_forcing_names[forcing]
+
+		if in_name == "zero":
+			log_diagnostic("Returning zeroes for %s" % outdata_forcing_names[forcing])
+			return zeroes(in_file.variables['time'].size)
+		if not in_name in in_file.variables:
+			raise ValueError("Variable %s does not exist in input file" % in_name)
+
+		var_id = in_file.variables[in_name]
+		in_units = get_units(var_id)
+		out_units = forcing_units[forcing]
+		matching_units = units_match(in_units, out_units)
+
+		log_diagnostic("Variable name is %s" % in_name)
+
+		# 1. Read data from netcdf file.
+		data = read_data(var_id, lambda p: progress_callback(p if matching_units else 0.5 * p))
+		log_diagnostic("Successfully read %d values from netcdf" % len(data))
+
+		# 2. Ensure units are correct.
+		if not matching_units:
+			log_information("Converting %s from %s to %s" % (in_name, in_units, out_units))
+			data = fix_units(data, in_units, out_units, lambda p: progress_callback(0.5 * p + 0.5))
+		else:
+			log_information("No units conversion required for %s" % in_name)
+
+		return data
+
+def process_file(in_file, out_file):
+	"""
+	Read the input file and generate an output file at the specified
+	path in LPJ-Guess (lsminput) format.
+	"""
+	log_diagnostic("Opening output file %s for writing" % out_file)
+	with Dataset(out_file, "w", format=NC_FORMAT) as nc_out:
+		log_diagnostic("Opening input file %s for reading" % in_file)
+		with Dataset(in_file, "r", format=NC_FORMAT) as nc_in:
+			# 0. Create dimensions in output file.
+			log_diagnostic("Creating output dimensions")
+			nc_out.createDimension(OUT_DIM_NAME_FORCINGS, Forcing.NFORCINGS)
+			nc_out.createDimension(OUT_DIM_NAME_TIME, None)
+
+			# 1. Create variables in output file.
+			log_diagnostic("Creating output variable")
+			out_variable = nc_out.createVariable(OUT_VARIABLE_FORCING_NAME, OUT_VARIABLE_FORCING_FORMAT, (OUT_DIM_NAME_TIME,OUT_DIM_NAME_FORCINGS))
+
+			# 2. Copy data into this variable.
+			log_diagnostic("Migrating data")
+			copy_data(nc_in, out_variable)
+
+def parse_args(argv: list[str]) -> Options:
+	"""
+	Parse CLI arguments, return a parsed options object.
+
+	@param argv: Raw CLI arguments.
+
+	@return Parsed Options object.
+	"""
+
+	parser = ArgumentParser(prog=argv[0], description = "Formatting ozflux data into a format suitable for consumption by LPJ-Guess")
+	parser.add_argument("-v", "--verbosity", type = int, help = "Logging verbosity (1-5)", nargs = "?", const = LogLevel.WARNING, default = LogLevel.WARNING)
+	parser.add_argument("-i", "--in-file", required = True, help = "Path to the input .nc file")
+	parser.add_argument("-o", "--out-file", required = True, help = "Path to the output .nc file")
+	parser.add_argument("-p", "--progress", action = "store_true", help = "Report progress")
+	parser.add_argument("--version", action = "version", version = "%(prog)s " + VERSION)
+
+	parsed = parser.parse_args(argv[1:])
+	return Options(parsed.verbosity, parsed.in_file, parsed.out_file, parsed.progress)
+
+def main(opts: Options):
+	"""
+	Main CLI entrypoint function.
+
+	@param opts: Object containing parsed CLI arguments.
+	"""
+	process_file(opts.in_file, opts.out_file)
+
+if __name__ == "__main__":
+	# Parse CLI args
+	opts = parse_args(argv)
+
+	# todo: rethink logging
+	global_log_level = opts.log_level
+	try:
+		# Actual logic is in main().
+		main(opts)
+	except BaseException as error:
+		# Basic error handling.
+		log_error(str(error))
+		exit(1)

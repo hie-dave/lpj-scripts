@@ -1,0 +1,195 @@
+#!/usr/bin/env python
+
+#######################################################################
+# Imports
+#######################################################################
+
+import requests, encodings, re, sys, os, typing
+
+#######################################################################
+# Constants/Inputs
+#######################################################################
+
+catalog_url_base = "https://dap.tern.org.au/thredds/catalog/ecosystem_process/ozflux"
+download_url_base = "https://dap.tern.org.au/thredds/fileServer/ecosystem_process/ozflux"
+
+#######################################################################
+# Main Program
+#######################################################################
+
+def request_string(url: str) -> str:
+	"""
+	Make a request to the given URL and return the body of the response
+	decoded as utf8.
+	"""
+	resp = requests.get(url).content
+	return encodings.utf_8.decode(resp)[0]
+
+def get_page_list_contents(url: str) -> list[str]:
+	"""
+	Get the contents of the main directory displayed on the page.
+	"""
+	body = request_string(url)
+	pattern = r"<a href=['\"]([^\/]+)\/catalog.html['\"]><tt>\1\/<\/tt><\/a>"
+	return re.findall(pattern, body)
+
+def get_sites() -> list[str]:
+	"""
+	Return names of all sites.
+	"""
+	url = "%s/catalog.html" % catalog_url_base
+	return get_page_list_contents(url)
+
+def get_versions(site: str) -> list[str]:
+	url = "%s/%s/catalog.html" % (catalog_url_base, site)
+	return get_page_list_contents(url)
+
+def get_latest_version(site: str) -> str:
+	"""
+	Get the name of the latest available version of data for the
+	specified site.
+	"""
+	versions = get_versions(site)
+	if len(versions) < 1:
+		raise ValueError("No versions of site '%s' are available" % site)
+	return versions[len(versions) - 1]
+
+def get_latest_processing_level(site: str, version: str) -> str:
+	"""
+	Return latest processing level for the specified version of a site.
+	Throw if none found.
+	"""
+	url = "%s/%s/%s/catalog.html" % (catalog_url_base, site, version)
+	elems = get_page_list_contents(url)
+	if len(elems) < 1:
+		raise ValueError("No processing levels defined for site %s version %s" % (site, version))
+	return elems[len(elems) - 1]
+
+def get_latest_version_and_level(site: str) -> tuple[str, str]:
+	"""
+	Get the latest available processing level and version for a site.
+
+	Return a tuple of (version, level).
+	"""
+	versions = get_versions(site)
+	for i in range(len(versions)):
+		version = versions[len(versions) - 1 - i]
+		try:
+			level = get_latest_processing_level(site, version)
+			return (version, level)
+		except:
+			# No processing level, and therefore no data, found.
+			if (i == len(versions) - 1):
+				return (None, None)
+			# Otherwise, ignore error and try next version
+			pass
+
+def get_available_files(site: str, version: str, level: str) -> list[str]:
+	"""
+	Get a list of all files available for the specified site, version,
+	and processing level. Returns a list of URLs.
+	"""
+	download_page_url = "%s/%s/%s/%s/default/catalog.html" % (catalog_url_base, site, version, level)
+	download_page = request_string(download_page_url)
+
+	pattern = r"<a href='[^']+(%s_L\d+_\d+_\d+\.nc)" % site
+	files = re.findall(pattern, download_page)
+	return ["%s/%s/%s/%s/default/%s" % \
+		(download_url_base, site, version, level, file) \
+		for file in files]
+
+def get_download_url(site: str) -> str:
+	"""
+	Get the download URL to the data file for the latest version of the
+	data available for the specified site.
+	"""
+	(version, level) = get_latest_version_and_level(site)
+	files = get_available_files(site, version, level)
+
+	# Length should be 1.
+	if len(files) < 1:
+		return None
+
+	return files[-1]
+
+def get_latlon_code(site: str) -> str:
+	"""
+	Get the lat/lon code for the specified site.
+	"""
+	url = get_download_url(site)
+	body = request_string(url)
+	# regex_match
+	pattern = r"_L[0-9]+_([0-9]{8}_[0-9]{8})\.nc"
+	matches = re.findall(pattern, body)
+	if matches is None or len(matches) < 1:
+		return None # Debatable. But their data just isn't consistent...
+		# raise ValueError("Unable to determine latlon code for site %s: Site crawling failed" % site)
+	return matches[0].strip()
+
+def find_site(code: str) -> str:
+	"""
+	Given a site code, find the name of the corresponding site.
+	"""
+	code = code.strip()
+	for site in get_sites():
+		site_code = get_latlon_code(site)
+		if (site_code == code):
+			return site
+	raise ValueError("No site found for code '%s'" % code)
+
+def download(site: str, out_dir: str, progress_report: typing.Callable[[float],None]):
+	"""
+	Download latest version of the data for the specified site into the
+	specified directory.
+	"""
+	url = get_download_url(site)
+	if url is None:
+		return
+
+	file_name = url.split("/")[-1]
+	out_file = "%s/%s" % (out_dir, file_name)
+	progress_report(0)
+	resp = requests.get(url, stream = True)
+	total = int(resp.headers.get("Content-Length"))
+	chunk_size = min(8192, total / 2)
+	with open(out_file, "wb") as file:
+		downloaded = 0
+		for data in resp.iter_content(chunk_size = chunk_size):
+				downloaded += len(data)
+				file.write(data)
+				progress = 1.0 * downloaded / total
+				progress_report(progress)
+
+def write_progress(i: int, n: int, p: float):
+	"""
+	Write progress report to the console.
+	@param i: Current download number.
+	@param n: Total number of downloads.
+	@param p: Progress of current download (0-1).
+	"""
+	# start = 1.0 * i / n
+	# step = 1.0 / n
+	# progress = start + p * step
+	# overall = 100.0 * progress
+	overall = 100.0 * (i + p) / n
+	print("Downloading: %.2f%%\r" % overall, end = "")
+
+def main():
+	sites = get_sites()
+	if len(sys.argv) < 2:
+		print("Usage: %s: <out-dir>" % sys.argv[0])
+		exit(1)
+
+	out_dir = sys.argv[1]
+	if not os.path.exists(out_dir):
+		os.makedirs(out_dir)
+
+	i = 0
+	for site in sites:
+		# code = get_latlon_code(site)
+		print("Downloading %s..." % site)
+		download(site, out_dir, lambda p: write_progress(i, len(sites), p))
+		i += 1
+
+if __name__ == "__main__":
+	main()
