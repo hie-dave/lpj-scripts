@@ -102,14 +102,21 @@ units_synonyms = [
 	["K", "k"],
 	["m/s", "ms^-1"],
 	["Pa", "pa"],
+	["kg/kg", "", "mm/mm", "m/m"]
 ]
 
 g2kg = 1e-3
+kpa2pa = 1e3
+SECONDS_PER_DAY = 60 * 60 * 24 # 86_400
+DEG_C_TO_K = 273.15
 
 # Recipes for unit conversions.
 units_conversions = {
 	# E.g.
-	("g", "kg"): lambda x: x * g2kg
+	("g", "kg"): lambda x: x * g2kg,
+	("mm", "kg/m2/s"): lambda x: x * SECONDS_PER_DAY,
+	("degC", "K"): lambda x: x + DEG_C_TO_K,
+	("kPa", "Pa"): lambda x: x * kpa2pa
 }
 
 #######################################################################
@@ -194,11 +201,15 @@ def copy_data(in_file: Dataset, variable: Variable):
 	# 0. Get variable IDs.
 	i = 0
 	for forcing in Forcing:
-		log_information("Reading %s data" % outdata_forcing_names[forcing])
+		if forcing == Forcing.NFORCINGS:
+			break
+		out_name = outdata_forcing_names[forcing]
+		log_information("----- %s -----" % out_name)
+		log_information("Reading %s data" % out_name)
 		data = get_data(in_file, forcing, lambda p: log_progress((i + p / 2) / Forcing.NFORCINGS))
 
 		# 3. Write data to out file.
-		log_information("Writing %s data" % outdata_forcing_names[forcing])
+		log_information("Writing %s data" % out_name)
 		write_data(variable, data, forcing, lambda p: log_progress((i + 0.5 + p / 2) / Forcing.NFORCINGS))
 		i += 1
 
@@ -211,8 +222,8 @@ def write_data(variable: Variable, data: list[float], forcing: Forcing, progress
 	for i in range(n):
 		row = i
 		col = forcing
-		index = row * Forcing.NFORCINGS + col
-		variable[index] = data[i]
+		# index = row * Forcing.NFORCINGS + col
+		variable[row, col] = data[i]
 
 		if i % chunk_size == 0:
 			progress_callback(i / n)
@@ -275,9 +286,10 @@ def units_match(unit0: str, unit1: str) -> str:
 def get_data(in_file: Dataset, forcing: Forcing, progress_callback: Callable[[float], None]) -> list[float]:
 		# 0. Get variable ID from variable name.
 		in_name = indata_forcing_names[forcing]
+		out_name = outdata_forcing_names[forcing]
 
 		if in_name == "zero":
-			log_diagnostic("Returning zeroes for %s" % outdata_forcing_names[forcing])
+			log_information("Using zeroes for %s" % out_name)
 			return zeroes(in_file.variables['time'].size)
 		if not in_name in in_file.variables:
 			raise ValueError("Variable %s does not exist in input file" % in_name)
@@ -295,10 +307,10 @@ def get_data(in_file: Dataset, forcing: Forcing, progress_callback: Callable[[fl
 
 		# 2. Ensure units are correct.
 		if not matching_units:
-			log_information("Converting %s from %s to %s" % (in_name, in_units, out_units))
+			log_information("Converting %s from %s to %s" % (out_name, in_units, out_units))
 			data = fix_units(data, in_units, out_units, lambda p: progress_callback(0.5 * p + 0.5))
 		else:
-			log_information("No units conversion required for %s" % in_name)
+			log_information("No units conversion required for %s" % out_name)
 
 		return data
 
@@ -337,11 +349,11 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-v", "--verbosity", type = int, help = "Logging verbosity (1-5)", nargs = "?", const = LogLevel.WARNING, default = LogLevel.WARNING)
 	parser.add_argument("-i", "--in-file", required = True, help = "Path to the input .nc file")
 	parser.add_argument("-o", "--out-file", required = True, help = "Path to the output .nc file")
-	parser.add_argument("-p", "--progress", action = "store_true", help = "Report progress")
+	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + VERSION)
 
 	parsed = parser.parse_args(argv[1:])
-	return Options(parsed.verbosity, parsed.in_file, parsed.out_file, parsed.progress)
+	return Options(parsed.verbosity, parsed.in_file, parsed.out_file, parsed.show_progress)
 
 def main(opts: Options):
 	"""
