@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 from argparse import ArgumentParser
-import re, datetime, traceback
+import re, datetime, traceback, os
 from construct import Switch
 from netCDF4 import Dataset, Variable
 from enum import IntEnum
@@ -163,15 +163,15 @@ class Options:
 	"""
 	Class for storing CLI arguments from the user.
 
-	@param log_l: Log level.
-	@param ifile: Input file.
-	@param ofile: Output file.
+	@param log: Log level.
+	@param files: Input files.
+	@param odir: Output directory.
 	@param prog: True to write progress messages, 0 otherwise.
 	"""
-	def __init__(self, log_l : LogLevel, ifile: str, ofile: str, prog: bool):
-		self.log_level = log_l
-		self.in_file = ifile
-		self.out_file = ofile
+	def __init__(self, log : LogLevel, files: list[str], odir: str, prog: bool):
+		self.log_level = log
+		self.files = files
+		self.out_dir = odir
 		self.report_progress = prog
 
 # Global variable which tracks log level as set by the user.
@@ -239,7 +239,8 @@ def log_progress(progress: float):
 	if opts.report_progress:
 		print("Working: %.2f%%\r" % (100.0 * progress), end = "")
 
-def copy_data(in_file: Dataset, variable: Variable):
+def copy_data(in_file: Dataset, variable: Variable, \
+	progress_callback: Callable[[float], None]):
 	"""
 	Copy all data from the input file to the output variable.
 
@@ -256,12 +257,12 @@ def copy_data(in_file: Dataset, variable: Variable):
 		log_information("Reading %s data" % out_name)
 		read_proportion = 0.66
 		write_proportion = 1 - read_proportion
-		data = get_data(in_file, forcing, lambda p: log_progress( \
+		data = get_data(in_file, forcing, lambda p: progress_callback( \
 			(i + p * read_proportion) / Forcing.NFORCINGS))
 
 		# 3. Write data to out file.
 		log_information("Writing %s data" % out_name)
-		write_data(variable, data, forcing, lambda p: log_progress( \
+		write_data(variable, data, forcing, lambda p: progress_callback( \
 			(i + read_proportion + write_proportion * p) / Forcing.NFORCINGS))
 		i += 1
 
@@ -549,11 +550,13 @@ def get_data(in_file: Dataset, forcing: Forcing, \
 		# Done!
 		return data
 
-def process_file(in_file, out_file):
+def process_file(in_file, out_file, \
+	progress_callback: Callable[[float], None]):
 	"""
 	Read the input file and generate an output file at the specified
 	path in LPJ-Guess (lsminput) format.
 	"""
+	log_information("---------- %s ----------" % in_file)
 	log_debug("Opening output file %s for writing" % out_file)
 	with Dataset(out_file, "w", format=NC_FORMAT) as nc_out:
 		log_debug("Opening input file %s for reading" % in_file)
@@ -577,7 +580,7 @@ def process_file(in_file, out_file):
 
 			# 2. Copy data into this variable.
 			log_debug("Migrating data")
-			copy_data(nc_in, out_variable)
+			copy_data(nc_in, out_variable, progress_callback)
 
 			# 3. Metadata for output file.
 			nc_out.time_step = "60"
@@ -602,13 +605,13 @@ def parse_args(argv: list[str]) -> Options:
 	"""
 	parser = ArgumentParser(prog=argv[0], description = "Formatting ozflux data into a format suitable for consumption by LPJ-Guess")
 	parser.add_argument("-v", "--verbosity", type = int, help = "Logging verbosity (1-5, default 3)", nargs = "?", const = LogLevel.INFORMATION, default = LogLevel.WARNING)
-	parser.add_argument("-i", "--in-file", required = True, help = "Path to the input .nc file")
-	parser.add_argument("-o", "--out-file", required = True, help = "Path to the output .nc file")
+	parser.add_argument("files", nargs = "+", help = "Input .nc files to be processed")
+	parser.add_argument("-o", "--out-dir", required = True, help = "Path to the output directory. Processed files will be saved with the same file name into this directory")
 	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + VERSION)
 
 	parsed = parser.parse_args(argv[1:])
-	return Options(parsed.verbosity, parsed.in_file, parsed.out_file, parsed.show_progress)
+	return Options(parsed.verbosity, parsed.files, parsed.out_dir, parsed.show_progress)
 
 def main(opts: Options):
 	"""
@@ -616,7 +619,24 @@ def main(opts: Options):
 
 	@param opts: Object containing parsed CLI arguments.
 	"""
-	process_file(opts.in_file, opts.out_file)
+	if not os.path.exists(opts.out_dir):
+		# Create output directory if it doesn't exist.
+		os.makedirs(opts.out_dir)
+
+	file_weightings = []
+	total_weight = 0
+	for file in opts.files:
+		size = os.path.getsize(file)
+		file_weightings.append(size)
+		total_weight += size
+
+	cum_weight = 0
+	for i in range(len(opts.files)):
+		infile = opts.files[i]
+		outfile = os.path.join(opts.out_dir, os.path.basename(infile))
+		weight = file_weightings[i] / total_weight
+		process_file(infile, outfile, lambda p: log_progress(cum_weight + (weight * p) / len(opts.files)))
+		cum_weight += weight
 
 if __name__ == "__main__":
 	# Parse CLI args
