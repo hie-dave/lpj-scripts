@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 from argparse import ArgumentParser
-import re
-import datetime
-
+import re, datetime, traceback
 from construct import Switch
 from netCDF4 import Dataset, Variable
 from enum import IntEnum
@@ -628,9 +626,8 @@ if __name__ == "__main__":
 	global_log_level = opts.log_level
 	try:
 		# Actual logic is in main().
-		raise ValueError("x")
 		main(opts)
 	except BaseException as error:
 		# Basic error handling.
-		log_error(str(error))
+		log_error(traceback.format_exc())
 		exit(1)
