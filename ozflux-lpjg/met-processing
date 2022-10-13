@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 from argparse import ArgumentParser
+import re
+import datetime
 
 from construct import Switch
 from netCDF4 import Dataset, Variable
@@ -9,6 +11,7 @@ from typing import Callable
 
 VERSION = "0.1"
 CHUNK_SIZE = 1024
+DATE_FORMAT = r"%Y-%m-%d %H:%M:%S"
 
 class LogLevel(IntEnum):
 	NONE = 0,
@@ -22,13 +25,23 @@ class LogLevel(IntEnum):
 # Constants related to .nc format/processing
 #######################################################################
 
+# Name of the single variable created in the output file.
 OUT_VARIABLE_FORCING_NAME = "forcing_data"
+
+# Data format in output file.
 OUT_VARIABLE_FORCING_FORMAT = "f8"
+
+# Name of the forcings dimension in the output file.
 OUT_DIM_NAME_FORCINGS = "forcings"
+
+# Name of the time dimension in the output file.
 OUT_DIM_NAME_TIME = "time"
 
+# NetCDF file format used for input and output.
 NC_FORMAT = "NETCDF4"
 
+# Forcing variable IDs (and column IDs too - this defines the order of
+# the columns in the output file).
 class Forcing(IntEnum):
 	"""
 	Indices of variables in the output .nc file.
@@ -44,9 +57,10 @@ class Forcing(IntEnum):
 	VAIR = 8,
 	QAIR = 9,
 	PSURF = 10
-	# Insert new values here
+	# Insert new values here if required.
 	NFORCINGS = 11 # This must always be the last/highest enum value
 
+# Variable names for the output file.
 outdata_forcing_names = {
 	Forcing.SWDOWN: "swdown",
 	Forcing.PARDF: "pardf",
@@ -61,18 +75,19 @@ outdata_forcing_names = {
 	Forcing.PSURF: "psurf"
 }
 
+# Variable names for the ozflux input file.
 indata_forcing_names = {
-	Forcing.SWDOWN: "Fsd", # ?
-	Forcing.PARDF: "zero", # ?
-	Forcing.PARDR: "zero", # ?
-	Forcing.LWDOWN: "Fld", # ?
-	Forcing.PRECLS: "Precip", # ?
-	Forcing.PRECCO: "zero", # ?
-	Forcing.TAIR: "Ta", # ?
-	Forcing.UAIR: "Ws", # ?
-	Forcing.VAIR: "zero", # ?
-	Forcing.QAIR: "SH", # ?
-	Forcing.PSURF: "ps", # ?
+	Forcing.SWDOWN: "Fsd",
+	Forcing.PARDF: "zero",
+	Forcing.PARDR: "zero",
+	Forcing.LWDOWN: "Fld",
+	Forcing.PRECLS: "Precip",
+	Forcing.PRECCO: "zero",
+	Forcing.TAIR: "Ta",
+	Forcing.UAIR: "Ws",
+	Forcing.VAIR: "zero",
+	Forcing.QAIR: "SH",
+	Forcing.PSURF: "ps"
 }
 
 # From DMB:
@@ -105,18 +120,24 @@ units_synonyms = [
 	["kg/kg", "", "mm/mm", "m/m"]
 ]
 
-g2kg = 1e-3
-kpa2pa = 1e3
-SECONDS_PER_DAY = 60 * 60 * 24 # 86_400
+# g to kg. This is not really used except as an example.
+G_TO_KG = 1e-3
+
+# KPa to Pa
+KPA_TO_PA = 1e3
+
+# °C to K
 DEG_C_TO_K = 273.15
+
+# This assumes an hourly output timestep.
+SECONDS_PER_TIMESTEP = 60 * 60
 
 # Recipes for unit conversions.
 units_conversions = {
-	# E.g.
-	("g", "kg"): lambda x: x * g2kg,
-	("mm", "kg/m2/s"): lambda x: x * SECONDS_PER_DAY,
+	("g", "kg"): lambda x: x * G_TO_KG, # (as an example)
+	("mm", "kg/m2/s"): lambda x: x * SECONDS_PER_TIMESTEP, # assumes hourly output timestep!!
 	("degC", "K"): lambda x: x + DEG_C_TO_K,
-	("kPa", "Pa"): lambda x: x * kpa2pa
+	("kPa", "Pa"): lambda x: x * KPA_TO_PA
 }
 
 #######################################################################
@@ -133,53 +154,60 @@ class Options:
 		self.out_file = out_file
 		self.report_progress = report_progress
 
+# Global variable which tracks log level as set by the user.
 global_log_level: LogLevel
 
 def log(msg: str, log_level: LogLevel):
 	"""
 	Write a log message.
 	"""
+	# todo: custom log file as CLI arg?
 	if log_level <= global_log_level:
 		file = stderr if log_level == LogLevel.ERROR else stdout
 		print(msg, file = file)
 
 def log_error(msg: str):
+	"""
+	Write an error message.
+	"""
 	log(msg, LogLevel.ERROR)
 
 def log_warning(msg: str):
+	"""
+	Write a warning message.
+	"""
 	log(msg, LogLevel.WARNING)
 
 def log_information(msg: str):
+	"""
+	Write an information message.
+	"""
 	log(msg, LogLevel.INFORMATION)
 
 def log_diagnostic(msg: str):
+	"""
+	Write a diagnostic message.
+	"""
 	log(msg, LogLevel.DIAGNOSTIC)
 
 def log_debug(msg: str):
+	"""
+	Write a debug message.
+	"""
 	log(msg, LogLevel.DEBUG)
 
-def get_variable_names(nc_file: Dataset):
-	return nc_file.variables.keys()
-
-def print_variable_names(nc_file: Dataset):
-	for (key, value) in nc_file.variables.items():
-		print("%s: %s" % (key, value.long_name))
-
-def dump_netcdf(nc_file: Dataset):
-	print_variable_names(nc_file)
-
-def open_netcdf(filename: str) -> Dataset:
-	return Dataset(filename, "r", format="NETCDF4")
-
 def dump_netcdf_file(filename):
+	"""
+	Print all variable names/descriptions in the .nc file.
+	"""
 	with open(filename) as nc_file:
-		dump_netcdf(nc_file)
+		for (key, value) in nc_file.variables.items():
+			print("%s: %s" % (key, value.long_name))
 
 def get_units(var_id: Variable) -> str:
 	"""
 	Get the units for the specified variable in the .nc file.
 	"""
-	# tbi
 	return var_id.units
 
 def log_progress(progress: float):
@@ -206,11 +234,13 @@ def copy_data(in_file: Dataset, variable: Variable):
 		out_name = outdata_forcing_names[forcing]
 		log_information("----- %s -----" % out_name)
 		log_information("Reading %s data" % out_name)
-		data = get_data(in_file, forcing, lambda p: log_progress((i + p / 2) / Forcing.NFORCINGS))
+		read_proportion = 0.66
+		write_proportion = 1 - read_proportion
+		data = get_data(in_file, forcing, lambda p: log_progress((i + p * read_proportion) / Forcing.NFORCINGS))
 
 		# 3. Write data to out file.
 		log_information("Writing %s data" % out_name)
-		write_data(variable, data, forcing, lambda p: log_progress((i + 0.5 + p / 2) / Forcing.NFORCINGS))
+		write_data(variable, data, forcing, lambda p: log_progress((i + read_proportion + write_proportion * p) / Forcing.NFORCINGS))
 		i += 1
 
 def write_data(variable: Variable, data: list[float], forcing: Forcing, progress_callback: Callable[[float], None]):
@@ -229,6 +259,48 @@ def write_data(variable: Variable, data: list[float], forcing: Forcing, progress
 			progress_callback(i / n)
 
 	log_diagnostic("Successfully wrote %d items of %s" % (n, forcing))
+
+def zeroes(n: int) -> list[float]:
+	"""
+	Create an array of zeroes of the specified length.
+	"""
+	x = [float] * n
+	for i in range(n):
+		x[i] = 0
+	return x
+
+def temporal_aggregation(in_file: Dataset, data: list[float], progress_callback: Callable[[float], None]) -> list[float]:
+	"""
+	Aggregate the data from 30m to 60m (hourly) timestep.
+	"""
+	# todo: support other timesteps (both source and target)?
+	if in_file.time_step != "30":
+		raise ValueError("Sadly this script only supports comversion from 30m timesteps (this file's timestep is %s)" % in_file.time_step)
+
+	start_minute = get_start_minute(in_file)
+	if start_minute == 30:
+		# Don't include the first timestep value if it lies on the half-
+		# hour boundary. trim_to_start_year() relies on this assumption,
+		# so it will need to be updated if we change this and vice versa.
+		data = data[1:]
+	elif start_minute != 0:
+		raise ValueError("Strange start time: '%s'. Data must start on the hour or half-hour" % in_file.time_coverage_start)
+
+	# Integer division to discard the remainder. If data has an odd
+	# length, the last value will be appended later.
+	n = len(data) // 2
+	out = [float] * n
+
+	for i in range(n):
+		out[i] = (data[2 * i] + data[2 * i + 1]) / 2
+		if i % CHUNK_SIZE == 0:
+			progress_callback(i / n)
+
+	if len(data) % 2 == 1:
+		# odd # of elems
+		out.append(data[len(data) - 1])
+
+	return out
 
 def find_units_conversion(current_units: str, desired_units: str) -> Callable[[float], float]:
 	"""
@@ -255,6 +327,16 @@ def fix_units(data: list[float], current_units: str, desired_units: str, progres
 			progress_callback(i / n)
 	return data
 
+def units_match(unit0: str, unit1: str) -> str:
+	"""
+	Check if the two units are equivalent.
+	E.g. m/s and ms^-1 would return true, but not m and kg.
+	"""
+	for case in units_synonyms:
+		if unit0 in case and unit1 in case:
+			return True
+	return False
+
 def read_data(variable: Variable, progress_callback: Callable[[float], None]) -> list[float]:
 	"""
 	Read all data for a variable from the .nc input file.
@@ -267,30 +349,88 @@ def read_data(variable: Variable, progress_callback: Callable[[float], None]) ->
 			progress_callback(i / n)
 	return arr
 
-def zeroes(n: int) -> list[float]:
-	x = [float] * n
-	for i in range(n):
-		x[i] = 0
-	return x
+def get_start_minute(in_file: Dataset):
+	"""
+	Determine the minute at which the dataset starts (0-59).
+	This is done by checking the time_coverage_start attribute of the dataset.
+	"""
+	start_time = in_file.time_coverage_start
+	# yyyy-MM-dd hh:mm:ss
+	pattern = r"\d{4}-\d{1,2}-\d{1,2} \d{1,2}:(\d{1,2}):\d{1,2}"
+	matches = re.findall(pattern, start_time)
+	if len(matches) < 1:
+		raise ValueError("Unable to parse start time; expected yyyy-MM-dd hh:mm:ss format, but was '%s'" % in_file.time_coverage_start)
+	return int(matches[0])
 
-def units_match(unit0: str, unit1: str) -> str:
+def change_start_minute(datetime: str, minute: int) -> str:
 	"""
-	Check if the two units are equivalent.
-	E.g. m/s and ms^-1 would return true, but not m and kg.
+	Change the minute value of a date/time string.
 	"""
-	for case in units_synonyms:
-		if unit0 in case and unit1 in case:
-			return True
-	return False
+	if minute < 0 or minute > 59:
+		raise ValueError("Unable to set start minute: minute value %d must be in range [0, 59]" % minute)
+
+	pattern = r"(\d{4}-\d{1,2}-\d{1,2} \d{1,2}:)\d{1,2}(:\d{1,2})"
+	matches = re.findall(pattern, datetime)
+	if len(matches) < 2:
+		raise ValueError("Invalid datetime format; expected yyyy-MM-dd hh:mm:ss format, but was '%s'" % datetime)
+	return "%s%d%s" % (matches[0], minute, matches[1])
+
+def parse_date(datestr: str) -> datetime.datetime:
+	"""
+	Parse a date object from a string in yyyy-MM-dd hh:mm:ss format.
+	"""
+	return datetime.datetime.strptime(datestr, DATE_FORMAT)
+
+def is_start_of_year(date: datetime.datetime) -> bool:
+	"""
+	Check if a given datetime object represents the start of a year.
+	"""
+	return date.second == 0 \
+	and date.minute == 0 \
+	and date.hour == 0 \
+	and date.day == 1 \
+	and date.month == 1
+
+def get_next_year(start_date: datetime.datetime) -> datetime.datetime:
+	"""
+	Get a date representing the first valid date time in the first year
+	on or after the given date. So if start_date lies on the exact start
+	of a year, start_date will be returned. Otherwise the first day of
+	the next year will be returned.
+	"""
+	if is_start_of_year(start_date):
+		return start_date
+	return datetime.datetime(start_date.year + 1, 1, 1, 0, 0, 0)
+
+def trim_to_start_year(in_file: Dataset, data: list[float]) -> list[float]:
+	"""
+	Trim the given data to the start of the next year.
+	"""
+	start_date = parse_date(in_file.time_coverage_start)
+	if (start_date.minute == 30):
+		# temporal_aggregation() trims the first value if it lies on the
+		# half-hour boundary. We need to do the same here.
+		start_date = start_date + datetime.timedelta(minutes = 30)
+	next_year = get_next_year(start_date)
+
+	delta = next_year - start_date
+	n_trim = int(delta.total_seconds() / 3600)
+	return data[n_trim:]
 
 def get_data(in_file: Dataset, forcing: Forcing, progress_callback: Callable[[float], None]) -> list[float]:
+		"""
+		Get all data from the input file and convert it to a format
+		suitable for the output file.
+		"""
 		# 0. Get variable ID from variable name.
 		in_name = indata_forcing_names[forcing]
 		out_name = outdata_forcing_names[forcing]
 
+		# Some variables are not translated directly into the output
+		# file and can be ignored (ie filled with zeroes).
 		if in_name == "zero":
 			log_information("Using zeroes for %s" % out_name)
-			return zeroes(in_file.variables['time'].size)
+			return zeroes(in_file.variables['time'].size // 2) # 30m timestep in input data
 		if not in_name in in_file.variables:
 			raise ValueError("Variable %s does not exist in input file" % in_name)
 
@@ -299,19 +439,31 @@ def get_data(in_file: Dataset, forcing: Forcing, progress_callback: Callable[[fl
 		out_units = forcing_units[forcing]
 		matching_units = units_match(in_units, out_units)
 
+		units_time_proportion = 0 if matching_units else 1 / 3
+		read_time_proportion = (1 - units_time_proportion) * 0.66
+		aggregation_time_proportion = 1 - read_time_proportion - units_time_proportion
+
 		log_diagnostic("Variable name is %s" % in_name)
 
 		# 1. Read data from netcdf file.
-		data = read_data(var_id, lambda p: progress_callback(p if matching_units else 0.5 * p))
+		data = read_data(var_id, lambda p: progress_callback(read_time_proportion * p))
 		log_diagnostic("Successfully read %d values from netcdf" % len(data))
+
+		# 2. Change timestep to something suitable for lpj-guess.
+		log_information("Aggregating %s to hourly timestep" % out_name)
+		data = temporal_aggregation(in_file, data, lambda p: progress_callback(read_time_proportion + aggregation_time_proportion * p))
+		data = trim_to_start_year(in_file, data)
 
 		# 2. Ensure units are correct.
 		if not matching_units:
 			log_information("Converting %s from %s to %s" % (out_name, in_units, out_units))
-			data = fix_units(data, in_units, out_units, lambda p: progress_callback(0.5 * p + 0.5))
+			data = fix_units(data, in_units, out_units, lambda p: progress_callback(read_time_proportion + aggregation_time_proportion + units_time_proportion * p))
 		else:
 			log_information("No units conversion required for %s" % out_name)
 
+		# 3. todo: temporal aggregation (half-hourly -> hourly)
+
+		# Done!
 		return data
 
 def process_file(in_file, out_file):
@@ -323,6 +475,10 @@ def process_file(in_file, out_file):
 	with Dataset(out_file, "w", format=NC_FORMAT) as nc_out:
 		log_diagnostic("Opening input file %s for reading" % in_file)
 		with Dataset(in_file, "r", format=NC_FORMAT) as nc_in:
+			# Quick sanity check of time step.
+			if nc_in.time_step != "30":
+				raise ValueError("Unknown time step (%d) in input file %s. This script was designed to work with half-hourly data only" % (nc_in.time_step, in_file))
+
 			# 0. Create dimensions in output file.
 			log_diagnostic("Creating output dimensions")
 			nc_out.createDimension(OUT_DIM_NAME_FORCINGS, Forcing.NFORCINGS)
@@ -336,6 +492,16 @@ def process_file(in_file, out_file):
 			log_diagnostic("Migrating data")
 			copy_data(nc_in, out_variable)
 
+			# 3. Metadata for output file.
+			nc_out.time_step = "60"
+			start_date = get_next_year(parse_date(nc_in.time_coverage_start))
+			nc_out.time_coverage_start = start_date.strftime(DATE_FORMAT)
+			nc_out.time_coverage_end = nc_in.time_coverage_end
+			for forcing in Forcing:
+				if forcing == Forcing.NFORCINGS:
+					break
+				setattr(nc_out, "col_%d_%s_units" % (forcing, outdata_forcing_names[forcing]), forcing_units[forcing])
+
 def parse_args(argv: list[str]) -> Options:
 	"""
 	Parse CLI arguments, return a parsed options object.
@@ -346,7 +512,7 @@ def parse_args(argv: list[str]) -> Options:
 	"""
 
 	parser = ArgumentParser(prog=argv[0], description = "Formatting ozflux data into a format suitable for consumption by LPJ-Guess")
-	parser.add_argument("-v", "--verbosity", type = int, help = "Logging verbosity (1-5)", nargs = "?", const = LogLevel.WARNING, default = LogLevel.WARNING)
+	parser.add_argument("-v", "--verbosity", type = int, help = "Logging verbosity (1-5, default 3)", nargs = "?", const = LogLevel.INFORMATION, default = LogLevel.WARNING)
 	parser.add_argument("-i", "--in-file", required = True, help = "Path to the input .nc file")
 	parser.add_argument("-o", "--out-file", required = True, help = "Path to the output .nc file")
 	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
