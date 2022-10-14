@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 from argparse import ArgumentParser
-import re, datetime, traceback, os
+import re, datetime, traceback, os, multiprocessing, threading
 from construct import Switch
 from netCDF4 import Dataset, Variable
 from enum import IntEnum
@@ -167,12 +167,15 @@ class Options:
 	@param files: Input files.
 	@param odir: Output directory.
 	@param prog: True to write progress messages, 0 otherwise.
+	@param parallel: True to process files in parallel.
 	"""
-	def __init__(self, log : LogLevel, files: list[str], odir: str, prog: bool):
+	def __init__(self, log : LogLevel, files: list[str], odir: str, \
+		prog: bool, parallel: bool):
 		self.log_level = log
 		self.files = files
 		self.out_dir = odir
 		self.report_progress = prog
+		self.parallel = parallel
 
 # Global variable which tracks log level as set by the user.
 global_log_level: LogLevel
@@ -299,6 +302,8 @@ def temporal_aggregation(in_file: Dataset, data: list[float], forcing: Forcing, 
 	Aggregate the data from 30m to 60m (hourly) timestep.
 	"""
 	# todo: support other timesteps (both source and target)?
+	if in_file.time_step == "60":
+		return data
 	if in_file.time_step != "30":
 		m = "Unsupported input timestep: %s"
 		raise ValueError(m % in_file.time_step)
@@ -562,9 +567,9 @@ def process_file(in_file, out_file, \
 		log_debug("Opening input file %s for reading" % in_file)
 		with Dataset(in_file, "r", format=NC_FORMAT) as nc_in:
 			# Quick sanity check of time step.
-			if nc_in.time_step != "30":
+			if nc_in.time_step != "30" and nc_in.time_step != "60":
 				m = "Unknown time step (%d) in input file %s. Only hourly is supported"
-				raise ValueError(m % (nc_in.time_step, in_file))
+				raise ValueError(m % (int(nc_in.time_step), in_file))
 
 			# 0. Create dimensions in output file.
 			log_debug("Creating output dimensions")
@@ -608,10 +613,11 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("files", nargs = "+", help = "Input .nc files to be processed")
 	parser.add_argument("-o", "--out-dir", required = True, help = "Path to the output directory. Processed files will be saved with the same file name into this directory")
 	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
+	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel (experimental - do not use)")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + VERSION)
 
 	parsed = parser.parse_args(argv[1:])
-	return Options(parsed.verbosity, parsed.files, parsed.out_dir, parsed.show_progress)
+	return Options(parsed.verbosity, parsed.files, parsed.out_dir, parsed.show_progress, parsed.parallel)
 
 def main(opts: Options):
 	"""
@@ -619,24 +625,72 @@ def main(opts: Options):
 
 	@param opts: Object containing parsed CLI arguments.
 	"""
+	# Create output directory if it doesn't exist.
 	if not os.path.exists(opts.out_dir):
-		# Create output directory if it doesn't exist.
 		os.makedirs(opts.out_dir)
 
-	file_weightings = []
-	total_weight = 0
-	for file in opts.files:
-		size = os.path.getsize(file)
-		file_weightings.append(size)
-		total_weight += size
+	# overall_progress holds the progress [0, 1] of processing each
+	# file.
+	global overall_progress
+	overall_progress = [0.0] * len(opts.files)
 
-	cum_weight = 0
+	# Relative time spent in each file (based on file size).
+	file_weightings = [os.path.getsize(f) for f in opts.files]
+	total_weight = sum(file_weightings)
+	file_weightings = [x / total_weight for x in file_weightings]
+
+	# These are only required in parallel mode.
+	threads = []
+	mutex = multiprocessing.BoundedSemaphore(1)
+
+	def progress_reporter(progress: float, file_idx: int):
+		"""
+		Locally-scoped function which is called periodically by in order
+		to report the progress of processing a particular file.
+
+		@param progress: Progress of the file processing in range [0, 1].
+		@param file_idx: Index of the file being processed.
+		"""
+		# Shortcut to avoid unnecessary computations.
+		if not opts.report_progress:
+			return
+
+		global overall_progress
+
+		weighted_progress = file_weightings[file_idx] * progress
+
+		# No need to check if in parallel mode, as the mutex is easily
+		# obtained when running in serial mode.
+		with mutex:
+			overall_progress[file_idx] = weighted_progress
+			aggregate_progress = sum(overall_progress)
+			log_progress(aggregate_progress)
+
+	class ProcessingThread(threading.Thread):
+		def __init__(self, infile: str, outfile: str, idx: int):
+			threading.Thread.__init__(self)
+			self.index = idx
+			self.infile = infile
+			self.outfile = outfile
+		def run(self):
+			process_file(self.infile, self.outfile, lambda p: progress_reporter(p, self.index))
+
 	for i in range(len(opts.files)):
 		infile = opts.files[i]
 		outfile = os.path.join(opts.out_dir, os.path.basename(infile))
-		weight = file_weightings[i] / total_weight
-		process_file(infile, outfile, lambda p: log_progress(cum_weight + (weight * p) / len(opts.files)))
-		cum_weight += weight
+
+		if opts.parallel:
+			# Run task in a background thread.
+			t = ProcessingThread(infile, outfile, i)
+			t.start()
+			threads.append(t)
+		else:
+			# Run task in this thread.
+			process_file(infile, outfile, lambda p: progress_reporter(p, i))
+
+	# Wait for threads to exit.
+	for t in threads:
+		t.join()
 
 if __name__ == "__main__":
 	# Parse CLI args
