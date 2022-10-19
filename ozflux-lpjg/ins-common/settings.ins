@@ -1,0 +1,130 @@
+!///////////////////////////////////////////////////////////////////////////////////////
+!
+! OzFlux global settings.
+!
+! LPJ-GUESS OZFLUX INSTRUCTION SCRIPT FOR COHORT/INDIVIDUAL MODE
+! Global PFTs
+!
+! LPJ-GUESS 4.0
+!
+!///////////////////////////////////////////////////////////////////////////////////////
+
+!///////////////////////////////////////////////////////////////////////////////////////
+!  Options sepcific to v4.0
+!///////////////////////////////////////////////////////////////////////////////////////
+
+iffire 1
+
+! ---- End of v4.0-specific options
+
+!///////////////////////////////////////////////////////////////////////////////////////
+! LSM Options
+!///////////////////////////////////////////////////////////////////////////////////////
+
+param "lsm_output_path" (str "./out")
+param "lsm_out" (str "1") ! Write lsm output file
+param "ddiags_out" (str "1") ! Write lsm diagnostics output file
+param "cons_out" (str "1") ! Write lsm ctests output file
+param "veg_out" (str "1") ! Write lsm vegetation output file
+param "veg_out_patch" (str "1") ! Write patched vegetation output file
+param "stcond" (num 1) ! 0 = Ball-Berry, 1 = Medlyn
+
+!///////////////////////////////////////////////////////////////////////////////////////
+! RUN PARAMETERS AND OPTIONS
+!///////////////////////////////////////////////////////////////////////////////////////
+
+! Enable eucface-specific changes in the code
+!ifeucface 0
+
+! Use ambient (rather than elevated) co2 from the met file (which contains both).
+! Set to 0 to use elevated co2.
+!ambient_CO2 0
+
+! Settings recognised by Plib
+! Run GUESS with -help option for list of keywords and their meanings
+
+!title 'LPJ-GUESS cohort mode - global pfts'
+
+vegmode "cohort"		! "cohort", "individual" or "population"
+nyear_spinup 1000		! Number of years to spin up the simulation for
+ifcalcsla 1			! Whether to calculate SLA from leaf longevity
+				! (PFT-specific value can be specified in this file instead)
+ifcalccton 1			! Whether to calculate leaf C:N min from leaf longevity
+				! (PFT-specific value can be specified in this file instead)
+!firemodel "BLAZE"		! BLAZE, GLOBFIRM, NOFIRE
+!weathergenerator "GWGEN"	! GWGEN, INTERP
+npatch 100			! Number of replicate patches to simulate
+patcharea 1000			! Patch area (m2)
+estinterval 5			! Years between establishment events in cohort mode
+ifdisturb 1			! Whether generic patch-destroying disturbances enabled
+distinterval 100		! Average return time for generic patch-destroying disturbances
+				! Hickler et al. (2011) used 200
+ifbgestab 1			! Whether background establishment enabled
+ifsme 1				! Whether spatial mass effect enabled
+ifstochestab 1			! Whether establishment stochastic
+ifstochmort 1			! Whether mortality stochastic
+ifcdebt 1			! Whether to allow vegetation C storage (1) or not (0)
+wateruptake "rootdist"  	! "wcont", "rootdist", "smart" or "speciesspecific",
+                        	! see documentation for water_uptake()
+!rootdistribution "jackson"	! How to parameterise root distribution. Alternatives are "fixed" or "jackson".
+textured_soil 1	     		! Whether to use silt/sand fractions specific to soiltype
+ifsmoothgreffmort 1		! Whether to vary mort_greff smoothly with growth efficiency (1)
+				! or to use the standard step-function (0)
+				! greff_min values below calibrated for the smooth (1) option
+ifdroughtlimitedestab 0		! Whether establishment is limited by growing season drought
+				! guess2008 - species version has 1
+ifrainonwetdaysonly 1		! Whether to rain on wet days only (1), or to rain a bit every day (0)
+ifbvoc 0                     	! Whether to include BVOC calculations (1) or not (0)
+
+
+!///////////////////////////////////////////////////////////////////////////////
+! PROCESS SETTINGS SPECIFIC TO NITROGEN
+!///////////////////////////////////////////////////////////////////////////////
+
+ifcentury 1			! Whether to use CENTURY SOM dynamics (mandatory for N cycling)
+ifnlim 1			! Whether plant growth limited by available N
+freenyears 100			! Number of years to spin up without N limitation (needed to build up a N pool)
+nfix_a 0.234			! First term in N fixation eqn (Conservative 0.102, Central 0.234, Upper 0.367)
+nfix_b -0.172			! Second term in N fixation eqn (Conservative 0.524, Central -0.172, Upper -0.754)
+nrelocfrac 0.5			! Fraction of N retranslocated prior to leaf and root shedding
+
+
+!///////////////////////////////////////////////////////////////////////////////
+! ARCTIC AND WETLAND SWITCHES
+!///////////////////////////////////////////////////////////////////////////////
+
+!iftwolayersoil 0		! Use the original LPJ-GUESS v4 two layer soil and snow scheme, or not (0, by default). 
+				! Of the switches below, iforganicsoilproperties, ifcarbonfreeze and 
+				! ifmultilayersnow must all be 0 if iftwolayersoil = 1
+				! Furthermore, run_peatland must be 0 when using the two layer soil, and 
+				! rootdistribution must be "fixed"
+
+!ifmultilayersnow 1 		! 0 is the old, single-layer scheme. 1 by default (applies to all stand types)
+!iforganicsoilproperties 0	! Whether to update physical soil properties using soil carbon content 
+				! (applies only to non peatland, mineral stands not classified as organic)
+!ifcarbonfreeze 1		! Whether to allow some decomposition below 0 degC in upland soils (1 by default), or not (0)
+
+! WETLAND SWITCHES (no effect when run_peatland 0)
+!ifinundationstress 1		! Whether to reduce daily GPP if there's inundation on peatlands (1), or not (0)
+!wetland_runon 0			! Extra daily water input to (>0), or output from (<0), wetlands (mm/day). 
+				! 0 by default, non-zero for site specific studies.
+!ifmethane 0			! Whether to run the methane model and calculate methane fluxes
+!ifsaturatewetlands 0		! Whether to take water from runoff to saturate low latitide wetlands (1), or not (0)
+
+
+!///////////////////////////////////////////////////////////////////////////////
+! SERIALIZATION SETTINGS
+!///////////////////////////////////////////////////////////////////////////////
+
+!state_year 500			! Year to save/start state file (no setting = after spinup)
+restart 0			! Whether to start from a state file
+save_state 0			! Whether to save a state file
+state_path "./state/"			! Directory to put state files in
+
+
+!///////////////////////////////////////////////////////////////////////////////
+! LANDCOVER PARAMETERS
+!///////////////////////////////////////////////////////////////////////////////
+
+run_landcover 0			! Whether to use (and change) landcover fractions (1) or not (0)
+
