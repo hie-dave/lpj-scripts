@@ -1,0 +1,300 @@
+#!/usr/bin/env python
+#
+# Create the ozflux sites' lpj-guess benchmark configurations.
+#
+
+import argparse, datetime, glob, netCDF4, os, ozflux_logging, shutil, sys, traceback
+from io import TextIOWrapper
+
+CONFIG_DIR_NAME = "config"
+DATA_DIR_NAME = "data"
+SOIL_DATA_FILENAME = "soils.nc"
+MINUTES_PER_DAY = 24 * 60
+GRIDLIST_FILENAME = "gridlist.txt"
+DATE_FORMAT = r"%Y-%m-%d %H:%M:%S"
+
+class BenchmarkOptions:
+	"""
+	Class for storing CLI options.
+	"""
+	def __init__(self, log_level: ozflux_logging.LogLevel, out_dir: str
+		, ins_files: list[str], soil_data: str, co2_dir: str
+		, simfire_data: str, ndep_data: str, files: list[str]):
+		self.log_level = log_level
+		self.out_dir = out_dir
+		self.ins_files = ins_files
+		self.soil_data = soil_data
+		self.co2_dir = co2_dir
+		self.simfire_data = simfire_data
+		self.ndep_data = ndep_data
+		self.files = files
+
+class SiteMetadata:
+	"""
+	Class for storing metadata about a site.
+	"""
+	def __init__(self, latitude: float, longitude: float, start_year: int, end_year: int, timesteps_per_day: int):
+		self.latitude = latitude
+		self.longitude = longitude
+		self.start_year = start_year
+		self.end_year = end_year
+		self.timesteps_per_day = timesteps_per_day
+
+def parse_args(args: list[str]) -> BenchmarkOptions:
+	"""
+	Parse CLI arguments.
+	"""
+	parser = argparse.ArgumentParser(args[0], description = "Create ozflux sites' lpj-guess benchmark configurations")
+	parser.add_argument("-v", "--verbosity", type = int, nargs = "?", default = ozflux_logging.LogLevel.INFORMATION, help = "Logging verbosity (1-5, default 3)")
+	parser.add_argument("-o", "--out-dir", type = str, nargs = "?", required = True, help = "Output directory")
+	parser.add_argument("-i", "--ins-files", type = str, action = "append", help = ".ins file to be used/referenced by the created benchmark. Can be specified multiple times")
+	parser.add_argument("-s", "--soil-data", type = str, required = True, action = "store", help = "Site-specific soil data .nc file.")
+	parser.add_argument("-c", "--co2-dir", type = str, required = True, help = "Directory containing co2 data. File names must be ${site}_co2.txt")
+	parser.add_argument("-f", "--simfire-data", type = str, required = True, help = "Simfire input file")
+	parser.add_argument("-n", "--ndep-data", type = str, required = True, help = "NDep data file")
+	parser.add_argument("files", nargs = "+", help = "Input .nc files containing met data; 1 benchmark will be created per file.")
+	result = parser.parse_args(args[1:])
+	return BenchmarkOptions(result.verbosity, result.out_dir
+		, result.ins_files, result.soil_data, result.co2_dir
+		, result.simfire_data, result.ndep_data, result.files)
+
+def get_soil_data_filename():
+	"""
+	Get the name expected by lpj-guess of the soil data file. Creating
+	a function for this as it's likely to change in the future.
+	"""
+	return SOIL_DATA_FILENAME
+
+def parse_date(datestr: str) -> int:
+	"""
+	Parse a year from a date/time string with the format:
+	yyyy-MM-dd hh:mm:ss
+	"""
+	return datetime.datetime.strptime(datestr, DATE_FORMAT)
+
+def parse_metadata(met_data_file: str) -> SiteMetadata:
+	# fixme: format is defined in met-processing script. Iin principle
+	# it could change, but it's unlikely so I've just hardcoded it here.
+	with netCDF4.Dataset(met_data_file, "r", format="NETCDF4") as nc:
+		
+		start_year = parse_date(nc.time_coverage_start).year
+		end_year = parse_date(nc.time_coverage_end).year
+		lat = float(nc.latitude)
+		lon = float(nc.longitude)
+		timestep = int(nc.time_step) # in minutes
+		nperiods_day = MINUTES_PER_DAY / timestep
+		return SiteMetadata(lat, lon, start_year, end_year, nperiods_day)
+
+def six_digit_string(x: float) -> str:
+	"""
+	Return a number, encoded as a 6 digit string.
+	"""
+	# Round x to 2 digits.
+	res = str(abs(int(round(x, 2) * 1000)))
+	pad = "0" * (6 - len(res))
+	return "%s%s" % (pad, res)
+
+def get_met_filename(lon: float, lat: float) -> str:
+	"""
+	The LSM input module expects a very specific file name for its met
+	data. This is a function of the latitude and longitude of the site.
+	"""
+	lonstr = six_digit_string(lon)
+	latstr = six_digit_string(lat)
+
+	londir = "W" if lon < 0 else "E"
+	latdir = "S" if lat < 0 else "N"
+
+	return "%s%s_%s%s" % (lonstr, londir, latstr, latdir)
+
+def copy_all_ndep_files(source: str, dest: str):
+	"""
+	Copy all N deposition files to the destination directory.
+	@param source: Path to one of the ndep files.
+	@param dest: A directory.
+	"""
+	basename = os.path.basename(source)
+	parts = os.path.splitext(basename)
+	basename = parts[0]
+	ext = parts[1]
+	dirname = os.path.dirname(source)
+	pattern = os.path.join(dirname, "%s*%s" % (basename, ext))
+	files = glob.glob(pattern)
+	if len(files) <= 1:
+		ozflux_logging.log_warning("No extra NDep files were found")
+
+	for file in files:
+		ozflux_logging.log_diagnostic("Found NDep file '%s'" % file)
+		shutil.copy(file, dest)
+
+def writeline(f: TextIOWrapper, txt: str):
+	"""
+	Write the specified string, followed by a newline, to the file.
+	"""
+	f.write("%s\n" % txt)
+
+def bool_to_int(x: bool) -> int:
+	"""
+	Convert bool to C-style bool (aka int).
+	"""
+	return 1 if x else 0
+
+def create_benchmark(met_data: str, ins_files: list[str], co2_dir: str
+	, out_dir: str, soil_data: str, simfire_data: str, ndep_data: str):
+	"""
+	Create a benchmark for the site defined by the given met data file
+	and other instruction files.
+	"""
+	if not os.path.exists(met_data):
+		raise ValueError("File not found: '%s'" % met_data)
+
+	met_data_base = os.path.basename(met_data)
+	site_name = os.path.splitext(met_data_base)[0]
+	met_data_ext = os.path.splitext(met_data_base)[1]
+
+	ozflux_logging.log_information("Creating benchmark for %s" % site_name)
+
+	co2_basename = "%s_co2.txt" % site_name
+	co2_file = os.path.join(co2_dir, co2_basename)
+	if not os.path.exists(co2_file):
+		m = "CO2 data file '%s' does not exist"
+		raise FileNotFoundError(m % co2_file)
+
+	# 0. Create directory tree for this site.
+	site_dir = os.path.join(out_dir, site_name)
+	config_dir = os.path.join(site_dir, CONFIG_DIR_NAME)
+	data_dir = os.path.join(site_dir, DATA_DIR_NAME)
+	data_rel = os.path.join("../%s" % DATA_DIR_NAME)
+
+	os.makedirs(site_dir, exist_ok = True)
+	os.makedirs(config_dir, exist_ok = True)
+	os.makedirs(data_dir, exist_ok = True)
+
+	# Also create an output directory, as lpj-guess is incapable of
+	# doing this internally. fixme: Name of this directory is actually
+	# determined by ths instruction files.
+	os.makedirs(os.path.join(config_dir, "out"), exist_ok = True)
+
+	# Read some metadata from the input met data file.
+	metadata = parse_metadata(met_data)
+	nyears = metadata.end_year - metadata.start_year
+
+	# Copy met data.
+	met_data_base = get_met_filename(metadata.longitude, metadata.latitude)
+	met_data_base += met_data_ext
+	met_dest = os.path.join(data_dir, met_data_base)
+	shutil.copy(met_data, met_dest)
+
+	# Copy soil data.
+	soil_data_dest = os.path.join(data_dir, get_soil_data_filename())
+	shutil.copy(soil_data, soil_data_dest)
+
+	# Copy co2 data.
+	co2_rel = os.path.join(data_rel, co2_basename)
+	shutil.copy(co2_file, data_dir)
+
+	# Copy simfire data.
+	simfire_basename = os.path.basename(simfire_data)
+	simfire_rel = os.path.join(data_rel, simfire_basename)
+	shutil.copy(simfire_data, data_dir)
+
+	# Copy ndep data.
+	ndep_basename = os.path.basename(ndep_data)
+	ndep_rel = os.path.join(data_rel, ndep_basename)
+	shutil.copy(ndep_data, data_dir)
+	copy_all_ndep_files(ndep_data, data_dir)
+
+	gridlist = GRIDLIST_FILENAME
+	gridlist_file = os.path.join(config_dir, gridlist)
+	with open(gridlist_file, "w") as g:
+		g.writelines("%.2f %.2f\n" % (metadata.longitude, metadata.latitude))
+
+	# For now, I've manually hardcoded a few options.
+	nyear_spinup = 1000
+	lsm_mode = True
+	patch_ebalance = True
+	use_leaf_temp = True
+	nyear_spinup_daily = nyear_spinup * 0.5
+	nyear_spinup_soiltemp = nyear_spinup * 0.5
+	# Water uptake type (WU_NOAH, WU_CLM, WU_SSIB)
+	wutype = 1
+
+	# Master instruction file, just called ${site}.ins.
+	master_file_name = os.path.join(config_dir, "%s.ins" % site_name)
+	with open(master_file_name, "w") as f:
+		sep = "/" * 71
+		writeline(f, "!%s" % sep)
+		writeline(f, "!")
+		writeline(f, "! %s master instruction file" % site_name)
+		writeline(f, "!")
+		writeline(f, "!%s" % sep)
+		writeline(f, "")
+		writeline(f, 'title "LPJ-Guess ozflux site: %s"' % site_name)
+		writeline(f, "")
+		writeline(f, "! Gridlist")
+		writeline(f, 'param "file_gridlist" (str "%s")' % gridlist)
+		writeline(f, "")
+		writeline(f, "! Met Data")
+		writeline(f, 'param "path_lsm_forcings" (str "%s")' % data_rel)
+		writeline(f, "")
+		writeline(f, "! Soil Data")
+		writeline(f, 'param "path_soil_data" (str "%s")' % data_rel)
+		writeline(f, "")
+		writeline(f, "! CO2 Data")
+		writeline(f, 'param "file_co2" (str "%s")' % co2_rel)
+		writeline(f, "")
+		writeline(f, "! Simfire Data")
+		writeline(f, 'param "file_simfire" (str "%s")' % simfire_rel)
+		writeline(f, "")
+		writeline(f, "! N Deposition Data")
+		writeline(f, 'param "file_ndep" (str "%s")' % ndep_rel)
+		writeline(f, "")
+		writeline(f, "! Other site-specific metadata")
+		writeline(f, 'param "first_hist_year" (num %d)' % metadata.start_year)
+		writeline(f, 'param "nyear_hist" (num %d)' % nyears)
+		writeline(f, 'param "nperiods_day" (num %d)' % metadata.timesteps_per_day)
+		writeline(f, 'param "nyear_spinup_data" (num %d)' % nyear_spinup)
+		writeline(f, 'param "lsm_mode" (num %d)' % bool_to_int(lsm_mode))
+		writeline(f, 'param "nyear_spinup_daily" (num %d)' % nyear_spinup_daily)
+		writeline(f, 'param "nyear_spinup_soiltemp" (num %d)' % nyear_spinup_soiltemp)
+		writeline(f, 'param "patch_ebalance" (num %d)' % bool_to_int(patch_ebalance))
+		writeline(f, 'param "use_leaf_temp" (num %d)' % bool_to_int(use_leaf_temp))
+		writeline(f, 'param "wutype" (num %d)' % bool_to_int(wutype))
+		writeline(f, "")
+		writeline(f, "! Instruction files")
+		for ins_file in ins_files:
+			# Copy instruction file to config directory.
+			basename = os.path.basename(ins_file)
+			dest = os.path.join(config_dir, basename)
+			shutil.copy(ins_file, dest)
+
+			# Add an include directive for this .ins file.
+			writeline(f, 'import "%s"' % basename)
+
+def main(opts: BenchmarkOptions):
+	"""
+	Main function; creates the benchmark configs.
+	"""
+	# Create output directory if it doesn't exist.
+	os.makedirs(opts.out_dir, exist_ok = True)
+
+	for site in opts.files:
+		create_benchmark(site, opts.ins_files, opts.co2_dir
+		, opts.out_dir, opts.soil_data, opts.simfire_data
+		, opts.ndep_data)
+
+if __name__ == "__main__":
+	# Parse CLI args
+	opts = parse_args(sys.argv)
+
+	# todo: rethink logging
+	ozflux_logging.global_log_level = opts.log_level
+	try:
+		# Actual logic is in main().
+		main(opts)
+	except BaseException as error:
+		# Basic error handling.
+		ozflux_logging.log_error(traceback.format_exc())
+		exit(1)
+
+
