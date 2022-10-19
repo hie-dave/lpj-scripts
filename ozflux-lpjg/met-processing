@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 from argparse import ArgumentParser
-import re, datetime, traceback, os, multiprocessing, threading
+import re, datetime, traceback, os, math, multiprocessing, threading
 from construct import Switch
 from netCDF4 import Dataset, Variable
 from enum import IntEnum
@@ -147,10 +147,13 @@ DEG_C_TO_K = 273.15
 # This assumes an hourly output timestep.
 SECONDS_PER_TIMESTEP = 60 * 60
 
+# Number of seconds in half an hour (leap seconds are a myth).
+SECONDS_PER_MINUTE = 60
+
 # Recipes for unit conversions.
 units_conversions = {
 	("g", "kg"): lambda x: x * G_TO_KG, # (as an example)
-	("mm", "kg/m2/s"): lambda x: x * SECONDS_PER_TIMESTEP,
+	("mm", "kg/m2/s"): lambda x: x / SECONDS_PER_TIMESTEP, # Assuming mm means mm per timestep
 	("degC", "K"): lambda x: x + DEG_C_TO_K,
 	("kPa", "Pa"): lambda x: x * KPA_TO_PA
 }
@@ -168,14 +171,16 @@ class Options:
 	@param odir: Output directory.
 	@param prog: True to write progress messages, 0 otherwise.
 	@param parallel: True to process files in parallel.
+	@param extract_co2: True to extract co2 data.
 	"""
 	def __init__(self, log : LogLevel, files: list[str], odir: str, \
-		prog: bool, parallel: bool):
+		prog: bool, parallel: bool, extract_co2):
 		self.log_level = log
 		self.files = files
 		self.out_dir = odir
 		self.report_progress = prog
 		self.parallel = parallel
+		self.extract_co2 = extract_co2
 
 # Global variable which tracks log level as set by the user.
 global_log_level: LogLevel
@@ -218,6 +223,78 @@ def log_debug(msg: str):
 	Write a debug message.
 	"""
 	log(msg, LogLevel.DEBUG)
+
+def seconds_per_n_minutes(n: int) -> int:
+	"""
+	Number of seconds in N minutes.
+	"""
+	return n * SECONDS_PER_MINUTE
+
+def num_timesteps_between_dates(n: int, d0: datetime.datetime, d1: datetime.datetime) -> int:
+	"""
+	Determine the number of n-minute timesteps between two dates.
+
+	d1 must be later than d1.
+
+	@param n: Timestep size in minutes.
+	@param d0: The first date (must be earlier than d1).
+	@param d1: The second date (must be later than d0).
+	"""
+	return int((d1 - d0).total_seconds() / seconds_per_n_minutes(n))
+
+def extract_co2(infile: str, outdir: str, pcb: Callable[[float], None]):
+	"""
+	Extract co2 data from the input .nc file and store it in the
+	specified directory.
+	"""
+	fname = os.path.basename(infile)
+	fname = os.path.splitext(fname)[0]
+	fname = "%s_co2.txt" % fname
+	outfile = os.path.join(outdir, fname)
+	with Dataset(infile, "r", format=NC_FORMAT) as nc:
+		generate_co2_file(outfile, nc, pcb)
+
+def generate_co2_file(filename: str, data: Dataset
+	, progress_callback: Callable[[float], None]):
+	"""
+	Generate a co2 input file from the co2 data stored in the given
+	netcdf dataset.
+	"""
+	log_information("Processing %s" % filename)
+	# Determine start/end datetimes from the data.
+	start_date = parse_date(data.time_coverage_start)
+	start_year = start_date.year
+	end_date = parse_date(data.time_coverage_end)
+	end_year = end_date.year
+	nyear = end_year - start_year + 1
+
+	# Timestep size in minutes.
+	timestep = int(data.time_step)
+
+	# Now extract a single (mean) value for each year.
+	co2 = [0.0] * nyear
+	year = start_date
+	index = 0
+	for i in range(nyear):
+		# Progress reporting.
+		progress_callback(0.5 * i / nyear)
+
+		prev_year = year
+		year = datetime.datetime(year.year + 1, 1, 1, 0, 0, 0)
+		n_timesteps = num_timesteps_between_dates(timestep, prev_year, year)
+
+		# Determine start/end indices in the array.
+		index_prev = index
+		index += n_timesteps
+
+		# CO2 value used for each year is the mean over that year.
+		# todo: fix hardcoded variable name "CO2" here.
+		co2[i] = data.variables["CO2"][index_prev:index].mean()
+
+	with open(filename, "w") as file:
+		for i in range(nyear):
+			file.write("%d %.2f\n" % (start_year + i, co2[i]))
+			progress_callback(0.5 + 0.5 * (i + 1) / nyear)
 
 def dump_netcdf_file(filename):
 	"""
@@ -588,10 +665,12 @@ def process_file(in_file, out_file, \
 			copy_data(nc_in, out_variable, progress_callback)
 
 			# 3. Metadata for output file.
-			nc_out.time_step = "60"
+			nc_out.time_step = "60" # in minutes.
 			start_date = get_next_year(parse_date(nc_in.time_coverage_start))
 			nc_out.time_coverage_start = start_date.strftime(DATE_FORMAT)
 			nc_out.time_coverage_end = nc_in.time_coverage_end
+			nc_out.latitude = nc_in.latitude
+			nc_out.longitude = nc_in.longitude
 			for forcing in Forcing:
 				if forcing == Forcing.NFORCINGS:
 					break
@@ -609,15 +688,16 @@ def parse_args(argv: list[str]) -> Options:
 	@return Parsed Options object.
 	"""
 	parser = ArgumentParser(prog=argv[0], description = "Formatting ozflux data into a format suitable for consumption by LPJ-Guess")
-	parser.add_argument("-v", "--verbosity", type = int, help = "Logging verbosity (1-5, default 3)", nargs = "?", const = LogLevel.INFORMATION, default = LogLevel.WARNING)
+	parser.add_argument("-v", "--verbosity", type = int, help = "Logging verbosity (1-5, default 3)", nargs = "?", const = LogLevel.INFORMATION, default = LogLevel.INFORMATION)
 	parser.add_argument("files", nargs = "+", help = "Input .nc files to be processed")
 	parser.add_argument("-o", "--out-dir", required = True, help = "Path to the output directory. Processed files will be saved with the same file name into this directory")
 	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
 	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel (experimental - do not use)")
+	parser.add_argument("-c", "--extract-co2", action = "store_true", help = "Extract CO2 data from input .nc files. Disables normal processing of input files.")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + VERSION)
 
 	parsed = parser.parse_args(argv[1:])
-	return Options(parsed.verbosity, parsed.files, parsed.out_dir, parsed.show_progress, parsed.parallel)
+	return Options(parsed.verbosity, parsed.files, parsed.out_dir, parsed.show_progress, parsed.parallel, parsed.extract_co2)
 
 def main(opts: Options):
 	"""
@@ -663,7 +743,7 @@ def main(opts: Options):
 		# obtained when running in serial mode.
 		with mutex:
 			overall_progress[file_idx] = weighted_progress
-			aggregate_progress = sum(overall_progress)
+			aggregate_progress = sum(overall_progress) / sum(file_weightings)
 			log_progress(aggregate_progress)
 
 	class ProcessingThread(threading.Thread):
@@ -680,13 +760,18 @@ def main(opts: Options):
 		outfile = os.path.join(opts.out_dir, os.path.basename(infile))
 
 		if opts.parallel:
+			if opts.extract_co2:
+				raise ValueError("CO2 extraction in parallel mode not implemented. This is very fast anyway, just use serial mode.")
 			# Run task in a background thread.
 			t = ProcessingThread(infile, outfile, i)
 			t.start()
 			threads.append(t)
 		else:
 			# Run task in this thread.
-			process_file(infile, outfile, lambda p: progress_reporter(p, i))
+			if (opts.extract_co2):
+				extract_co2(infile, opts.out_dir, lambda p: progress_reporter(p, i))
+			else:
+				process_file(infile, outfile, lambda p: progress_reporter(p, i))
 
 	# Wait for threads to exit.
 	for t in threads:
