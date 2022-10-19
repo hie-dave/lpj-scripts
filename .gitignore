@@ -14,3 +14,11 @@ progress.sh
 append.cmd
 guess.cmd*
 
+# Python stuff
+__pycache__
+
+# Script outputs
+ozflux-lpjg/benchmarks
+ozflux-lpjg/inputs
+
+
