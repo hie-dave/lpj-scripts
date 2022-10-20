@@ -4,9 +4,12 @@
 # N times, and prepend the duplicate data to the file.
 #
 
-import abc, argparse, datetime, glob, os, ozflux_logging, math, numpy, shutil, sys, traceback
+import abc, argparse, ozflux_logging, math, numpy, sys, traceback, warnings
 from typing import Callable
 from netCDF4 import Dataset, Variable
+
+# Treat warnings as exceptions (as numpy is a bit trigger-happy).
+warnings.simplefilter('error', UserWarning)
 
 # leap years are a myth...actually, lpj-guess doesn't account for leap
 # years, so we won't either.
@@ -14,6 +17,7 @@ DAYS_PER_YEAR = 365
 MINUTES_PER_DAY = 24 * 60
 VARIABLE_NAME = "forcing_data"
 NUM_VARIABLES = 11
+CHUNK_SIZE = 512
 
 class DuplicateOptions:
 	"""
@@ -31,13 +35,21 @@ class IWeatherGenerator(abc.ABC):
 	Interface for a weather generator.
 	"""
 	@abc.abstractmethod
-	def generate_weather(self, data: list[float], year_len: int, nyear: int) -> list[float]:
+	def __init__(self, data: list[float], year_len: int):
 		"""
-		Generate N years' weather data.
+		Initialise the weather generator.
 		@param data: The base data to use for generation.
 		@param year_len: Number of elements (timesteps) per year.
+		"""
+		...
+
+	@abc.abstractmethod
+	def generate_weather(self, nyear: int
+		, progress_cb: Callable[[float], None]) -> list[float]:
+		"""
+		Generate N years' weather data.
 		@param nyear: Number of years' data to generate. Output array
-					  length should be len(data) + nyear * year_len.
+					  length should be nyear * year_len.
 		"""
 		...
 
@@ -46,78 +58,148 @@ class DuplicateGenerator(IWeatherGenerator):
 	Weather generator implementation which just repeatedly duplicates
 	the first years' data.
 	"""
-	def generate_weather(self, data: list[float], year_len: int, nyear: int) -> list[float]:
+	def __init__(self, data: list[float], year_len: int):
 		"""
 		See base class doco for usage instructions.
 		"""
-		first_years_data = data[:year_len]
-		return first_years_data * nyear + data
+		self.data = data
+		self.year_len = year_len
+
+	def generate_weather(self, nyear: int
+		, progress_cb: Callable[[float], None]) -> list[float]:
+		"""
+		See base class doco for usage instructions.
+		"""
+		first_years_data = self.data[:self.year_len]
+		return first_years_data * nyear
+
+def is_masked(arr, i) -> bool:
+	if not numpy.ma.is_masked(arr):
+		return False
+	return arr.mask[i]
 
 class GaussianGenerator(IWeatherGenerator):
 	"""
 	Weather generator implementation which generates data from a normal
 	distribution of sampled data.
 	"""
-	def generate_weather(self, data: list[float], year_len: int, nyear: int) -> list[float]:
+	def __init__(self, data: list[float], year_len: int):
 		"""
 		See base class doco for usage instructions.
 		"""
+		self.year_len = year_len
+		# No need to store the raw data (only store means/SDs).
+
 		# Create an array in which each element is an array of all
 		# values for that particular day of year, across all years.
-		timesteps = [[] for _ in range(year_len)]
+		self.timesteps = [[] for _ in range(year_len)]
 		for i in range(len(data)):
 			doy = i % year_len
-			timesteps[doy].append(data[i])
+			if not is_masked(data, i) and not math.isnan(data[i]):
+				self.timesteps[doy].append(data[i])
+			else:
+				# In principle this is not a problem, and we can
+				# interpolate around this later if there is no data for
+				# this doy, but in practice it may not be sensible to
+				# use this generator for very sparse data.
+				m = "Row %d contains a masked value"
+				ozflux_logging.log_diagnostic(m % i)
 
 		# Get mean/sd by day of year.
-		means = [0.0] * year_len
-		sds = [0.0] * year_len
+		self.means = [0.0] * year_len
+		self.sds = [0.0] * year_len
 		for i in range(year_len):
-			means[i] = numpy.mean(timesteps[i])
-			sds[i] = numpy.std(timesteps[i])
+			timestep = self.timesteps[i]
+			# If dataset is small, you really shouldn't be using this
+			# generator. But we can try sampling nearby timesteps.
+			if len(timestep) == 0:
+				m = "No data available for timestep %d. Neighbouring timesteps will be sampled."
+				ozflux_logging.log_warning(m % i)
+				timestep = self.neighbouring_data(data, i, 2)
 
-		n = year_len * nyear
+			# Calculate mean and standard deviation for this day of
+			# year, across all years.
+			self.means[i] = numpy.mean(timestep)
+			self.sds[i] = numpy.std(timestep)
+
+	def generate_weather(self, nyear: int
+		, progress_cb: Callable[[float], None]) -> list[float]:
+		"""
+		See base class doco for usage instructions.
+		"""
+		n = self.year_len * nyear
 		samples = [0.0] * n
-		for i in range(n):
-			doy = i % year_len
-			samples[i] = numpy.random.normal(means[doy], sds[doy])
+
+		# Sample N times for each day of year.
+		for i in range(self.year_len):
+			sample = numpy.random.normal(self.means[i], self.sds[i], nyear)
+			for j in range(nyear):
+				index = i + self.year_len * j
+				samples[index] = sample[j]
+			if i % CHUNK_SIZE == 0:
+				progress_cb(i / self.year_len)
 
 		return samples
 
-global show_progress
-show_progress: bool
+	def neighbouring_indices(self, index, ndata, nindex) -> list[int]:
+		"""
+		Return N closest neighbouring indices for the given index.
+		@param index: The start point.
+		@param ndata: Length of the list.
+		@param nindex: Number of indices to return.
+		"""
+		if nindex > ndata:
+			raise IndexError("Attempted to interpolate with more values than exist in list")
 
-def log_progress(progress: float):
-	global show_progress
-	if show_progress:
-		print("Working: %.2f%%\r" % (100 * progress) )
+		indices = [0] * nindex
+		for i in range(nindex):
+			sign = 1 if i % 2 == 0 else -1
+			dlt = 1 + i // 2 * sign # 1, -1, 2, -2, ...
+			idx = index + dlt
+
+			# Given the error check at start of function, we should
+			# eventualy find another neighbour. There is probably a
+			# more efficient search algorithm than this, but this will
+			# be called very rarely and I have bigger fish to fry.
+			while idx < 0 or idx >= ndata or idx in indices:
+				idx += dlt
+
+			indices[i] = idx
+		return indices
+
+	def neighbouring_data(self, data: list[float], index: int, n: int) -> list[float]:
+		"""
+		Return data from neighbouring indices in a flat list.
+		"""
+		indices = self.neighbouring_indices(index, len(data), n)
+		data: list[float]
+		neighbours = []
+		for i in indices:
+			neighbours.extend(data[i])
+		return neighbours
 
 def prepend(data: list[list[float]], nc: Dataset):
 	"""
 	Prepend the 2d array to the specified .nc file.
 
 	@param data: A list of list of floats. Each sub list should be the
-	yearly data for a single variable.
+	time series data for a single variable.
 	"""
 	if len(data) < 1:
+		# Technically this is not a problem per se, but it's probably a
+		# good indication that something has gone wrong.
 		ozflux_logging.log_warning("Attempted to prepend empty array. Probably a bug.")
 		return
-	n = len(data[0])
-	# Prepend one row at a time (in reverse - so 1st row is prepened last).
+
+	# The input data array is a list of lists, where each internal list
+	# represents time series for 1 variable. Therefore, we need to
+	# prepend the transpose of this array to the .nc file.
 	nc.variables[VARIABLE_NAME][:] = numpy.insert(
 		nc.variables[VARIABLE_NAME],
 		0,
 		numpy.transpose(data),
 		axis = 0
 	)
-	# for i in reversed(range(n)):
-	# 	row = [x[i] for x in data]
-	# 	nc.variables[VARIABLE_NAME][:] = numpy.insert(
-	# 		nc.variables[VARIABLE_NAME],
-	# 		0,
-	# 		row, # fixme - probably need to convert to right format
-	# 		axis = 0
-	# 	)
 
 def get_timesteps_per_year(nc_file: Dataset) -> int:
 	"""
@@ -128,19 +210,6 @@ def get_timesteps_per_year(nc_file: Dataset) -> int:
 	timesteps_per_day = MINUTES_PER_DAY / timestep
 	return int(timesteps_per_day * DAYS_PER_YEAR)
 
-def extract_variable(index: int, variable: Variable) -> list[float]:
-	"""
-	Extract data for the i-th variable in the specified netcdf variable.
-	The input variable should be the "met_forcings" variable in the
-	processed data.
-	"""
-	# n = int(math.floor(len(variable)))
-	# data = [0.0] * n
-	# for i in range(n):
-	# 	data[i] = variable[i][index]
-	# return data
-	return variable[:,index]
-
 def generate_weather(in_file: str, nyear: int
 	, progress_callback: Callable[[float], None]):
 	"""
@@ -148,21 +217,40 @@ def generate_weather(in_file: str, nyear: int
 	"""
 	ozflux_logging.log_information("----- Processing %s -----" % in_file)
 	with Dataset(in_file, "r+", format="NETCDF4") as nc:
+		# Count # of timesteps per year. This assumes the .nc file has
+		# a global attribute called "time_step" which is in minutes.
 		timesteps_per_year = get_timesteps_per_year(nc)
-		generator = GaussianGenerator()
 
-		ozflux_logging.log_information("Reading data")
-		data_by_variable = [[]] * NUM_VARIABLES
+		# Proportion of time spent reading vs writing. Used for progress
+		# reporting.
+		read_prop = 15 / (nyear + 15)
+		write_prop = 1 - read_prop
+
+		ozflux_logging.log_information("Reading...")
+		generators: list[IWeatherGenerator]
+		generators = []
 		for i in range(NUM_VARIABLES):
-			data_by_variable[i] = extract_variable(i, nc[VARIABLE_NAME])
+			# Get i-th column, and create a weather generator instance
+			# for this column.
+			data = nc[VARIABLE_NAME][:, i]
+			generators.append(GaussianGenerator(data, timesteps_per_year))
+			progress_callback(read_prop * (i + 1) / NUM_VARIABLES)
 
-		ozflux_logging.log_information("Generating met data")
-		for i in range(nyear):
-			year = [[]] * NUM_VARIABLES
-			for j in range(NUM_VARIABLES):
-				year[j] = generator.generate_weather(data_by_variable[j], timesteps_per_year, 1)
-			prepend(year, nc)
-			progress_callback((i + 1) / nyear)
+		ozflux_logging.log_information("Generating...")
+		data = [ [] ] * NUM_VARIABLES
+		step_size = write_prop / NUM_VARIABLES
+
+		# Generate data for each variable one by one. Each individual
+		# weather generator will return a flat list of data, and each of
+		# these flat lists are stored in the data list, which is a list
+		# of lists (ie 2d list).
+		for i in range(NUM_VARIABLES):
+			step_start = read_prop + i * step_size
+			data[i] = generators[i].generate_weather(nyear
+			, lambda p: progress_callback(step_start + p * step_size))
+
+		ozflux_logging.log_information("Writing...")
+		prepend(data, nc)
 
 def main(opts: DuplicateOptions):
 	"""
@@ -172,7 +260,7 @@ def main(opts: DuplicateOptions):
 	for i in range(len(opts.files)):
 		step_start = i / len(opts.files)
 		generate_weather(opts.files[i], opts.nyears
-			, lambda p: log_progress(step_start + step_size * p))
+			, lambda p: ozflux_logging.log_progress(step_start + step_size * p))
 
 def parse_args(args: list[str]) -> DuplicateOptions:
 	"""
@@ -192,8 +280,8 @@ if __name__ == "__main__":
 	opts = parse_args(sys.argv)
 
 	# todo: rethink logging
-	ozflux_logging.global_log_level = opts.log_level
-	show_progress = opts.show_progress
+	ozflux_logging.set_log_level(opts.log_level)
+	ozflux_logging.set_show_progress(opts.show_progress)
 
 	try:
 		# Actual logic is in main().
