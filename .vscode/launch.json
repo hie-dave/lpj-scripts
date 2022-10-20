@@ -153,6 +153,23 @@
 			"cwd": "${workspaceFolder}/ozflux-lpjg",
 			"console": "integratedTerminal",
 			"justMyCode": true
+		},
+		{
+			"name": "weather-gen",
+			"type": "python",
+			"request": "launch",
+			"program": "${workspaceRoot}/ozflux-lpjg/weather-gen",
+			"args": [
+				"--verbosity",
+				"2",
+				"--show-progress",
+				"--num-years",
+				"30",
+				"test/x.nc"
+			],
+			"cwd": "${workspaceFolder}/ozflux-lpjg",
+			"console": "integratedTerminal",
+			"justMyCode": true
 		}
 	]
 }
