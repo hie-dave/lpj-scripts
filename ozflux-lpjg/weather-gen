@@ -17,7 +17,8 @@ DAYS_PER_YEAR = 365
 MINUTES_PER_DAY = 24 * 60
 VARIABLE_NAME = "forcing_data"
 NUM_VARIABLES = 11
-CHUNK_SIZE = 512
+PROGRESS_INTERVAL = 512
+CHUNK_SIZE = 65536
 
 class DuplicateOptions:
 	"""
@@ -136,7 +137,7 @@ class GaussianGenerator(IWeatherGenerator):
 			for j in range(nyear):
 				index = i + self.year_len * j
 				samples[index] = sample[j]
-			if i % CHUNK_SIZE == 0:
+			if i % PROGRESS_INTERVAL == 0:
 				progress_cb(i / self.year_len)
 
 		return samples
@@ -194,7 +195,7 @@ def prepend(data: list[list[float]], nc: Dataset):
 	# The input data array is a list of lists, where each internal list
 	# represents time series for 1 variable. Therefore, we need to
 	# prepend the transpose of this array to the .nc file.
-	nc.variables[VARIABLE_NAME][:] = numpy.insert(
+	return numpy.insert(
 		nc.variables[VARIABLE_NAME],
 		0,
 		numpy.transpose(data),
@@ -210,6 +211,8 @@ def get_timesteps_per_year(nc_file: Dataset) -> int:
 	timesteps_per_day = MINUTES_PER_DAY / timestep
 	return int(timesteps_per_day * DAYS_PER_YEAR)
 
+import time, gc
+
 def generate_weather(in_file: str, nyear: int
 	, progress_callback: Callable[[float], None]):
 	"""
@@ -223,10 +226,12 @@ def generate_weather(in_file: str, nyear: int
 
 		# Proportion of time spent reading vs writing. Used for progress
 		# reporting.
-		read_prop = 15 / (nyear + 15)
-		write_prop = 1 - read_prop
+		write_weight = 7.5e-4 * nyear
+		generate_weight = 0.75 * (1 - write_weight)
+		read_weight = 1 - write_weight - generate_weight
 
 		ozflux_logging.log_information("Reading...")
+		read_start = time.time()
 		generators: list[IWeatherGenerator]
 		generators = []
 		for i in range(NUM_VARIABLES):
@@ -234,23 +239,54 @@ def generate_weather(in_file: str, nyear: int
 			# for this column.
 			data = nc[VARIABLE_NAME][:, i]
 			generators.append(GaussianGenerator(data, timesteps_per_year))
-			progress_callback(read_prop * (i + 1) / NUM_VARIABLES)
+			progress_callback(read_weight * (i + 1) / NUM_VARIABLES)
+
+		read_time = (time.time() - read_start) * 1000
 
 		ozflux_logging.log_information("Generating...")
+		generating_start = time.time()
 		data = [ [] ] * NUM_VARIABLES
-		step_size = write_prop / NUM_VARIABLES
+		step_size = generate_weight / NUM_VARIABLES
 
 		# Generate data for each variable one by one. Each individual
 		# weather generator will return a flat list of data, and each of
 		# these flat lists are stored in the data list, which is a list
 		# of lists (ie 2d list).
 		for i in range(NUM_VARIABLES):
-			step_start = read_prop + i * step_size
+			step_start = read_weight + i * step_size
 			data[i] = generators[i].generate_weather(nyear
 			, lambda p: progress_callback(step_start + p * step_size))
+		generating_time = (time.time() - generating_start) * 1000
 
 		ozflux_logging.log_information("Writing...")
-		prepend(data, nc)
+		data = prepend(data, nc)
+
+		# Force garbage collection to free up some memory.
+		gc.collect()
+
+		write_start = time.time()
+		nrow = data.shape[0]
+		step_size = write_weight / nrow
+		# Write data in chunks, to reduce memory usage (but increase
+		# execution time). To make this faster, increase CHUNK_SIZE.
+		for i in range(0, nrow, CHUNK_SIZE):
+			step_start = read_weight + generate_weight
+			upper = min(nrow, i + CHUNK_SIZE)
+			nc.variables[VARIABLE_NAME][i:upper, :] = data[i:upper, :]
+			if i % PROGRESS_INTERVAL == 0:
+				progress_callback(step_start + step_size * (i + 1))
+		write_time = (time.time() - write_start) * 1000
+
+		total_time = read_time + generating_time + write_time
+		read_weight = read_time / total_time
+		read_perc = read_weight * 100
+		write_weight = write_time / total_time
+		write_perc = write_weight * 100
+		gen_prop = generating_time / total_time
+		gen_perc = gen_prop * 100
+		ozflux_logging.log_diagnostic("Read : %.2fms/%.2f/%.2f%%" % (read_time, read_weight, read_perc))
+		ozflux_logging.log_diagnostic("Write: %.2fms/%.2f/%.2f%%" % (write_time, write_weight, write_perc))
+		ozflux_logging.log_diagnostic("Gener: %.2fms/%.2f/%.2f%%" % (generating_time, gen_prop, gen_perc))
 
 def main(opts: DuplicateOptions):
 	"""
