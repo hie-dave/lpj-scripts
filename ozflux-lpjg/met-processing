@@ -4,6 +4,7 @@ import re, datetime, traceback, os, math, multiprocessing, threading
 from construct import Switch
 from netCDF4 import Dataset, Variable
 from enum import IntEnum
+from ozflux_common import Forcing
 from sys import argv, stdout, stderr
 from typing import Callable
 
@@ -37,26 +38,6 @@ OUT_DIM_NAME_TIME = "time"
 
 # NetCDF file format used for input and output.
 NC_FORMAT = "NETCDF4"
-
-# Forcing variable IDs (and column IDs too - this defines the order of
-# the columns in the output file).
-class Forcing(IntEnum):
-	"""
-	Indices of variables in the output .nc file.
-	"""
-	SWDOWN = 0,
-	PARDF = 1,
-	PARDR = 2,
-	LWDOWN = 3,
-	PRECLS = 4,
-	PRECCO = 5,
-	TAIR = 6,
-	UAIR = 7,
-	VAIR = 8,
-	QAIR = 9,
-	PSURF = 10
-	# Insert new values here if required.
-	NFORCINGS = 11 # This must always be the last/highest enum value
 
 # Variable names for the output file.
 outdata_forcing_names = {

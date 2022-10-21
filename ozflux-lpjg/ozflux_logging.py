@@ -16,8 +16,13 @@ class LogLevel(enum.IntEnum):
 # Configuration options, which can be set via one of the below
 # functions. Best not to set these directly from user code.
 _log_level: LogLevel
+_log_level = LogLevel.WARNING
+
 _show_progress: bool
+_show_progress = False
+
 _warnings_as_errors: bool
+_warnings_as_errors = False
 
 def set_warnings_as_errors(warnings_as_errors: bool):
 	"""

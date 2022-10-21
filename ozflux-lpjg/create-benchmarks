@@ -288,7 +288,7 @@ if __name__ == "__main__":
 	opts = parse_args(sys.argv)
 
 	# todo: rethink logging
-	ozflux_logging.global_log_level = opts.log_level
+	ozflux_logging.set_log_level(opts.log_level)
 	try:
 		# Actual logic is in main().
 		main(opts)

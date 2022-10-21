@@ -4,7 +4,8 @@
 # N times, and prepend the duplicate data to the file.
 #
 
-import abc, argparse, ozflux_logging, math, numpy, sys, traceback, warnings
+import abc, argparse, ozflux_logging, math, numpy, os, scipy, sys, traceback, warnings
+from ozflux_common import Forcing
 from typing import Callable
 from netCDF4 import Dataset, Variable
 
@@ -16,9 +17,39 @@ warnings.simplefilter('error', UserWarning)
 DAYS_PER_YEAR = 365
 MINUTES_PER_DAY = 24 * 60
 VARIABLE_NAME = "forcing_data"
-NUM_VARIABLES = 11
 PROGRESS_INTERVAL = 512
 CHUNK_SIZE = 65536
+
+
+# Max values for each of the forcing types.
+forcings_max = {
+	Forcing.SWDOWN: sys.float_info.max,
+	Forcing.PARDF: 0, # always 0
+	Forcing.PARDR: 0, # always 0
+	Forcing.LWDOWN: sys.float_info.max,
+	Forcing.PRECLS: sys.float_info.max,
+	Forcing.PRECCO: sys.float_info.max,
+	Forcing.TAIR: sys.float_info.max,
+	Forcing.UAIR: sys.float_info.max,
+	Forcing.VAIR: sys.float_info.max,
+	Forcing.QAIR: sys.float_info.max,
+	Forcing.PSURF:sys.float_info.max
+}
+
+# Max values for each of the forcing types.
+forcings_min = {
+	Forcing.SWDOWN: sys.float_info.min,
+	Forcing.PARDF: 0, # always 0
+	Forcing.PARDR: 0, # always 0
+	Forcing.LWDOWN: sys.float_info.min,
+	Forcing.PRECLS: 0, # Rain cannot be negative
+	Forcing.PRECCO: 0, # Rain cannot be negative
+	Forcing.TAIR: 0, # Air temp is in K -> cannot be negative
+	Forcing.UAIR: sys.float_info.min, # Don't allow negative wind speed
+	Forcing.VAIR: sys.float_info.min, # Don't allow negative wind speed
+	Forcing.QAIR: sys.float_info.min,
+	Forcing.PSURF: 0 # Air pressure - don't allow negative
+}
 
 class DuplicateOptions:
 	"""
@@ -36,7 +67,7 @@ class IWeatherGenerator(abc.ABC):
 	Interface for a weather generator.
 	"""
 	@abc.abstractmethod
-	def __init__(self, data: list[float], year_len: int):
+	def __init__(self, data: list[float], year_len: int, min: float, max: float):
 		"""
 		Initialise the weather generator.
 		@param data: The base data to use for generation.
@@ -59,7 +90,7 @@ class DuplicateGenerator(IWeatherGenerator):
 	Weather generator implementation which just repeatedly duplicates
 	the first years' data.
 	"""
-	def __init__(self, data: list[float], year_len: int):
+	def __init__(self, data: list[float], year_len: int, min: float, max: float):
 		"""
 		See base class doco for usage instructions.
 		"""
@@ -76,19 +107,35 @@ class DuplicateGenerator(IWeatherGenerator):
 
 def is_masked(arr, i) -> bool:
 	if not numpy.ma.is_masked(arr):
-		return False
+		return arr.mask
 	return arr.mask[i]
+
+def get_truncated_normal(mean: float, sd: float, min: float, max: float):
+	"""
+	Return normally-distributed random variable, truncated at lower and
+	upper bounds.
+	"""
+	return scipy.stats.truncnorm(
+		(min - mean) / sd, (max - mean) / sd, loc=mean, scale=sd)
+
+def constrain(x: float, lower: float, upper: float) -> float:
+	"""
+	Constrain x within the specified lower and upper bounds.
+	"""
+	return min(upper, max(lower, x))
 
 class GaussianGenerator(IWeatherGenerator):
 	"""
 	Weather generator implementation which generates data from a normal
 	distribution of sampled data.
 	"""
-	def __init__(self, data: list[float], year_len: int):
+	def __init__(self, data: list[float], year_len: int, min: float, max: float):
 		"""
 		See base class doco for usage instructions.
 		"""
 		self.year_len = year_len
+		self.min = min
+		self.max = max
 		# No need to store the raw data (only store means/SDs).
 
 		# Create an array in which each element is an array of all
@@ -134,6 +181,7 @@ class GaussianGenerator(IWeatherGenerator):
 		# Sample N times for each day of year.
 		for i in range(self.year_len):
 			sample = numpy.random.normal(self.means[i], self.sds[i], nyear)
+			sample = [constrain(x, self.min, self.max) for x in sample]
 			for j in range(nyear):
 				index = i + self.year_len * j
 				samples[index] = sample[j]
@@ -163,7 +211,11 @@ class GaussianGenerator(IWeatherGenerator):
 			# more efficient search algorithm than this, but this will
 			# be called very rarely and I have bigger fish to fry.
 			while idx < 0 or idx >= ndata or idx in indices:
-				idx += dlt
+				if idx < 0:
+					sign = 1
+				elif idx >= ndata:
+					sign = -1
+				idx += sign
 
 			indices[i] = idx
 		return indices
@@ -174,9 +226,9 @@ class GaussianGenerator(IWeatherGenerator):
 		"""
 		indices = self.neighbouring_indices(index, len(data), n)
 		data: list[float]
-		neighbours = []
-		for i in indices:
-			neighbours.extend(data[i])
+		neighbours = [0.0] * n
+		for i in range(len(indices)):
+			neighbours[i] = data[indices[i]]
 		return neighbours
 
 def prepend(data: list[list[float]], nc: Dataset):
@@ -234,31 +286,37 @@ def generate_weather(in_file: str, nyear: int
 		read_start = time.time()
 		generators: list[IWeatherGenerator]
 		generators = []
-		for i in range(NUM_VARIABLES):
+		for i in range(Forcing.NFORCINGS):
 			# Get i-th column, and create a weather generator instance
 			# for this column.
 			data = nc[VARIABLE_NAME][:, i]
-			generators.append(GaussianGenerator(data, timesteps_per_year))
-			progress_callback(read_weight * (i + 1) / NUM_VARIABLES)
+			l = forcings_min[i]
+			u = forcings_max[i]
+			generators.append(GaussianGenerator(data, timesteps_per_year, l, u))
+			progress_callback(read_weight * (i + 1) / Forcing.NFORCINGS)
 
 		read_time = (time.time() - read_start) * 1000
 
 		ozflux_logging.log_information("Generating...")
 		generating_start = time.time()
-		data = [ [] ] * NUM_VARIABLES
-		step_size = generate_weight / NUM_VARIABLES
+		data = [ [] ] * Forcing.NFORCINGS
+		step_size = generate_weight / Forcing.NFORCINGS
 
 		# Generate data for each variable one by one. Each individual
 		# weather generator will return a flat list of data, and each of
 		# these flat lists are stored in the data list, which is a list
 		# of lists (ie 2d list).
-		for i in range(NUM_VARIABLES):
+		for i in range(Forcing.NFORCINGS):
 			step_start = read_weight + i * step_size
 			data[i] = generators[i].generate_weather(nyear
 			, lambda p: progress_callback(step_start + p * step_size))
 		generating_time = (time.time() - generating_start) * 1000
 
 		ozflux_logging.log_information("Writing...")
+		nrow = nc[VARIABLE_NAME].shape[0] + nyear * timesteps_per_year
+		step_size = write_weight / nrow
+		step_start = read_weight + generate_weight
+		progress_callback(step_start)
 		data = prepend(data, nc)
 
 		# Force garbage collection to free up some memory.
@@ -266,11 +324,9 @@ def generate_weather(in_file: str, nyear: int
 
 		write_start = time.time()
 		nrow = data.shape[0]
-		step_size = write_weight / nrow
 		# Write data in chunks, to reduce memory usage (but increase
 		# execution time). To make this faster, increase CHUNK_SIZE.
 		for i in range(0, nrow, CHUNK_SIZE):
-			step_start = read_weight + generate_weight
 			upper = min(nrow, i + CHUNK_SIZE)
 			nc.variables[VARIABLE_NAME][i:upper, :] = data[i:upper, :]
 			if i % PROGRESS_INTERVAL == 0:
@@ -292,11 +348,16 @@ def main(opts: DuplicateOptions):
 	"""
 	Main function; creates the benchmark configs.
 	"""
-	step_size = 1 / len(opts.files)
+	file_weights = [os.path.getsize(f) for f in opts.files]
+	total_weight = sum(file_weights)
+	file_weights = [x / total_weight for x in file_weights]
+
+	step_start = 0
 	for i in range(len(opts.files)):
-		step_start = i / len(opts.files)
+		step_size = file_weights[i]
 		generate_weather(opts.files[i], opts.nyears
 			, lambda p: ozflux_logging.log_progress(step_start + step_size * p))
+		step_start += step_size
 
 def parse_args(args: list[str]) -> DuplicateOptions:
 	"""
