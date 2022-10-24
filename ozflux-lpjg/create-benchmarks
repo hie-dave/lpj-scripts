@@ -9,6 +9,9 @@ from io import TextIOWrapper
 CONFIG_DIR_NAME = "config"
 DATA_DIR_NAME = "data"
 SOIL_DATA_FILENAME = "soils.nc"
+MET_DIR_NAME = "met"
+CO2_DIR_NAME = "co2"
+NDEP_DIR_NAME = "ndep"
 MINUTES_PER_DAY = 24 * 60
 GRIDLIST_FILENAME = "gridlist.txt"
 DATE_FORMAT = r"%Y-%m-%d %H:%M:%S"
@@ -162,18 +165,16 @@ def create_benchmark(met_data: str, ins_files: list[str], co2_dir: str
 
 	# 0. Create directory tree for this site.
 	site_dir = os.path.join(out_dir, site_name)
-	config_dir = os.path.join(site_dir, CONFIG_DIR_NAME)
-	data_dir = os.path.join(site_dir, DATA_DIR_NAME)
+	data_dir = os.path.join(out_dir, DATA_DIR_NAME)
 	data_rel = os.path.join("../%s" % DATA_DIR_NAME)
 
 	os.makedirs(site_dir, exist_ok = True)
-	os.makedirs(config_dir, exist_ok = True)
 	os.makedirs(data_dir, exist_ok = True)
 
 	# Also create an output directory, as lpj-guess is incapable of
 	# doing this internally. fixme: Name of this directory is actually
 	# determined by ths instruction files.
-	os.makedirs(os.path.join(config_dir, "out"), exist_ok = True)
+	os.makedirs(os.path.join(site_dir, "out"), exist_ok = True)
 
 	# Read some metadata from the input met data file.
 	metadata = parse_metadata(met_data)
@@ -182,7 +183,10 @@ def create_benchmark(met_data: str, ins_files: list[str], co2_dir: str
 	# Copy met data.
 	met_data_base = get_met_filename(metadata.longitude, metadata.latitude)
 	met_data_base += met_data_ext
-	met_dest = os.path.join(data_dir, met_data_base)
+	met_dir = os.path.join(data_dir, MET_DIR_NAME)
+	met_rel = os.path.join(data_rel, MET_DIR_NAME)
+	met_dest = os.path.join(met_dir, met_data_base)
+	os.makedirs(met_dir, exist_ok = True)
 	shutil.copy(met_data, met_dest)
 
 	# Copy soil data.
@@ -190,8 +194,10 @@ def create_benchmark(met_data: str, ins_files: list[str], co2_dir: str
 	shutil.copy(soil_data, soil_data_dest)
 
 	# Copy co2 data.
-	co2_rel = os.path.join(data_rel, co2_basename)
-	shutil.copy(co2_file, data_dir)
+	co2_dir = os.path.join(data_dir, CO2_DIR_NAME)
+	os.makedirs(co2_dir, exist_ok = True)
+	co2_rel = os.path.join(data_rel, CO2_DIR_NAME, co2_basename)
+	shutil.copy(co2_file, co2_dir)
 
 	# Copy simfire data.
 	simfire_basename = os.path.basename(simfire_data)
@@ -200,12 +206,14 @@ def create_benchmark(met_data: str, ins_files: list[str], co2_dir: str
 
 	# Copy ndep data.
 	ndep_basename = os.path.basename(ndep_data)
-	ndep_rel = os.path.join(data_rel, ndep_basename)
-	shutil.copy(ndep_data, data_dir)
-	copy_all_ndep_files(ndep_data, data_dir)
+	ndep_rel = os.path.join(data_rel, NDEP_DIR_NAME, ndep_basename)
+	ndep_dir = os.path.join(data_dir, NDEP_DIR_NAME)
+	os.makedirs(ndep_dir, exist_ok = True)
+	shutil.copy(ndep_data, ndep_dir)
+	copy_all_ndep_files(ndep_data, ndep_dir)
 
 	gridlist = GRIDLIST_FILENAME
-	gridlist_file = os.path.join(config_dir, gridlist)
+	gridlist_file = os.path.join(site_dir, gridlist)
 	with open(gridlist_file, "w") as g:
 		g.writelines("%.2f %.2f\n" % (metadata.longitude, metadata.latitude))
 
@@ -220,7 +228,7 @@ def create_benchmark(met_data: str, ins_files: list[str], co2_dir: str
 	wutype = 1
 
 	# Master instruction file, just called ${site}.ins.
-	master_file_name = os.path.join(config_dir, "%s.ins" % site_name)
+	master_file_name = os.path.join(site_dir, "%s.ins" % site_name)
 	with open(master_file_name, "w") as f:
 		sep = "/" * 71
 		writeline(f, "!%s" % sep)
@@ -235,7 +243,7 @@ def create_benchmark(met_data: str, ins_files: list[str], co2_dir: str
 		writeline(f, 'param "file_gridlist" (str "%s")' % gridlist)
 		writeline(f, "")
 		writeline(f, "! Met Data")
-		writeline(f, 'param "path_lsm_forcings" (str "%s")' % data_rel)
+		writeline(f, 'param "path_lsm_forcings" (str "%s")' % met_rel)
 		writeline(f, "")
 		writeline(f, "! Soil Data")
 		writeline(f, 'param "path_soil_data" (str "%s")' % data_rel)
@@ -265,11 +273,11 @@ def create_benchmark(met_data: str, ins_files: list[str], co2_dir: str
 		for ins_file in ins_files:
 			# Copy instruction file to config directory.
 			basename = os.path.basename(ins_file)
-			dest = os.path.join(config_dir, basename)
+			dest = os.path.join(out_dir, basename)
 			shutil.copy(ins_file, dest)
 
 			# Add an include directive for this .ins file.
-			writeline(f, 'import "%s"' % basename)
+			writeline(f, 'import "../%s"' % basename)
 
 def main(opts: BenchmarkOptions):
 	"""
