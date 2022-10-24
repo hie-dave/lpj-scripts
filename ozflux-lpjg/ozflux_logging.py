@@ -3,6 +3,8 @@
 import enum, sys
 from io import TextIOWrapper
 
+# Maximum length of a progress message. ie how many characters are used
+# by printing the longest possible progress message?
 MAX_PROGRESS_MSG_LEN = 17
 
 class LogLevel(enum.IntEnum):
@@ -46,7 +48,7 @@ def set_show_progress(show_progress: bool):
 	global _show_progress
 	_show_progress = show_progress
 
-def clear_line(file: TextIOWrapper):
+def _clear_line(file: TextIOWrapper):
 	"""
 	Clear a line by writing empty spaces followed by a carriage return,
 	in order to remove any progress report written to this line.
@@ -65,7 +67,7 @@ def log(msg: str, log_level: LogLevel):
 	# todo: custom log file as CLI arg?
 	if log_level <= _log_level:
 		file = sys.stderr if log_level == LogLevel.ERROR else sys.stdout
-		clear_line(file = file)
+		_clear_line(file = file)
 		print(msg, file = file)
 
 def log_error(msg: str):

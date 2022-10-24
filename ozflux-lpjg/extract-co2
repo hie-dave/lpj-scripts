@@ -1,0 +1,119 @@
+#!/usr/bin/env python
+#
+# This script extracts co2 data from an ozflux .nc file.
+#
+import argparse, datetime, os, ozflux_common, ozflux_logging, netCDF4 \
+, sys, traceback
+from typing import Callable
+
+class ExtractCO2Options:
+	"""
+	Class for storing CLI options for extract-co2 invocations.
+	"""
+	def __init__(self, files: list[str], show_progress: bool
+		, verbosity: ozflux_logging.LogLevel):
+		self.files = files
+		self.show_progress = show_progress
+		self.verbosity = verbosity
+
+def extract_co2(infile: str, outdir: str, pcb: Callable[[float], None]):
+	"""
+	Extract co2 data from the input .nc file and store it in the
+	specified directory.
+	"""
+	fname = os.path.basename(infile)
+	fname = os.path.splitext(fname)[0]
+	fname = "%s_co2.txt" % fname
+	outfile = os.path.join(outdir, fname)
+	with netCDF4.Dataset(infile, "r", format=ozflux_common.NC_FORMAT) as nc:
+		generate_co2_file(outfile, nc, pcb)
+
+def generate_co2_file(filename: str, data: netCDF4.Dataset
+	, progress_callback: Callable[[float], None]):
+	"""
+	Generate a co2 input file from the co2 data stored in the given
+	netcdf dataset.
+
+	@param filename: The output file name (can include path).
+	@param data: The input netcdf dataset.
+	@param progress_callback: Function pointer which handles progress reporting.
+	"""
+	ozflux_logging.log_information("Extracting co2 data from %s" % filename)
+
+	# Determine start/end datetimes from the data.
+	start_date = ozflux_common.parse_date(data.time_coverage_start)
+	start_year = start_date.year
+	end_date = ozflux_common.parse_date(data.time_coverage_end)
+	end_year = end_date.year
+	nyear = end_year - start_year + 1
+
+	# Timestep size in minutes.
+	timestep = int(data.time_step)
+
+	# Now extract a single (mean) value for each year.
+	co2 = [0.0] * nyear
+	year = start_date
+	index = 0
+	for i in range(nyear):
+		# Progress reporting.
+		progress_callback(0.5 * i / nyear)
+
+		prev_year = year
+		year = datetime.datetime(year.year + 1, 1, 1, 0, 0, 0)
+		n_timesteps = ozflux_common.num_timesteps_between_dates(
+			timestep, prev_year, year)
+
+		# Determine start/end indices in the array.
+		index_prev = index
+		index += n_timesteps
+
+		# CO2 value used for each year is the mean over that year.
+		# todo: fix hardcoded variable name "CO2" here.
+		co2[i] = data.variables["CO2"][index_prev:index].mean()
+
+	with open(filename, "w") as file:
+		for i in range(nyear):
+			file.write("%d %.2f\n" % (start_year + i, co2[i]))
+			progress_callback(0.5 + 0.5 * (i + 1) / nyear)
+
+def main(opts: ExtractCO2Options):
+	"""
+	Main function; creates the benchmark configs.
+	"""
+	file_weights = [os.path.getsize(f) for f in opts.files]
+	total_weight = sum(file_weights)
+	file_weights = [x / total_weight for x in file_weights]
+
+	step_start = 0
+	for i in range(len(opts.files)):
+		step_size = file_weights[i]
+		extract_co2(opts.files[i], opts.nyears
+			, lambda p: ozflux_logging.log_progress(step_start + step_size * p))
+		step_start += step_size
+
+def parse_args(args: list[str]) -> ExtractCO2Options:
+	"""
+	Parse CLI arguments.
+	"""
+	parser = argparse.ArgumentParser(args[0], description = "Generate met data in a netcdf file.")
+	parser.add_argument("-v", "--verbosity", type = int, nargs = "?", default = ozflux_logging.LogLevel.INFORMATION, help = "Logging verbosity (1-5, default 3)")
+	parser.add_argument("files", nargs = "+", help = "Input .nc files to be processed")
+	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
+	result = parser.parse_args(args[1:])
+	return ExtractCO2Options(result.files, result.show_progress, result.verbosity)
+
+if __name__ == "__main__":
+	# Parse CLI args
+	opts = parse_args(sys.argv)
+
+	# todo: rethink logging
+	ozflux_logging.set_log_level(opts.verbosity)
+	ozflux_logging.set_show_progress(opts.show_progress)
+
+	try:
+		# Actual logic is in main().
+		main(opts)
+	except BaseException as error:
+		# Basic error handling.
+		ozflux_logging.log_error(traceback.format_exc())
+		exit(1)

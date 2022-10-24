@@ -3,7 +3,7 @@
 # Create the ozflux sites' lpj-guess benchmark configurations.
 #
 
-import argparse, datetime, glob, netCDF4, os, ozflux_logging, shutil, sys, traceback
+import argparse, datetime, glob, netCDF4, os, ozflux_common, ozflux_logging, shutil, sys, traceback
 from io import TextIOWrapper
 
 CONFIG_DIR_NAME = "config"
@@ -88,28 +88,6 @@ def parse_metadata(met_data_file: str) -> SiteMetadata:
 		nperiods_day = MINUTES_PER_DAY / timestep
 		return SiteMetadata(lat, lon, start_year, end_year, nperiods_day)
 
-def six_digit_string(x: float) -> str:
-	"""
-	Return a number, encoded as a 6 digit string.
-	"""
-	# Round x to 2 digits.
-	res = str(abs(int(round(x, 2) * 1000)))
-	pad = "0" * (6 - len(res))
-	return "%s%s" % (pad, res)
-
-def get_met_filename(lon: float, lat: float) -> str:
-	"""
-	The LSM input module expects a very specific file name for its met
-	data. This is a function of the latitude and longitude of the site.
-	"""
-	lonstr = six_digit_string(lon)
-	latstr = six_digit_string(lat)
-
-	londir = "W" if lon < 0 else "E"
-	latdir = "S" if lat < 0 else "N"
-
-	return "%s%s_%s%s" % (lonstr, londir, latstr, latdir)
-
 def copy_all_ndep_files(source: str, dest: str):
 	"""
 	Copy all N deposition files to the destination directory.
@@ -181,7 +159,7 @@ def create_benchmark(met_data: str, ins_files: list[str], co2_dir: str
 	nyears = metadata.end_year - metadata.start_year
 
 	# Copy met data.
-	met_data_base = get_met_filename(metadata.longitude, metadata.latitude)
+	met_data_base = ozflux_common.get_met_filename(metadata.longitude, metadata.latitude)
 	met_data_base += met_data_ext
 	met_dir = os.path.join(data_dir, MET_DIR_NAME)
 	met_rel = os.path.join(data_rel, MET_DIR_NAME)
