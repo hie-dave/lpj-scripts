@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#
+# Quick and dirty bash script to generate the vscode launch.config file.
+#
+# Usage: ./genlaunch <template-file> <out-file>
+#
+set -euo pipefail
+
+if [ $# -ne 2 ]
+then
+	echo "Usage: $0 <template-file> <out-file>" >&2
+	exit 1
+fi
+
+in=$1
+out=$2
+bm="${HOME}/code/lpj-guess/lsm/benchmarks/ozflux" # fixme
+
+if [ ! -f $in ]
+then
+	echo "Input file $in does not exist" >&2
+	exit 1
+fi
+
+# Remove $out if it exists
+if [ -f $out ]; then rm $out; fi
+
+# Iterate over sites
+sites=$(for f in "${bm}/*_*"; do echo "${f}"; done)
+for site_dir in $sites
+do
+	# AdelaideRiver_L6_20071017_20090524
+	site=$(basename $site_dir)
+
+	# AdelaideRiver
+	pascal=$(echo $site | cut -d_ -f1)
+
+	# Adelaide River
+	friendly_name="$(echo $pascal | sed -E 's/([a-z])([A-Z])/\1 \2/g')"
+
+	# Fill in template, append to out file	
+	cat $in \
+	| sed -E "s/@name/$friendly_name/g" \
+	| sed -E "s/@site/$site/g" >>$out
+done
