@@ -61,8 +61,11 @@ def log(msg: str, log_level: LogLevel):
 	"""
 	# I'm putting this check here, rather than in log_warning(), in case
 	# this function is called directly from user code.
-	if log_level == LogLevel.WARNING and _warnings_as_errors:
-		raise ValueError(msg)
+	if log_level == LogLevel.WARNING:
+		if _warnings_as_errors:
+			raise ValueError(msg)
+		else:
+			msg = "WARNING: %s" % msg
 
 	# todo: custom log file as CLI arg?
 	if log_level <= _log_level:
