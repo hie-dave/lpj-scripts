@@ -131,7 +131,6 @@ def create_benchmark(met_data: str, ins_files: list[str], co2_dir: str
 
 	met_data_base = os.path.basename(met_data)
 	site_name = os.path.splitext(met_data_base)[0]
-	met_data_ext = os.path.splitext(met_data_base)[1]
 
 	ozflux_logging.log_information("Creating benchmark for %s" % site_name)
 
@@ -160,7 +159,6 @@ def create_benchmark(met_data: str, ins_files: list[str], co2_dir: str
 
 	# Copy met data.
 	met_data_base = ozflux_common.get_met_filename(metadata.longitude, metadata.latitude)
-	met_data_base += met_data_ext
 	met_dir = os.path.join(data_dir, MET_DIR_NAME)
 	met_rel = os.path.join(data_rel, MET_DIR_NAME)
 	met_dest = os.path.join(met_dir, met_data_base)

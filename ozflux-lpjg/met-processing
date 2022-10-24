@@ -632,7 +632,6 @@ if __name__ == "__main__":
 	# Parse CLI args
 	opts = parse_args(argv)
 
-	# todo: rethink logging
 	set_log_level(opts.log_level)
 	set_show_progress(opts.report_progress)
 

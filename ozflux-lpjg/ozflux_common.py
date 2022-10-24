@@ -52,7 +52,7 @@ def get_met_filename(lon: float, lat: float) -> str:
 	londir = "W" if lon < 0 else "E"
 	latdir = "S" if lat < 0 else "N"
 
-	return "%s%s_%s%s" % (lonstr, londir, latstr, latdir)
+	return "%s%s_%s%s.nc" % (lonstr, londir, latstr, latdir)
 
 def seconds_per_n_minutes(n: int) -> int:
 	"""
