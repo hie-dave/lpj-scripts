@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 from argparse import ArgumentParser
-import re, datetime, traceback, os, multiprocessing, ozflux_common, threading
+import datetime, multiprocessing, numpy, os, ozflux_common, re, threading, traceback
 from ozflux_logging import *
 import math
 from netCDF4 import Dataset, Variable
@@ -230,10 +230,40 @@ def zeroes(n: int) -> list[float]:
 	"""
 	Create an array of zeroes of the specified length.
 	"""
-	x = [float] * n
-	for i in range(n):
-		x[i] = 0
-	return x
+	return [0.0] * n
+
+def aggregate(data: list[float], start: int, stop: int, chunk_size: int
+	, aggregator: Callable[[list[float]], float]
+	, progress_cb: Callable[[float], None]) -> list[float]:
+	"""
+	Aggregate the values in the specified dataset between the start and
+	stop indices, using the specified aggregator function.
+	@param data: The data.
+	@param start: Aggregate only values after this index.
+	@param stop: Aggregate only values before this index.
+	@param chunk_size: Aggregate values in chunks of this size.
+	@param aggregator: A function to aggregate a chunk of values.
+	@param progress_cb: A function which handles progress reporting.
+	"""
+	n = len(data)
+	if start < 0:
+		raise ValueError("start cannot be less than 0 (is %d)" % start)
+	if stop > n:
+		m = "stop cannot be past end of list (is %d and n = %d)"
+		raise ValueError(m % (stop, n))
+	if start >= stop:
+		m = "start cannot be greater than stop (start = %d, stop = %d)"
+		raise ValueError(m % (start, stop))
+
+	niter = ((stop - start) // chunk_size)
+	result = [0.0] * niter
+	for i in range(niter):
+		lower = start + i * chunk_size
+		upper = min(n, start + (i + 1) * chunk_size)
+		result[i] = aggregator(data[lower:upper])
+		if i % PROGRESS_CHUNK_SIZE == 0:
+			progress_cb(i / niter)
+	return result
 
 def temporal_aggregation(in_file: Dataset, data: list[float], forcing: Forcing, \
 	progress_callback: Callable[[float], None]) -> list[float]:
@@ -247,6 +277,8 @@ def temporal_aggregation(in_file: Dataset, data: list[float], forcing: Forcing, 
 		m = "Unsupported input timestep: %s"
 		raise ValueError(m % in_file.time_step)
 
+	# Record the amount of data at the start of the function. This is
+	# written as a diagnostic later.
 	n_start = len(data)
 
 	start_minute = get_start_minute(in_file)
@@ -261,45 +293,94 @@ def temporal_aggregation(in_file: Dataset, data: list[float], forcing: Forcing, 
 		m = "Strange start time: '%s'. Data must start on the hour or half-hour"
 		raise ValueError(m % in_file.time_coverage_start)
 
-	# Integer division to discard the remainder. If data has an odd
-	# length, the last value will be appended later.
-	n = len(data) // 2
-	out = [float] * n
-
 	m = "Values are %s and therefore we will take the %s over each timestep"
 	unit_kind = "rate" if indata_units_are_rate[forcing] else "magnitude"
 	agg_kind = "mean" if indata_units_are_rate[forcing] else "sum"
+	agg_func = numpy.mean if indata_units_are_rate[forcing] else numpy.sum
 	log_diagnostic(m % (unit_kind, agg_kind))
-	for i in range(n):
-		# Use mean of this timestep and the next. For some variables and
-		# units this won't make sense, but all of the current ozflux
-		# variables are rates rather than magnitudes, so I think this
-		# should be ok.
-		x0 = data[2 * i]
-		x1 = data[2 * i + 1]
 
-		# If the value is a rate, we take the mean rate over the time period.
-		if indata_units_are_rate[forcing]:
-			out[i] = (x0 + x1) / 2
-		else:
-			# For a magnitude, we sum the values over the time period.
-			out[i] = x0 + x1
+	out: list[float]
+	out = []
 
-		if i % PROGRESS_CHUNK_SIZE == 0:
-			progress_callback(i / n)
+	PARALLEL = True
 
-	if len(data) % 2 == 1:
-		# odd # of elems - this means the data ends on the hour, which
-		# means it's missing the last half hour's data. This aggregation
-		# may be incorrect for some units. But I think it's ok for the
-		# current ozflux variables/units.
-		log_diagnostic("Data ends on the hour - we will take the last value")
-		x = data[len(data) - 1]
-		if not indata_units_are_rate[forcing]:
-			# As we only have half of the data for the timestep, we assume
-			# the rate was consistent across the timestep.
-			x *= 2
-		out.append(x)
+	if PARALLEL:
+		# This can be quite slow for large datasets, so I've parallelised it.
+
+		# Get number of CPUs.
+		ncpu = multiprocessing.cpu_count()
+
+		# Number of timesteps to be processed by each thread.
+		chunk_size = len(data) // ncpu
+
+		# As we're aggregating every 2 timesteps together, we need to ensure
+		# that each thread is processing an even number of values.
+		if chunk_size % 2 == 1:
+			chunk_size += 1
+
+		global thread_progress
+		thread_progress = [0.0] * ncpu
+		global mutex
+		mutex = multiprocessing.BoundedSemaphore(1)
+		def update_progress(progress: float, tid: int):
+			global thread_progress
+			global mutex
+			with mutex:
+				thread_progress[tid] = progress
+				progress_callback(numpy.mean(thread_progress))
+
+		class Aggregator(threading.Thread):
+			def __init__(self, data: list[float], start: int, stop: int
+				, chunk_size: int, tid: int
+				, aggregation_func: Callable[[list[float]], float]):
+				threading.Thread.__init__(self)
+				self.data = data
+				self.istart = start
+				self.stop = stop
+				self.chunk_size = chunk_size
+				self.thread_id = tid
+				self.aggregation_func = aggregation_func
+			def run(self):
+				self.result = aggregate(self.data, self.istart, self.stop
+				, self.chunk_size, self.aggregation_func
+				, lambda p: update_progress(p, self.thread_id))
+
+		# Create an array to hold the thread objects.
+		threads = []
+		for i in range(ncpu):
+			# Calculate start and stop indices for this thread. Each thread
+			# is operating on the same input data array, but they operate
+			# on different parts (slices) of the array.
+			start = i * chunk_size
+			stop = len(data) if i == ncpu - 1 else start + chunk_size
+
+			# Create the thread object.
+			t = Aggregator(data, start, stop, 2, i, agg_func)
+
+			# Start the thread and store the object reference for later.
+			t.start()
+			threads.append(t)
+
+		# Now we wait for all of the threads to finish, and retrieve their
+		# results.
+		for t in threads:
+			t.join()
+			out.extend(t.result)
+	else:
+		out = aggregate(data, 0, len(data), 2, agg_func, progress_callback)
+
+	# if len(data) % 2 == 1:
+	# 	# odd # of elems - this means the data ends on the hour, which
+	# 	# means it's missing the last half hour's data. In principle,
+	# 	# this aggregation may be incorrect for some units. But I think
+	# 	# it's ok for the current ozflux variables/units.
+	# 	log_diagnostic("Data ends on the hour - we will take the last value")
+	# 	x = data[len(data) - 1]
+	# 	if not indata_units_are_rate[forcing]:
+	# 		# As we only have half of the data for the timestep, we assume
+	# 		# the rate was consistent across the timestep.
+	# 		x *= 2
+	# 	out.append(x)
 
 	n_end = len(out)
 	log_diagnostic("Temporal aggregation reduced array length by %d values" % (n_start - n_end))
@@ -474,7 +555,7 @@ def get_data(in_file: Dataset, forcing: Forcing, \
 		units_time_proportion = 0 if matching_units else 1 / 3
 
 		# About 2/3 of remaining time to read the data from input file.
-		read_time_proportion = (1 - units_time_proportion) * 2 / 3
+		read_time_proportion = 0.05
 
 		# 5% of time to remove NaNs. Need to check this.
 		fixnan_time_proportion = 0.05
