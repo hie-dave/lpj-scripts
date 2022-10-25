@@ -369,19 +369,6 @@ def temporal_aggregation(in_file: Dataset, data: list[float], forcing: Forcing, 
 	else:
 		out = aggregate(data, 0, len(data), 2, agg_func, progress_callback)
 
-	# if len(data) % 2 == 1:
-	# 	# odd # of elems - this means the data ends on the hour, which
-	# 	# means it's missing the last half hour's data. In principle,
-	# 	# this aggregation may be incorrect for some units. But I think
-	# 	# it's ok for the current ozflux variables/units.
-	# 	log_diagnostic("Data ends on the hour - we will take the last value")
-	# 	x = data[len(data) - 1]
-	# 	if not indata_units_are_rate[forcing]:
-	# 		# As we only have half of the data for the timestep, we assume
-	# 		# the rate was consistent across the timestep.
-	# 		x *= 2
-	# 	out.append(x)
-
 	n_end = len(out)
 	log_diagnostic("Temporal aggregation reduced array length by %d values" % (n_start - n_end))
 
