@@ -36,12 +36,16 @@ class SiteMetadata:
 	"""
 	Class for storing metadata about a site.
 	"""
-	def __init__(self, latitude: float, longitude: float, start_year: int, end_year: int, timesteps_per_day: int):
+	def __init__(self, latitude: float, longitude: float
+		, start_date: datetime.datetime, end_date: datetime.datetime
+		, timesteps_per_day: int, site_name: str, ndata: int):
 		self.latitude = latitude
 		self.longitude = longitude
-		self.start_year = start_year
-		self.end_year = end_year
+		self.start_date = start_date
+		self.end_date = end_date
 		self.timesteps_per_day = timesteps_per_day
+		self.site_name = site_name
+		self.ndata = ndata
 
 def parse_args(args: list[str]) -> BenchmarkOptions:
 	"""
@@ -80,13 +84,15 @@ def parse_metadata(met_data_file: str) -> SiteMetadata:
 	# it could change, but it's unlikely so I've just hardcoded it here.
 	with netCDF4.Dataset(met_data_file, "r", format="NETCDF4") as nc:
 		
-		start_year = parse_date(nc.time_coverage_start).year
-		end_year = parse_date(nc.time_coverage_end).year
+		start_date = parse_date(nc.time_coverage_start)
+		end_date = parse_date(nc.time_coverage_end)
 		lat = float(nc.latitude)
 		lon = float(nc.longitude)
 		timestep = int(nc.time_step) # in minutes
 		nperiods_day = MINUTES_PER_DAY / timestep
-		return SiteMetadata(lat, lon, start_year, end_year, nperiods_day)
+		site_name = nc.site_name
+		ndata = int(nc.dimensions["time"].size)
+		return SiteMetadata(lat, lon, start_date, end_date, nperiods_day, site_name, ndata)
 
 def copy_all_ndep_files(source: str, dest: str):
 	"""
@@ -129,8 +135,11 @@ def create_benchmark(met_data: str, ins_files: list[str], co2_dir: str
 	if not os.path.exists(met_data):
 		raise ValueError("File not found: '%s'" % met_data)
 
+	# Read some metadata from the input met data file.
+	metadata = parse_metadata(met_data)
+
 	met_data_base = os.path.basename(met_data)
-	site_name = os.path.splitext(met_data_base)[0]
+	site_name = metadata.site_name
 
 	ozflux_logging.log_information("Creating benchmark for %s" % site_name)
 
@@ -153,9 +162,7 @@ def create_benchmark(met_data: str, ins_files: list[str], co2_dir: str
 	# determined by ths instruction files.
 	os.makedirs(os.path.join(site_dir, "out"), exist_ok = True)
 
-	# Read some metadata from the input met data file.
-	metadata = parse_metadata(met_data)
-	nyears = metadata.end_year - metadata.start_year
+	nyears = metadata.ndata // 365 // metadata.timesteps_per_day
 
 	# Copy met data.
 	met_data_base = ozflux_common.get_met_filename(metadata.longitude, metadata.latitude)
@@ -234,10 +241,10 @@ def create_benchmark(met_data: str, ins_files: list[str], co2_dir: str
 		writeline(f, 'param "file_ndep" (str "%s")' % ndep_rel)
 		writeline(f, "")
 		writeline(f, "! Other site-specific metadata")
-		writeline(f, 'param "first_hist_year" (num %d)' % metadata.start_year)
+		writeline(f, 'param "first_hist_year" (num %d)' % metadata.start_date.year)
 		writeline(f, 'param "nyear_hist" (num %d)' % nyears)
 		writeline(f, 'param "nperiods_day" (num %d)' % metadata.timesteps_per_day)
-		writeline(f, 'param "nyear_spinup_data" (num %d)' % nyear_spinup)
+		writeline(f, 'param "nyear_spinup_data" (num %d)' % nyears)
 		writeline(f, 'param "lsm_mode" (num %d)' % bool_to_int(lsm_mode))
 		writeline(f, 'param "nyear_spinup_daily" (num %d)' % nyear_spinup_daily)
 		writeline(f, 'param "nyear_spinup_soiltemp" (num %d)' % nyear_spinup_soiltemp)
