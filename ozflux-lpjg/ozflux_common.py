@@ -1,5 +1,6 @@
-import datetime
+import datetime, math
 from enum import IntEnum
+from typing import Callable
 
 ## Constants
 
@@ -77,3 +78,52 @@ def parse_date(datestr: str) -> datetime.datetime:
 	Parse a date object from a string in yyyy-MM-dd hh:mm:ss format.
 	"""
 	return datetime.datetime.strptime(datestr, DATE_FORMAT)
+
+def neighbouring_indices(data: list[float], index: int, nindex
+	, predicate: Callable[[float], bool]) -> list[int]:
+	"""
+	Return N closest neighbouring indices for the given index.
+	@param index: The start point.
+	@param ndata: Length of the list.
+	@param nindex: Number of indices to return.
+	"""
+	ndata = len(data)
+	if nindex > ndata:
+		raise IndexError("Attempted to interpolate with more values than exist in list")
+
+	indices = [0] * nindex
+	for i in range(nindex):
+		sign = 1 if i % 2 == 0 else -1
+		dlt = 1 + i // 2 * sign # 1, -1, 2, -2, ...
+		idx = index + dlt
+
+		# Given the error check at start of function, we should
+		# eventualy find another neighbour. There is probably a
+		# more efficient search algorithm than this, but this will
+		# be called very rarely and I have bigger fish to fry.
+		def can_use(idx: int) -> bool:
+			if idx < 0 or idx >= ndata or idx in indices:
+				return False
+			if predicate != None and not predicate(data[idx]):
+				return False
+			return True
+
+		while (not can_use(idx)):
+			if idx < 0:
+				sign = 1
+			elif idx >= ndata:
+				sign = -1
+			idx += sign
+
+		indices[i] = idx
+	return indices
+
+def neighbouring_mean(data: list[float], index: int, n: int) -> float:
+	"""
+	Return the mean of the N closest neighbours in the list.
+	"""
+	indices = neighbouring_indices(data, index, n, lambda x: not x.mask)
+	mean = 0
+	for i in indices:
+		mean += data[i]
+	return mean / n

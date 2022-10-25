@@ -2,6 +2,7 @@
 from argparse import ArgumentParser
 import re, datetime, traceback, os, multiprocessing, ozflux_common, threading
 from ozflux_logging import *
+import math
 from netCDF4 import Dataset, Variable
 from enum import IntEnum
 from ozflux_common import Forcing
@@ -9,7 +10,8 @@ from sys import argv
 from typing import Callable
 
 VERSION = "0.1"
-CHUNK_SIZE = 1024
+PROGRESS_CHUNK_SIZE = 1024
+CHUNK_SIZE = 16384
 
 class LogLevel(IntEnum):
 	NONE = 0,
@@ -212,16 +214,15 @@ def write_data(variable: Variable, data: list[float], forcing: Forcing, \
 	"""
 	Write data to the output file.
 	"""
+	# todo: chunking output writes. This impl is really slow...
 	n = len(data)
-	chunk_size = CHUNK_SIZE
-	for i in range(n):
+	for i in range(0, n, CHUNK_SIZE):
 		row = i
+		upper = min(n, i + CHUNK_SIZE)
 		col = forcing
 		# index = row * Forcing.NFORCINGS + col
-		variable[row, col] = data[i]
-
-		if i % chunk_size == 0:
-			progress_callback(i / n)
+		variable[row:upper, col] = data[i:upper]
+		progress_callback(i / n)
 
 	log_diagnostic("Successfully wrote %d items of %s" % (n, forcing))
 
@@ -284,7 +285,7 @@ def temporal_aggregation(in_file: Dataset, data: list[float], forcing: Forcing, 
 			# For a magnitude, we sum the values over the time period.
 			out[i] = x0 + x1
 
-		if i % CHUNK_SIZE == 0:
+		if i % PROGRESS_CHUNK_SIZE == 0:
 			progress_callback(i / n)
 
 	if len(data) % 2 == 1:
@@ -329,7 +330,7 @@ def fix_units(data: list[float], current_units: str, desired_units: str, \
 	n = len(data)
 	for i in range(n):
 		data[i] = conversion(data[i])
-		if i % CHUNK_SIZE == 0:
+		if i % PROGRESS_CHUNK_SIZE == 0:
 			progress_callback(i / n)
 	return data
 
@@ -350,10 +351,11 @@ def read_data(variable: Variable, progress_callback: Callable[[float], None]) \
 	"""
 	arr = [float] * variable.size
 	n = len(arr)
-	for i in range(n):
-		arr[i] = variable[i]
-		if i % CHUNK_SIZE == 0:
-			progress_callback(i / n)
+	for i in range(0, n, CHUNK_SIZE):
+		lower = i
+		upper = i + CHUNK_SIZE
+		arr[lower:upper] = variable[lower:upper]
+		progress_callback(i / n)
 	return arr
 
 def get_start_minute(in_file: Dataset):
@@ -426,8 +428,26 @@ def trim_to_start_year(in_file: Dataset, data: list[float]) -> list[float]:
 	log_diagnostic(m % (n_trim, next_year.year))
 	return data[n_trim:]
 
+def remove_nans(data: list[float]
+	, progress_cb: Callable[[float], None]) -> list[float]:
+	"""
+	Replace any NaN in the list with a mean of nearby values.
+	"""
+	n = len(data)
+	N_NEIGHBOUR = 5
+	for i in range(n):
+		if data[i].mask:
+			# Use mean of 5 closest values if value is nan.
+			x = ozflux_common.neighbouring_mean(data, i, N_NEIGHBOUR)
+			m = "Replacing NaN at %d with mean %.2f (n = %d)"
+			log_diagnostic(m % (i, x, N_NEIGHBOUR))
+			data[i] = x
+		if i % PROGRESS_CHUNK_SIZE == 0:
+			progress_cb(i / n)
+	return data
+
 def get_data(in_file: Dataset, forcing: Forcing, \
-	progress_callback: Callable[[float], None]) -> list[float]:
+	progress_cb: Callable[[float], None]) -> list[float]:
 		"""
 		Get all data from the input file and convert it to a format
 		suitable for the output file.
@@ -456,18 +476,31 @@ def get_data(in_file: Dataset, forcing: Forcing, \
 		# About 2/3 of remaining time to read the data from input file.
 		read_time_proportion = (1 - units_time_proportion) * 2 / 3
 
+		# 5% of time to remove NaNs. Need to check this.
+		fixnan_time_proportion = 0.05
+
 		# Rest of time is spent aggregating over the timestep.
-		aggregation_time_proportion = 1 - read_time_proportion - units_time_proportion
+		aggregation_time_proportion = 1 \
+			- read_time_proportion \
+			- units_time_proportion \
+			- fixnan_time_proportion
 
 		# 1. Read data from netcdf file.
-		data = read_data(var_id, lambda p: progress_callback(read_time_proportion * p))
+		data = read_data(var_id, lambda p: progress_cb(read_time_proportion * p))
 		log_diagnostic("Successfully read %d values from netcdf" % len(data))
+
+		# 2. Replace NaN with a mean of nearby values.
+		log_information("Removing NaNs")
+		step_start = read_time_proportion
+		step_size = fixnan_time_proportion
+		data = remove_nans(data, lambda p: progress_cb(step_start + step_size * p))
+		step_start += fixnan_time_proportion
 
 		# 2. Change timestep to something suitable for lpj-guess.
 		log_information("Aggregating %s to hourly timestep" % out_name)
-		data = temporal_aggregation(in_file, data, forcing, lambda p: progress_callback( \
-			read_time_proportion + aggregation_time_proportion * p))
-		log_diagnostic("Successfully aggregated to destination timestep")
+		data = temporal_aggregation(in_file, data, forcing, lambda p: progress_cb( \
+			step_start + aggregation_time_proportion * p))
+		step_start += aggregation_time_proportion
 
 		# 3. Trim data to the start of a year.
 		data = trim_to_start_year(in_file, data)
@@ -477,10 +510,8 @@ def get_data(in_file: Dataset, forcing: Forcing, \
 			log_information("Converting %s from %s to %s" % \
 				(out_name, in_units, out_units))
 			data = fix_units(data, in_units, out_units, \
-				lambda p: progress_callback( \
-					read_time_proportion \
-						+ aggregation_time_proportion \
-						+ units_time_proportion * p))
+				lambda p: progress_cb( \
+					step_start + units_time_proportion * p))
 		else:
 			log_information("No units conversion required for %s" % out_name)
 
@@ -528,6 +559,9 @@ def process_file(in_file, out_file, \
 			nc_out.time_coverage_end = nc_in.time_coverage_end
 			nc_out.latitude = nc_in.latitude
 			nc_out.longitude = nc_in.longitude
+			site_name = os.path.basename(in_file)
+			site_name = os.path.splitext(site_name)[0]
+			nc_out.site_name = site_name
 			for forcing in Forcing:
 				if forcing == Forcing.NFORCINGS:
 					break
