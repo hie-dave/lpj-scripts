@@ -29,7 +29,7 @@ then
 fi
 
 # Get directory containing this script.
-SUBMIT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P )"
+SUBMIT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
 
 # Parse the command line arguments
 CONF=
@@ -193,14 +193,15 @@ RUN_OUT_DIR="${OUT_DIR}/${EXPERIMENT}"
 RUNS_DIR="${RUN_OUT_DIR}/runs"
 
 # Path to which output will be aggregated.
-OUTPUT_DIR="${RUN_OUT_DIR}/output"
+OUTPUT_DIR="output"
 
 # Path to which log files will be aggregated.
-LOGS_DIR="${RUN_OUT_DIR}/logs"
+LOGS_DIR="logs"
+
+# Path to which state files will be stored (if applicable).
+STATE_DIR="state"
 
 # Create links and directories.
-mkdir -p "${OUTPUT_DIR}"
-mkdir -p "${LOGS_DIR}"
 mkdir -p "${RUNS_DIR}"
 
 # Get the file name (without path) of the gridlist file.
@@ -391,12 +392,14 @@ cat <<EOF > "${append_cmd}"
 #PBS -W umask=0022
 #PBS -l storage=gdata/${PROJECT}+scratch/${PROJECT}
 set -euo pipefail
-cd "${RUNS_DIR}"
+DIR="\$( cd "\$( dirname "\${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+cd "\${DIR}/runs"
 function append_files {
     local number_of_jobs=\$1
     local file=\$2
     local out_dir="\$3"
-    local out_file="\${out_dir}/\$file"
+    local out_file="\${out_dir}/\$(basename "\${file}")"
+    mkdir -p "\${out_dir}"
     cp run1/\$file "\${out_file}"
     local i=""
     for ((i=2; i <= number_of_jobs; i++))
@@ -416,7 +419,24 @@ do
 done
 
 # Now combine the log files.
-cat run*/guess.log > "${LOGS_DIR}/guess.log"
+cat run*/guess.log > "\${DIR}/${LOGS_DIR}/guess.log"
+
+# Aggregate any state files, if they exist.
+state_out="\${DIR}/${STATE_DIR}"
+
+for ((i=1; i <= ${NPROCESS}; i++))
+do
+  run_state_dir="\${DIR}/runs/run\$i/state"
+  if [ -d "\${run_state_dir}" ]
+  then
+    cp "\${run_state_dir}/"* "\${state_out}/"
+  fi
+done
+
+# Technically, it should be safe to delete the individual run directories now.
+# However I don't think I'm brave enough to have this done automatically.
+# rm -rf "\${DIR}/runs"
+
 EOF
 chmod a+x "${append_cmd}"
 
