@@ -87,9 +87,7 @@ function get_all_insfiles() {
 
 # Function which prints the name of the gridlist file in the specified ins file.
 function get_gridlist() {
-	local gridlist_variable_name='file_gridlist_cf'
-	# param "file_gridlist_cf" (str "CFA_gridlist.txt")
-	local gridlist_regex="[ \t]*param[ \t]*\"${gridlist_variable_name}\"[ \t]*\(str[ \t]*\"([^\"]+)\"[ \t]*\)\r?"
+	local gridlist_regex="[ \t]*param[ \t]*\"file_gridlist(?:_cf)?\"[ \t]*\(str[ \t]*\"([^\"]+)\"[ \t]*\)\r?"
 
 	# Note: this will not work if any of the instruction file names contain
 	# a newline character.
