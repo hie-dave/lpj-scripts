@@ -71,6 +71,10 @@ function get_all_insfiles() {
 	# import "file.ins"
 	local rx='^[ \t]*import[ \t]*"([^"]+)"\r?'
 	local referenced_files="$(sed -rn "s/${rx}/\1/gmp" $1)"
+
+  # Any file path referenced by this .ins file could be relative to this .ins
+  # file. Therefore, we must cd to the directory containing the .ins file.
+  pushd "$(dirname $1 | xargs readlink -f)" >/dev/null 2>&1
 	for file in ${referenced_files}
 	do
 		if [ -n "${file}" ]
@@ -78,6 +82,7 @@ function get_all_insfiles() {
 			get_all_insfiles "${file}"
 		fi
 	done
+  popd >/dev/null 2>&1
 }
 
 # Function which prints the name of the gridlist file in the specified ins file.
@@ -159,6 +164,15 @@ check_exists() {
   check_permission -f $1 "Error: $1 does not exist or is not a file"
 }
 
+# Check if a directory exists. If it does not, print an error message and return
+# non-zero exit code.
+#
+# Arguments:
+# - The directory to be checked.
+check_dir_exists() {
+  check_permission -d $1 "Error: $1 does not exist or is not a directory"
+}
+
 # Check if a file or directory has read permission for the current user. If it
 # doesn't, print an error message and return a non-zero exit code.
 #
@@ -185,6 +199,7 @@ check_read "${BINARY}"
 check_read "${INSFILE}"
 check_read "${GRIDLIST}"
 check_execute "${BINARY}"
+check_dir_exists "${OUT_DIR}"
 
 # Output path for this run.
 RUN_OUT_DIR="${OUT_DIR}/${EXPERIMENT}"
@@ -318,6 +333,7 @@ while IFS=$'\n' read ins_file
 do
   cp "${ins_file}" "${INPUTS_DIR}/"
 done < <(get_all_insfiles "${INSFILE}")
+TARGET_INSFILE="${INPUTS_DIR}/$(basename "${INSFILE}")"
 
 README_FILE="${RUN_OUT_DIR}/README.md"
 echo "Job submitted $(date) with the following settings:" >"${README_FILE}"
@@ -363,14 +379,15 @@ cat <<EOF > "${guess_cmd}"
 #PBS -S /bin/bash
 #PBS -l storage=gdata/${PROJECT}+scratch/${PROJECT}+scratch/hw83
 #PBS -l jobfs=40GB
-#PBS -o ${RUN_OUT_DIR}/${JOB_NAME}
+#PBS -o ${RUN_OUT_DIR}/${JOB_NAME}.log
+#PBS -N ${JOB_NAME}
 set -e
 module purge
 module load openmpi
 module load netcdf
 umask 022
 cd "${RUNS_DIR}"
-mpirun -np ${NPROCESS} ${BINARY} -parallel -input ${INPUT_MODULE} ${INSFILE}
+mpirun -np ${NPROCESS} ${BINARY} -parallel -input ${INPUT_MODULE} ${TARGET_INSFILE}
 EOF
 chmod a+x "${guess_cmd}"
 
@@ -391,6 +408,7 @@ cat <<EOF > "${append_cmd}"
 #PBS -o ${RUN_OUT_DIR}/${APPEND_JOB_NAME}.log
 #PBS -W umask=0022
 #PBS -l storage=gdata/${PROJECT}+scratch/${PROJECT}
+#PBS -N ${APPEND_JOB_NAME}
 set -euo pipefail
 DIR="\$( cd "\$( dirname "\${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
 cd "\${DIR}/runs"
@@ -448,9 +466,9 @@ then
 fi
 
 # Submit guess job
-JOB_ID=$(qsub -N "${JOB_NAME}" "${guess_cmd}")
+JOB_ID=$(qsub "${guess_cmd}")
 echo JOB_ID=${JOB_ID}
 
 # Submit append job
-APPEND_JOB_ID=$(qsub -W depend=afterok:${JOB_ID} -N "${APPEND_JOB_NAME}" "${append_cmd}")
+APPEND_JOB_ID=$(qsub -W depend=afterok:${JOB_ID} "${append_cmd}")
 echo APPEND_JOB_ID=${APPEND_JOB_ID}
