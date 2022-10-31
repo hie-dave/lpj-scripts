@@ -79,7 +79,7 @@ function get_all_insfiles() {
 	do
 		if [ -n "${file}" ]
 		then
-			get_all_insfiles "${file}"
+			get_all_insfiles "$(readlink -f "${file}")"
 		fi
 	done
   popd >/dev/null 2>&1
@@ -106,8 +106,35 @@ function get_gridlist() {
 	return 1
 }
 
+# Find a variable value in the .ins file (or any .ins file which is
+# imported, recursively).
+# Required Arguments:
+# 1. Path to the .ins file.
+# 2. Variable name.
+# 3. 1 if a numeric variable, 0 otherwise.
+get_variable() {
+	local ins="${1}"
+	local var="${2}"
+	local num="${3}"
+
+	if [ "${num}" = "1" ]
+	then
+		local val="([0-9]+\.?[0-9]*)"
+	else
+		local val="\"([^\"]+)\""
+	fi
+	local regex="[ \t]*${var}[ \t]+${val}[ \t]*\r?"
+	while IFS=$'\n' read ins_file
+	do
+		sed -rn "s/${regex}/\1/gmp" "${ins_file}"
+	done < <(get_all_insfiles "${ins}")
+}
+
 # Read gridlist file name from the .ins file.
 GRIDLIST="$(get_gridlist "${INSFILE}")"
+
+# Get path to lpj-guess output files as specified in .ins file.
+OUTPATH="$(get_variable "${INSFILE}" outputdirectory 0)"
 
 # Convert to absolute paths.
 INSFILE="$(get_absolute_path "${INSFILE}")"
@@ -132,6 +159,7 @@ function print_settings() {
   echo INSFILE=${INSFILE}
   echo INPUT_MODULE=${INPUT_MODULE}
   echo GRIDLIST=${GRIDLIST}
+  echo OUTPATH=${OUTPATH}
   echo
 }
 print_settings
@@ -426,7 +454,7 @@ function append_files {
     done
 }
 pushd run1 &> /dev/null
-outfiles_unexpanded='${OUTFILES}'
+outfiles_unexpanded='${OUTPATH}/*.ins'
 outfiles_expanded=\$(echo \$outfiles_unexpanded)
 popd &> /dev/null
 for file in \$outfiles_expanded
