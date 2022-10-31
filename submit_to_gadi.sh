@@ -87,13 +87,15 @@ function get_all_insfiles() {
 
 # Function which prints the name of the gridlist file in the specified ins file.
 function get_gridlist() {
-	local gridlist_regex="[ \t]*param[ \t]*\"file_gridlist(?:_cf)?\"[ \t]*\(str[ \t]*\"([^\"]+)\"[ \t]*\)\r?"
+  # Note to self: sed does not currently support non-capturing groups.
+  # (Although grep -P does...)
+	local gridlist_regex="[ \t]*param[ \t]*\"file_gridlist(_cf)?\"[ \t]*\(str[ \t]*\"([^\"]+)\"[ \t]*\)\r?"
 
 	# Note: this will not work if any of the instruction file names contain
 	# a newline character.
 	while IFS=$'\n' read ins_file
 	do
-		local gridlist="$(sed -rn "s/${gridlist_regex}/\1/gmp" "${ins_file}")"
+		local gridlist="$(sed -rn "s/${gridlist_regex}/\2/gmp" "${ins_file}")"
 		if [ -n "${gridlist}" ]
 		then
 			echo "${gridlist}"
