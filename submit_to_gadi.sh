@@ -123,9 +123,9 @@ get_variable() {
 	then
 		local val="([0-9]+\.?[0-9]*)"
 	else
-		local val="\"([^\"]+)\""
+		local val='"([^"]+)"'
 	fi
-	local regex="[ \t]*${var}[ \t]+${val}[ \t]*\r?"
+	local regex="^[ \t]*${var}[ \t]+${val}.*$"
 	while IFS=$'\n' read ins_file
 	do
 		sed -rn "s/${regex}/\1/gmp" "${ins_file}"
@@ -137,6 +137,11 @@ GRIDLIST="$(get_gridlist "${INSFILE}")"
 
 # Get path to lpj-guess output files as specified in .ins file.
 OUTPATH="$(get_variable "${INSFILE}" outputdirectory 0)"
+SAVE_STATE="$(get_variable "${INSFILE}" save_state 1)"
+if [ ${SAVE_STATE} -eq 1 ]
+then
+  STATE_PATH="$(get_variable "${INSFILE}" state_path 0)"
+fi
 
 # Convert to absolute paths.
 INSFILE="$(get_absolute_path "${INSFILE}")"
@@ -241,8 +246,8 @@ OUTPUT_DIR="output"
 # Path to which log files will be aggregated.
 LOGS_DIR="logs"
 
-# Path to which state files will be stored (if applicable).
-STATE_DIR="state"
+# Path to which state files will be aggregated (if applicable).
+OUT_STATE_DIR="state"
 
 # Create links and directories.
 mkdir -p "${RUNS_DIR}"
@@ -359,10 +364,13 @@ cp "${CONFIG_FILE}" "${INPUTS_DIR}/"
 # This won't work if any of the .ins file names contain a newline.
 while IFS=$'\n' read ins_file
 do
-  cp "${ins_file}" "${INPUTS_DIR}/"
-  rx='^[ \t]*import ".*\/([^\/]+)"$'
+  # If multiple .ins files with the same name are imported from
+  # different directories, this will fail with a suitable message.
+  cp -n "${ins_file}" "${INPUTS_DIR}/"
+
   # Convert .ins file import paths to use just filename so it gets resolved to
   # the file that has been copied into the local directory.
+  rx='^[ \t]*import ".*\/([^\/]+)"$'
   sed -ri "s/${rx}/import \"\1\"/gm" "${INPUTS_DIR}/$(basename "${ins_file}")"
 done < <(get_all_insfiles "${INSFILE}")
 TARGET_INSFILE="${INPUTS_DIR}/$(basename "${INSFILE}")"
@@ -376,7 +384,13 @@ print_settings >>"${README_FILE}"
 for ((a=1; a <= NPROCESS ; a++))
 do
     # Ensure the directory exists for this run.
-    mkdir -p "${RUNS_DIR}/run${a}"
+    RUN_DIR="${RUNS_DIR}/run${a}"
+    mkdir -p "${RUN_DIR}"
+    mkdir -p "${RUN_DIR}/${OUTPATH}"
+    if [ ${SAVE_STATE} -eq 1 ]
+    then
+      mkdir -p "${RUN_DIR}/${STATE_PATH}"
+    fi
 
     # Delete any existing log files.
     cd "${RUNS_DIR}/run${a}"; rm -f guess.log; rm -f ${GRIDLIST_FILENAME}; cd ..
@@ -472,7 +486,8 @@ done
 cat run*/guess.log > "\${DIR}/${LOGS_DIR}/guess.log"
 
 # Aggregate any state files, if they exist.
-state_out="\${DIR}/${STATE_DIR}"
+state_out="\${DIR}/${OUT_STATE_DIR}"
+mkdir -p "\${state_out}"
 
 for ((i=1; i <= ${NPROCESS}; i++))
 do
