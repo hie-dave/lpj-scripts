@@ -363,7 +363,7 @@ do
   rx='^[ \t]*import ".*\/([^\/]+)"$'
   # Convert .ins file import paths to use just filename so it gets resolved to
   # the file that has been copied into the local directory.
-  sed -ri "s/${rx}/import \"\1\"/gm" "${INPUTS_DIR}/${ins_file}"
+  sed -ri "s/${rx}/import \"\1\"/gm" "${INPUTS_DIR}/$(basename "${ins_file}")"
 done < <(get_all_insfiles "${INSFILE}")
 TARGET_INSFILE="${INPUTS_DIR}/$(basename "${INSFILE}")"
 
