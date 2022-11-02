@@ -1,25 +1,29 @@
 #!/usr/bin/env python
 from argparse import ArgumentParser
-import datetime, multiprocessing, numpy, os, ozflux_common, re, threading, traceback
+import datetime, multiprocessing, numpy, os, ozflux_common, re, threading
+import traceback
 from ozflux_logging import *
-import math
 from netCDF4 import Dataset, Variable
 from enum import IntEnum
 from ozflux_common import Forcing
 from sys import argv
 from typing import Callable
 
-VERSION = "0.1"
+# Semantic version number.
+VERSION = "1.0"
+
+# Progress updates inside long loops are written every N iterations.
 PROGRESS_CHUNK_SIZE = 1024
+
+# Inputs/outputs will be read/written in chunks of this size.
+# Increasing this will improve performance but increase memory usage.
 CHUNK_SIZE = 16384
 
-class LogLevel(IntEnum):
-	NONE = 0,
-	ERROR = 1,
-	WARNING = 2,
-	INFORMATION = 3,
-	DIAGNOSTIC = 4,
-	DEBUG = 5
+# Whether to aggregate timesteps in paralllel. This doesn't save a huge amount
+# of time in the files that I've tested (which are fairly small), but it doesn't
+# hurt performance, and should really help with larger files. I don't really see
+# any reason to set this to false, which is why this isn't a CLI option.
+PARALLEL_AGGREGATION = True
 
 #######################################################################
 # Constants related to .nc format/processing
@@ -88,13 +92,29 @@ forcing_units = {
 	Forcing.PSURF: "Pa"
 }
 
+# Min and max values for each forcing variable, in output units.
+forcing_bounds = {
+	Forcing.SWDOWN: (0, 1e5),
+	Forcing.PARDF: (0, 1e5),
+	Forcing.PARDR: (0, 1e5),
+	Forcing.LWDOWN: (0, 1e5),
+	Forcing.PRECLS: (0, 1e4),
+	Forcing.PRECCO: (0, 1e3), # Always zero, not used.
+	Forcing.TAIR: (200, 373), # Kelvins
+	Forcing.UAIR: (0, 100),
+	Forcing.VAIR: (0, 1), # Always zero, not used.
+	Forcing.QAIR: (0, 0.2),
+	Forcing.PSURF: (3e5, 1.5e6)
+}
+
+# Common alternative names for various units which we may reasonably encounter.
 units_synonyms = [
 	["W/m2", "W/m^2", "Wm^-2"],
 	["kg/m2/s", "kg/m^2/s", "kgm^-2s^-1"],
 	["K", "k"],
 	["m/s", "ms^-1"],
 	["Pa", "pa"],
-	["kg/kg", "", "mm/mm", "m/m"]
+	["kg/kg", "", "mm/mm", "m/m"] # debatable
 ]
 
 # Whether a particular variable's units are a rate (true) or a magnitude
@@ -123,15 +143,35 @@ KPA_TO_PA = 1e3
 # °C to K
 DEG_C_TO_K = 273.15
 
-# This assumes an hourly output timestep.
-SECONDS_PER_TIMESTEP = 60 * 60
+# Number of seconds per minute.
+SECONDS_PER_MINUTE = 60
+
+# Number of minutes per hour.
+MINUTES_PER_HOUR = 60
+
+# Number of seconds per hour.
+SECONDS_PER_HOUR = SECONDS_PER_MINUTE * MINUTES_PER_HOUR
 
 # Recipes for unit conversions.
+#
+# The keys are a tuple of two strings:
+#
+# 1. The input units
+# 2. The output units.
+#
+# The values are functions which convert a value from the input units into the
+# output units. These functions take two arguments:
+#
+# x: The input value in input units.
+# t: The timestep length (in seconds).
+#
+# Note that units are changed after timestep aggregation occurs. So the input
+# variable will already be in the output timestep at this point in time.
 units_conversions = {
-	("g", "kg"): lambda x: x * G_TO_KG, # (as an example)
-	("mm", "kg/m2/s"): lambda x: x / SECONDS_PER_TIMESTEP, # Assuming mm means mm per timestep
-	("degC", "K"): lambda x: x + DEG_C_TO_K,
-	("kPa", "Pa"): lambda x: x * KPA_TO_PA
+	("g", "kg"): lambda x, _: x * G_TO_KG, # (as an example)
+	("mm", "kg/m2/s"): lambda x, t: x / t, # Assuming mm means mm per timestep
+	("degC", "K"): lambda x, _: x + DEG_C_TO_K,
+	("kPa", "Pa"): lambda x, _: x * KPA_TO_PA
 }
 
 #######################################################################
@@ -147,14 +187,16 @@ class Options:
 	@param odir: Output directory.
 	@param prog: True to write progress messages, 0 otherwise.
 	@param parallel: True to process files in parallel.
+	@param timestep: Desired output timestep, in minutes.
 	"""
 	def __init__(self, log : LogLevel, files: list[str], odir: str, \
-		prog: bool, parallel: bool):
+		prog: bool, parallel: bool, timestep: int):
 		self.log_level = log
 		self.files = files
 		self.out_dir = odir
 		self.report_progress = prog
 		self.parallel = parallel
+		self.timestep = timestep
 
 def six_digit_string(x: float) -> str:
 	"""
@@ -182,13 +224,15 @@ def get_units(var_id: Variable) -> str:
 	"""
 	return var_id.units
 
-def copy_data(in_file: Dataset, variable: Variable, \
+def copy_data(in_file: Dataset, variable: Variable, timestep: int, \
 	progress_callback: Callable[[float], None]):
 	"""
 	Copy all data from the input file to the output variable.
 
 	@param input file: Opened .nc file.
 	@param variable: The newly-created and initialised forcing variable.
+	@param timestep: Desired output timestep in minutes.
+	@param progress_callback: Progress reporting function.
 	"""
 	# 0. Get variable IDs.
 	i = 0
@@ -196,15 +240,15 @@ def copy_data(in_file: Dataset, variable: Variable, \
 		if forcing == Forcing.NFORCINGS:
 			break
 		out_name = outdata_forcing_names[forcing]
-		log_information("----- %s -----" % out_name)
-		log_information("Reading %s data" % out_name)
+		log_diagnostic("----- %s -----" % out_name)
+		log_diagnostic("Reading %s data" % out_name)
 		read_proportion = 0.66
 		write_proportion = 1 - read_proportion
-		data = get_data(in_file, forcing, lambda p: progress_callback( \
-			(i + p * read_proportion) / Forcing.NFORCINGS))
+		data = get_data(in_file, forcing, timestep, lambda p: \
+			progress_callback((i + p * read_proportion) / Forcing.NFORCINGS))
 
 		# 3. Write data to out file.
-		log_information("Writing %s data" % out_name)
+		log_diagnostic("Writing %s data" % out_name)
 		write_data(variable, data, forcing, lambda p: progress_callback( \
 			(i + read_proportion + write_proportion * p) / Forcing.NFORCINGS))
 		i += 1
@@ -213,18 +257,21 @@ def write_data(variable: Variable, data: list[float], forcing: Forcing, \
 	progress_callback: Callable[[float], None]):
 	"""
 	Write data to the output file.
+
+	@param variable: Variable in the output file, to which data will be written.
+	@param data: A column of data to be written.
+	@param forcing: Column of the variable to which the data will be written.
+	@progress_callback: Called to report progress.
 	"""
-	# todo: chunking output writes. This impl is really slow...
 	n = len(data)
 	for i in range(0, n, CHUNK_SIZE):
 		row = i
 		upper = min(n, i + CHUNK_SIZE)
 		col = forcing
-		# index = row * Forcing.NFORCINGS + col
 		variable[row:upper, col] = data[i:upper]
 		progress_callback(i / n)
 
-	log_diagnostic("Successfully wrote %d items of %s" % (n, forcing))
+	log_debug("Successfully wrote %d items of %s" % (n, forcing))
 
 def zeroes(n: int) -> list[float]:
 	"""
@@ -238,6 +285,7 @@ def aggregate(data: list[float], start: int, stop: int, chunk_size: int
 	"""
 	Aggregate the values in the specified dataset between the start and
 	stop indices, using the specified aggregator function.
+
 	@param data: The data.
 	@param start: Aggregate only values after this index.
 	@param stop: Aggregate only values before this index.
@@ -265,29 +313,41 @@ def aggregate(data: list[float], start: int, stop: int, chunk_size: int
 			progress_cb(i / niter)
 	return result
 
-def temporal_aggregation(in_file: Dataset, data: list[float], forcing: Forcing, \
-	progress_callback: Callable[[float], None]) -> list[float]:
+def temporal_aggregation(in_file: Dataset, data: list[float], forcing: Forcing\
+	, output_timestep: float
+	, progress_callback: Callable[[float], None]) -> list[float]:
 	"""
-	Aggregate the data from 30m to 60m (hourly) timestep.
+	Aggregate the input data to destination timestep.
+
+	@param in_file: Input netcdf file.
+	@param data: Data to be aggregated.
+	@param forcing: The variable represented by the data.
+	@param output_timestep: The desired output timestep.
+	@param progress_callback: Function used for progress reporting.
 	"""
 	# todo: support other timesteps (both source and target)?
-	if in_file.time_step == "60":
+	input_timestep = int(in_file.time_step)
+	if input_timestep == output_timestep:
 		return data
-	if in_file.time_step != "30":
-		m = "Unsupported input timestep: %s"
-		raise ValueError(m % in_file.time_step)
+	if output_timestep < input_timestep:
+		m = "Invalid output timestep (%d); must be >= input timestep (%d)"
+		raise ValueError(m % (output_timestep, input_timestep))
+	if output_timestep % input_timestep != 0:
+		m = "Invalid timestep; output (%d) must be an integer multiple of input\
+timestep (%d)"
+		raise ValueError(m % (output_timestep, input_timestep))
 
 	# Record the amount of data at the start of the function. This is
 	# written as a diagnostic later.
 	n_start = len(data)
 
 	start_minute = get_start_minute(in_file)
-	if start_minute == 30:
+	if start_minute == 30 and input_timestep == 30:
 		# Don't include the first timestep value if it lies on the half-
 		# hour boundary. trim_to_start_year() relies on this assumption,
 		# so it will need to be updated if we change this and vice versa.
-		m = "Input data starts on half-hour boundary. First value will be removed."
-		log_diagnostic(m)
+		m = "Input data starts on 30m boundary. First value will be removed."
+		log_debug(m)
 		data = data[1:]
 	elif start_minute != 0:
 		m = "Strange start time: '%s'. Data must start on the hour or half-hour"
@@ -297,14 +357,14 @@ def temporal_aggregation(in_file: Dataset, data: list[float], forcing: Forcing, 
 	unit_kind = "rate" if indata_units_are_rate[forcing] else "magnitude"
 	agg_kind = "mean" if indata_units_are_rate[forcing] else "sum"
 	agg_func = numpy.mean if indata_units_are_rate[forcing] else numpy.sum
-	log_diagnostic(m % (unit_kind, agg_kind))
+	# Guaranteed to be an integer division, given the above error checks.
+	timestep_ratio = output_timestep // input_timestep
+	log_debug(m % (unit_kind, agg_kind))
 
 	out: list[float]
 	out = []
 
-	PARALLEL = True
-
-	if PARALLEL:
+	if PARALLEL_AGGREGATION:
 		# This can be quite slow for large datasets, so I've parallelised it.
 
 		# Get number of CPUs.
@@ -355,7 +415,7 @@ def temporal_aggregation(in_file: Dataset, data: list[float], forcing: Forcing, 
 			stop = len(data) if i == ncpu - 1 else start + chunk_size
 
 			# Create the thread object.
-			t = Aggregator(data, start, stop, 2, i, agg_func)
+			t = Aggregator(data, start, stop, timestep_ratio, i, agg_func)
 
 			# Start the thread and store the object reference for later.
 			t.start()
@@ -367,10 +427,12 @@ def temporal_aggregation(in_file: Dataset, data: list[float], forcing: Forcing, 
 			t.join()
 			out.extend(t.result)
 	else:
-		out = aggregate(data, 0, len(data), 2, agg_func, progress_callback)
+		out = aggregate(data, 0, len(data), timestep_ratio, agg_func
+		, progress_callback)
 
 	n_end = len(out)
-	log_diagnostic("Temporal aggregation reduced array length by %d values" % (n_start - n_end))
+	m = "Temporal aggregation reduced array length by %d values"
+	log_debug(m % (n_start - n_end))
 
 	return out
 
@@ -389,15 +451,22 @@ def find_units_conversion(current_units: str, desired_units: str) \
 	raise ValueError(m % (current_units, desired_units))
 
 def fix_units(data: list[float], current_units: str, desired_units: str, \
-	progress_callback: Callable[[float], None]) -> list[float]:
+	timestep: int, progress_callback: Callable[[float], None]) -> list[float]:
 	"""
 	Convert data to the units required for the output file.
 	This will modify the existing array.
+
+	@param data: Input data.
+	@param current_units: The input units.
+	@param desired_units: The output units.
+	@param timestep: The input timestep length in minutes.
+	@param progress_callback: Function for progress reporting.
 	"""
 	conversion = find_units_conversion(current_units, desired_units)
 	n = len(data)
+	timestep *= SECONDS_PER_MINUTE
 	for i in range(n):
-		data[i] = conversion(data[i])
+		data[i] = conversion(data[i], timestep)
 		if i % PROGRESS_CHUNK_SIZE == 0:
 			progress_callback(i / n)
 	return data
@@ -474,11 +543,12 @@ def get_next_year(start_date: datetime.datetime) -> datetime.datetime:
 	"""
 	if is_start_of_year(start_date):
 		m = "get_next_year(): Start date %s lies on start of year"
-		log_diagnostic(m % start_date)
+		log_debug(m % start_date)
 		return start_date
 	return datetime.datetime(start_date.year + 1, 1, 1, 0, 0, 0)
 
-def trim_to_start_year(in_file: Dataset, data: list[float]) -> list[float]:
+def trim_to_start_year(in_file: Dataset, timestep: int
+	, data: list[float]) -> list[float]:
 	"""
 	Trim the given data to the start of the next year.
 	"""
@@ -486,14 +556,16 @@ def trim_to_start_year(in_file: Dataset, data: list[float]) -> list[float]:
 	if (start_date.minute == 30):
 		# temporal_aggregation() trims the first value if it lies on the
 		# half-hour boundary. We need to do the same here.
-		log_diagnostic("Data starts on 30m boundary: 1st value is ignored")
+		log_debug("Data starts on 30m boundary: 1st value is ignored")
 		start_date = start_date + datetime.timedelta(minutes = 30)
 	next_year = get_next_year(start_date)
 
 	delta = next_year - start_date
-	n_trim = int(delta.total_seconds() / 3600)
+	hours_per_timestep = timestep / MINUTES_PER_HOUR
+	seconds_per_timestep = SECONDS_PER_HOUR * hours_per_timestep
+	n_trim = int(delta.total_seconds() / seconds_per_timestep)
 	m = "Trimming %d values to get to start of %d"
-	log_diagnostic(m % (n_trim, next_year.year))
+	log_debug(m % (n_trim, next_year.year))
 	return data[n_trim:]
 
 def remove_nans(data: list[float]
@@ -508,14 +580,35 @@ def remove_nans(data: list[float]
 			# Use mean of 5 closest values if value is nan.
 			x = ozflux_common.neighbouring_mean(data, i, N_NEIGHBOUR)
 			m = "Replacing NaN at %d with mean %.2f (n = %d)"
-			log_diagnostic(m % (i, x, N_NEIGHBOUR))
+			log_debug(m % (i, x, N_NEIGHBOUR))
 			data[i] = x
 		if i % PROGRESS_CHUNK_SIZE == 0:
 			progress_cb(i / n)
 	return data
 
-def get_data(in_file: Dataset, forcing: Forcing, \
-	progress_cb: Callable[[float], None]) -> list[float]:
+def bounds_checks(data: list[float], xmin: float, xmax: float) -> list[float]:
+	"""
+	Bounds checking. Any values in the list which exceed theses bounds will be
+	set to the boundary value.
+
+	@param data: The data to be checked.
+	@param xmin: Lower boundary.
+	@param xmax: Upper boundary.
+	"""
+	for i in range(len(data)):
+		if data[i] < xmin:
+			m = "Value %.2f in row %d exceeds lower bound of %.2f"
+			log_debug(m % (data[i], i, xmin))
+			data[i] = xmin
+		elif data[i] > xmax:
+			m = "Value %.2f in row %d exceeds upper bound of %.2f"
+			log_debug(m % (data[i], i, xmax))
+			data[i] = xmax
+	return data
+
+def get_data(in_file: Dataset, forcing: Forcing \
+	, output_timestep: int \
+	, progress_cb: Callable[[float], None]) -> list[float]:
 		"""
 		Get all data from the input file and convert it to a format
 		suitable for the output file.
@@ -527,11 +620,15 @@ def get_data(in_file: Dataset, forcing: Forcing, \
 		# Some variables are not translated directly into the output
 		# file and can be ignored (ie filled with zeroes).
 		if in_name == "zero":
-			log_information("Using zeroes for %s" % out_name)
-			data = zeroes(in_file.variables['time'].size // 2)
-			return trim_to_start_year(in_file, data)
+			log_diagnostic("Using zeroes for %s" % out_name)
+			input_timestep = int(in_file.time_step)
+			timestep_ratio = output_timestep // input_timestep
+			n = in_file.variables["time"].size // timestep_ratio
+			data = zeroes(n)
+			return trim_to_start_year(in_file, output_timestep, data)
 		if not in_name in in_file.variables:
-			raise ValueError("Variable %s does not exist in input file" % in_name)
+			m = "Variable %s does not exist in input file"
+			raise ValueError(m % in_name)
 
 		var_id = in_file.variables[in_name]
 		in_units = get_units(var_id)
@@ -554,53 +651,64 @@ def get_data(in_file: Dataset, forcing: Forcing, \
 			- fixnan_time_proportion
 
 		# 1. Read data from netcdf file.
-		data = read_data(var_id, lambda p: progress_cb(read_time_proportion * p))
-		log_diagnostic("Successfully read %d values from netcdf" % len(data))
+		data = read_data(var_id, lambda p:progress_cb(read_time_proportion * p))
+		log_debug("Successfully read %d values from netcdf" % len(data))
 
 		# 2. Replace NaN with a mean of nearby values.
-		log_information("Removing NaNs")
+		log_diagnostic("Removing NaNs")
 		step_start = read_time_proportion
 		step_size = fixnan_time_proportion
-		data = remove_nans(data, lambda p: progress_cb(step_start + step_size * p))
+		data = remove_nans(data
+		, lambda p: progress_cb(step_start + step_size * p))
 		step_start += fixnan_time_proportion
 
 		# 2. Change timestep to something suitable for lpj-guess.
-		log_information("Aggregating %s to hourly timestep" % out_name)
-		data = temporal_aggregation(in_file, data, forcing, lambda p: progress_cb( \
-			step_start + aggregation_time_proportion * p))
+		log_diagnostic("Aggregating %s to hourly timestep" % out_name)
+		data = temporal_aggregation(in_file, data, forcing, output_timestep
+		, lambda p: progress_cb(step_start + aggregation_time_proportion * p))
 		step_start += aggregation_time_proportion
 
 		# 3. Trim data to the start of a year.
-		data = trim_to_start_year(in_file, data)
+		data = trim_to_start_year(in_file, output_timestep, data)
 
 		# 4. Ensure units are correct.
 		if not matching_units:
-			log_information("Converting %s from %s to %s" % \
+			log_diagnostic("Converting %s from %s to %s" % \
 				(out_name, in_units, out_units))
-			data = fix_units(data, in_units, out_units, \
+			data = fix_units(data, in_units, out_units, output_timestep, \
 				lambda p: progress_cb( \
 					step_start + units_time_proportion * p))
 		else:
-			log_information("No units conversion required for %s" % out_name)
+			log_diagnostic("No units conversion required for %s" % out_name)
+
+		data = bounds_checks(data, *forcing_bounds[forcing])
 
 		# Done!
 		return data
 
-def process_file(in_file, out_file, \
+def process_file(in_file: str, out_file: str, timestep: int, \
 	progress_callback: Callable[[float], None]):
 	"""
 	Read the input file and generate an output file at the specified
 	path in LPJ-Guess (lsminput) format.
+
+	@param in_file: Input file path
+	@param out_file: Output file path
+	@param timestep: Output timestep length in minutes.
 	"""
-	log_information("---------- %s ----------" % in_file)
+	log_information("Processing %s..." % in_file)
 	log_debug("Opening output file %s for writing" % out_file)
 	with Dataset(out_file, "w", format=ozflux_common.NC_FORMAT) as nc_out:
 		log_debug("Opening input file %s for reading" % in_file)
 		with Dataset(in_file, "r", format=ozflux_common.NC_FORMAT) as nc_in:
 			# Quick sanity check of time step.
-			if nc_in.time_step != "30" and nc_in.time_step != "60":
-				m = "Unknown time step (%d) in input file %s. Only hourly is supported"
-				raise ValueError(m % (int(nc_in.time_step), in_file))
+			instep = int(nc_in.time_step)
+			if instep > timestep:
+				m = "Invalid input timestep (%d). Must be <= output (%d)"
+				raise ValueError(m % instep, timestep)
+			if timestep % instep != 0:
+				m = "Invalid input timestep: %d. Must be an integer multiple of output timestep (%d)"
+				raise ValueError(m % (instep, timestep))
 
 			# 0. Create dimensions in output file.
 			log_debug("Creating output dimensions")
@@ -616,10 +724,10 @@ def process_file(in_file, out_file, \
 
 			# 2. Copy data into this variable.
 			log_debug("Migrating data")
-			copy_data(nc_in, out_variable, progress_callback)
+			copy_data(nc_in, out_variable, timestep, progress_callback)
 
 			# 3. Metadata for output file.
-			nc_out.time_step = "60" # in minutes.
+			nc_out.time_step = str(timestep) # in minutes.
 			start_date = get_next_year(
 				ozflux_common.parse_date(nc_in.time_coverage_start))
 			nc_out.time_coverage_start = start_date.strftime(
@@ -652,10 +760,12 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-o", "--out-dir", required = True, help = "Path to the output directory. Processed files will be saved with the same file name into this directory")
 	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
 	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel (highly experimental, use at own risk)")
+	parser.add_argument("-t", "--timestep", type = int, required = True, help = "Output timestep in minutes")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + VERSION)
 
 	parsed = parser.parse_args(argv[1:])
-	return Options(parsed.verbosity, parsed.files, parsed.out_dir, parsed.show_progress, parsed.parallel)
+	return Options(parsed.verbosity, parsed.files, parsed.out_dir
+	, parsed.show_progress, parsed.parallel, parsed.timestep)
 
 def main(opts: Options):
 	"""
@@ -724,7 +834,8 @@ def main(opts: Options):
 			threads.append(t)
 		else:
 			# Run task in this thread.
-			process_file(infile, outfile, lambda p: progress_reporter(p, i))
+			process_file(infile, outfile, opts.timestep
+			, lambda p: progress_reporter(p, i))
 
 	# Wait for threads to exit.
 	for t in threads:
