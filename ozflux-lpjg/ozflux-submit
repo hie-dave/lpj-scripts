@@ -3,12 +3,19 @@
 # Script to submit ozflux runs
 #
 # This is a really quick and dirty wrapper script which calls submit_to_gadi for
-# each ozflux site. This should really be cleaned up a bit. For now, to run it,
-# place this script inside the lpjguess_dave_lsm/benchmarks/ozflux directory
-# and run it. Note that this will not actually qsub the individual jobs. To do
-# this, run the script after removing the `-d` argument (aka `--dry-run`) to the
-# submit_to_gadi invocation. You'll also need to copy the forcing data into the
-# output directory in a suitable location.
+# each ozflux site. This should really be cleaned up a bit. 
+#
+# Usage: ${0} -s <config-file> [-d <ozflux-directory>] [-f <forcing-data>] [-n] [-h]
+# 
+# -s Path to the base configuration file, which contains config settings common
+#    to all runs.
+# -d Path to the directory containing ozflux sites. If omitted, will attempt to
+#    use current working directory.
+# -f Path to forcing data. If set, this data will be copied to the run directory,
+# 	 and symlinks will be placed in each of the generated site directories. If
+# 	 not set, the user/caller is responsible for organising the forcing data.
+# -n Dry run. Create the run directories, but do not submit the jobs to PBS.
+# -h Display this help info.
 #
 set -euo pipefail
 
@@ -19,31 +26,101 @@ then
   set -x
 fi
 
-SUBMIT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
-CONF_PRIMARY="$(readlink -f ozflux-runs.conf)"
+### Input Handling.
 
+# Parse the command line arguments
+CONF=
+DRY_RUN=0
+FORCING_PATH=
+USAGE="Usage: ${0} -s <config-file> [-d <ozflux-directory>] [-f <forcing-data>] [-n] [-h]
+
+-s  Path to the base configuration file, which contains config settings common
+    to all runs.
+-d  Path to the directory containing ozflux sites. If omitted, will attempt to
+    use current working directory.
+-f	Path to forcing data. If set, this data will be copied to the run directory,
+	and symlinks will be placed in each of the generated site directories. If
+	not set, the user/caller is responsible for organising the forcing data.
+-n	Dry run. Create the run directories, but do not submit the jobs to PBS.
+-h  Display this help info."
+
+while getopts ":s:d:hnf:" opt; do
+    case $opt in
+      s ) source "${OPTARG}"; CONF=1; CONFIG_FILE="${OPTARG}" ;;
+      d ) SUBMIT_DIR="${OPTARG}" ;;
+	  n ) DRY_RUN=1 ;;
+	  f ) FORCING_PATH="${OPTARG}" ;;
+      h ) echo "${USAGE}"; exit 0 ;;
+    esac
+done
+
+if [ -z "${CONF:-}" ]
+then
+  echo "Error: no config file supplied."
+  echo "${USAGE}"
+  exit 1
+elif [ ! -f "${CONFIG_FILE}" ]
+then
+	echo "Error: config file $f does not exist or is not readable"
+	exit 1
+fi
+
+# Convert CONFIG_FILE to absolute path.
+CONFIG_FILE="$(readlink -f "${CONFIG_FILE}")"
+
+if [ -z "${SUBMIT_DIR:-}" ]
+then
+	echo "No ozflux directory provided, using current directory."
+	SUBMIT_DIR="$(pwd)"
+elif [ ! -d "${SUBMIT_DIR}" ]
+then
+	echo "Error: directory ${SUBMIT_DIR} does not exist or is not readable."
+	exit 1
+else
+	# Convert to absolute path if necessary.
+	SUBMIT_DIR="$(readlink -f "${SUBMIT_DIR}")"
+fi
+
+if [ -z "${OUT_DIR:-}" ]
+then
+	echo "Error: config file must contain OUT_DIR"
+fi
+
+# OUT_DIR was set when we sourced the base config file.
+mkdir -p "${OUT_DIR}"
+
+if [ -n "${FORCING_PATH}" ]
+then
+	if [ ! -f "${FORCING_PATH}" ]
+	then
+		echo "Error: Forcing path ${FORCING_PATH} does not exist or is not readable"
+		exit 1
+	else
+		# Copy forcing data into ${OUT_DIR}/
+		# Let's be explicit here, in case, for example, the user passed a directory
+		# name ending with a trailing slash.
+		FORCING_DEST="${OUT_DIR}/$(basename "${FORCING_PATH}")"
+		rsync -zaq --partial "${FORCING_PATH}"/* "${FORCING_DEST}/"
+	fi
+fi
+
+### Generate run directories and (potentially) submit PBS jobs.
 for SITE_DIR in `find "${SUBMIT_DIR}" -maxdepth 1 -type d`
 do
-	# Data is not a site...
-	if [ "${SITE_DIR}" == "${SUBMIT_DIR}/data" -o \
-             "${SITE_DIR}" == "${SUBMIT_DIR}" ]; then continue; fi
-
 	# Extract site name.
 	SITE="$(basename "${SITE_DIR}")"
 
-	if [ -d "${SITE_DIR}/${SITE}" ]; then rm -rf "${SITE_DIR}/${SITE}"; fi
-
-	# Site-specific settings.
+	# Path to insfile must match directory name.
 	INSFILE="${SITE_DIR}/${SITE}.ins"
+
+	# Ignore directories like forcing/ and ./
+	if [ ! -f "${INSFILE}" ]; then continue; fi
 
 	# ::TEMP HACK::
 	# Change path to met data to use 3-hourly data.
-	sed -ri 's/num 24/num 8/g' "${INSFILE}"
+	# sed -ri 's/num 24/num 8/g' "${INSFILE}"
 
-	OUT_DIR="/scratch/pt17/dh7190/ozflux-runs/3h"
 	EXPERIMENT="${SITE}"
-
-	mkdir -p "${OUT_DIR}"
 
 	# Create site run config file.
 	SITE_CONF="$(mktemp --tmpdir --suffix=.conf "${SITE}XXX")"
@@ -54,9 +131,6 @@ do
 ## ${SUBMIT_DIR} is the directory of the submit script.
 INSFILE="${INSFILE}"
 
-## Outut path. Don't use ~ expansion for home directory!
-OUT_DIR="${OUT_DIR}"
-
 ## Experiment name. Outputs will be saved to a directory with this name.
 EXPERIMENT="${EXPERIMENT}"
 EOF
@@ -65,8 +139,17 @@ EOF
 cat "${CONF_PRIMARY}" >>"${SITE_CONF}"
 
 pushd "${SITE_DIR}" >/dev/null 2>&1
-submit_to_gadi.sh -d -s "${SITE_CONF}"
+DRY_RUN_ARG=
+if [ "${DRY_RUN}" = "1" ]; then DRY_RUN_ARG="-d"; fi
+submit_to_gadi.sh -s "${SITE_CONF}" "${DRY_RUN_ARG}"
 popd >/dev/null 2>&1
 rm "${SITE_CONF}"
+
+# Create symlink to forcing data in the runs directory.
+RUNS_DIR="${OUT_DIR}/${SITE}/${RUNS}"
+if [ -f "${RUNS_DIR}" -a -n "${FORCING_PATH}" ]
+then
+	ln -sf "${FORCING_DEST}" "${RUNS_DIR}/"
+fi
 
 done
