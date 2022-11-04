@@ -92,7 +92,7 @@ mkdir -p "${OUT_DIR}"
 
 if [ -n "${FORCING_PATH}" ]
 then
-	if [ ! -f "${FORCING_PATH}" ]
+	if [ ! -d "${FORCING_PATH}" ]
 	then
 		echo "Error: Forcing path ${FORCING_PATH} does not exist or is not readable"
 		exit 1
