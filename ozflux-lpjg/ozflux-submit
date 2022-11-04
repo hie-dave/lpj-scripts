@@ -135,21 +135,21 @@ INSFILE="${INSFILE}"
 EXPERIMENT="${EXPERIMENT}"
 EOF
 
-# Append the other settings which are common to all sites.
-cat "${CONF_PRIMARY}" >>"${SITE_CONF}"
+	# Append the other settings which are common to all sites.
+	cat "${CONF_PRIMARY}" >>"${SITE_CONF}"
 
-pushd "${SITE_DIR}" >/dev/null 2>&1
-DRY_RUN_ARG=
-if [ "${DRY_RUN}" = "1" ]; then DRY_RUN_ARG="-d"; fi
-submit_to_gadi.sh -s "${SITE_CONF}" "${DRY_RUN_ARG}"
-popd >/dev/null 2>&1
-rm "${SITE_CONF}"
+	pushd "${SITE_DIR}" >/dev/null 2>&1
+	DRY_RUN_ARG=
+	if [ "${DRY_RUN}" = "1" ]; then DRY_RUN_ARG="-d"; fi
+	submit_to_gadi.sh -s "${SITE_CONF}" "${DRY_RUN_ARG}"
+	popd >/dev/null 2>&1
+	rm "${SITE_CONF}"
 
-# Create symlink to forcing data in the runs directory.
-RUNS_DIR="${OUT_DIR}/${SITE}/${RUNS}"
-if [ -f "${RUNS_DIR}" -a -n "${FORCING_PATH}" ]
-then
-	ln -sf "${FORCING_DEST}" "${RUNS_DIR}/"
-fi
+	# Create symlink to forcing data in the runs directory.
+	RUNS_DIR="${OUT_DIR}/${SITE}/${RUNS}"
+	if [ -f "${RUNS_DIR}" -a -n "${FORCING_PATH}" ]
+	then
+		ln -sf "${FORCING_DEST}" "${RUNS_DIR}/"
+	fi
 
 done
