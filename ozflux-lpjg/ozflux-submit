@@ -140,7 +140,7 @@ JOB_NAME="${EXPERIMENT}"
 EOF
 
 	# Append the other settings which are common to all sites.
-	cat "${CONF_PRIMARY}" >>"${SITE_CONF}"
+	cat "${CONFIG_FILE}" >>"${SITE_CONF}"
 
 	pushd "${SITE_DIR}" >/dev/null 2>&1
 	DRY_RUN_ARG=
