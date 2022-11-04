@@ -150,7 +150,7 @@ EOF
 	rm "${SITE_CONF}"
 
 	# Create symlink to forcing data in the runs directory.
-	RUNS_DIR="${OUT_DIR}/${SITE}/${RUNS}"
+	RUNS_DIR="${OUT_DIR}/${SITE}/runs"
 	if [ -f "${RUNS_DIR}" -a -n "${FORCING_PATH}" ]
 	then
 		ln -sf "${FORCING_DEST}" "${RUNS_DIR}/"
