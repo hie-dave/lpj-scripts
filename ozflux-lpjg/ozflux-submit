@@ -151,7 +151,7 @@ EOF
 
 	# Create symlink to forcing data in the runs directory.
 	RUNS_DIR="${OUT_DIR}/${SITE}/runs"
-	if [ -f "${RUNS_DIR}" -a -n "${FORCING_PATH}" ]
+	if [ -d "${RUNS_DIR}" -a -n "${FORCING_PATH}" ]
 	then
 		ln -sf "${FORCING_DEST}" "${RUNS_DIR}/"
 	fi
