@@ -84,6 +84,7 @@ fi
 if [ -z "${OUT_DIR:-}" ]
 then
 	echo "Error: config file must contain OUT_DIR"
+	exit 1
 fi
 
 # OUT_DIR was set when we sourced the base config file.
