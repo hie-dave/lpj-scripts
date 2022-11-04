@@ -133,6 +133,9 @@ INSFILE="${INSFILE}"
 
 ## Experiment name. Outputs will be saved to a directory with this name.
 EXPERIMENT="${EXPERIMENT}"
+
+## PBS Job name.
+JOB_NAME="${EXPERIMENT}"
 EOF
 
 	# Append the other settings which are common to all sites.
