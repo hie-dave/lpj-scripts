@@ -104,7 +104,7 @@ forcing_bounds = {
 	Forcing.UAIR: (0, 100),
 	Forcing.VAIR: (0, 1), # Always zero, not used.
 	Forcing.QAIR: (0, 0.2),
-	Forcing.PSURF: (3e5, 1.5e6)
+	Forcing.PSURF: (3e4, 1.5e5)
 }
 
 # Common alternative names for various units which we may reasonably encounter.
