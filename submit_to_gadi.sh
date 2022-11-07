@@ -456,7 +456,7 @@ cat <<EOF > "${append_cmd}"
 #PBS -l storage=gdata/${PROJECT}+scratch/${PROJECT}
 #PBS -N ${APPEND_JOB_NAME}
 set -euo pipefail
-DIR="\$( cd "\$( dirname "\${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+DIR="${RUN_OUT_DIR}"
 cd "\${DIR}/runs"
 function append_files {
     local number_of_jobs=\$1
@@ -474,16 +474,18 @@ function append_files {
     done
 }
 pushd run1 &> /dev/null
-outfiles_unexpanded='${OUTPATH}/*.ins'
+outfiles_unexpanded='${OUTPATH}/*.out'
 outfiles_expanded=\$(echo \$outfiles_unexpanded)
 popd &> /dev/null
 for file in \$outfiles_expanded
 do
-  append_files ${NPROCESS} "\$file" "${OUTPUT_DIR}"
+  append_files ${NPROCESS} "\$file" "\${DIR}/${OUTPUT_DIR}"
 done
 
 # Now combine the log files.
-cat run*/guess.log > "\${DIR}/${LOGS_DIR}/guess.log"
+log_dir="\${DIR}/${LOGS_DIR}"
+mkdir -p "\${log_dir}"
+cat run*/guess.log > "\${log_dir}/guess.log"
 
 # Aggregate any state files, if they exist.
 state_out="\${DIR}/${OUT_STATE_DIR}"
