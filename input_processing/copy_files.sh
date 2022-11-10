@@ -5,20 +5,6 @@
 # Fail immediately with error message if any individual command fails.
 set -euo pipefail
 
-## PBS settings
-#PBS -N download_clim
-#PBS -P hw83
-#PBS -q copyq
-#PBS -l walltime=02:59:00
-#PBS -l mem=192GB
-#PBS -l ncpus=1
-# #PBS -l jobfs=1GB
-#PBS -l storage=gdata/at43
-#PBS -r y
-##PBS -l wd
-#PBS -j oe
-#PBS -S /bin/bash
-
 basepath_in="/g/data/at43/output/NARCliMi/UNSW"
 
 dave="/data/hiestorage/WorkingData/MEDLYN_GROUP/PROJECTS/dynamics_simulations"
@@ -27,14 +13,14 @@ dest_dir="${dave}/narclim/forcing-raw"
 globmods="CCCma-CanESM2 CSIRO-BOM-ACCESS1-0 CSIRO-BOM-ACCESS1-3" # global models
 regmods="UNSW-WRF360J UNSW-WRF360K"  # regional (downscaled) climate models 
 scenarios="historical rcp45 rcp85"   # climate scenarios
-vars="hurs pr rsds sfcWind tas tasmin-bc tasmax-bc"  # variables
+vars="tasmin-bc tasmax-bc"  # variables
 version="v1"
 freq="day"
 
 gadi_user=dh7190
 hies_user=u30062639
 
-src_server="${gadi_user}@gadi-dm.nci.org.au"
+src_server="${gadi_user}@gadi.nci.org.au"
 dest_server="${hies_user}@hie-storage.sstars.ws"
 cp_command="rsync -a --partial --info=progress2 --no-i-r"
 
@@ -50,49 +36,45 @@ then
 	exit 1
 fi
 
-# The new method, which recreates the old directory structure, but has the
-# advantage of showing overall progress.
-ssh "${src_server}" ssh "${dest_server}" mkdir -p "${dest_dir}"
-ssh "${src_server}" "${cp_command}" "${basepath_in}/*" "${dest_server}:${dest_dir}/"
+# # The new method, which recreates the old directory structure, but has the
+# # advantage of showing overall progress.
+# ssh "${src_server}" ssh "${dest_server}" mkdir -p "${dest_dir}"
+# ssh "${src_server}" "${cp_command}" "${basepath_in}/*" "${dest_server}:${dest_dir}/"
 
 # The older method, which creates a nice directory structure in dest. However,
 # this doesn't report overall progress (only per-file).
-# for globmod in $globmods
-# do
-#     for regmod in $regmods
-# 	do
-# 		for scenario in $scenarios
-# 		do
-# 			for var in $vars
-# 			do
-# 				# create target directory
-# 				outpath=${basepath_out}/${scenario}/${var}
-# 				mkdir -p ${outpath}
+for globmod in $globmods
+do
+    for regmod in $regmods
+	do
+		for scenario in $scenarios
+		do
+			for var in $vars
+			do
+				# create target directory
+				outpath=${basepath_out}/${scenario}/${var}
+				mkdir -p ${outpath}
 
-# 				# list files to copy
-# 				cp_files=$(ls ${basepath_in}/${globmod}/${scenario}/r1i1p1/${regmod}/${version}/${freq}/${var}/*.nc)
+				# list files to copy
+				cp_files=$(ls ${basepath_in}/${globmod}/${scenario}/r1i1p1/${regmod}/${version}/${freq}/${var}/*.nc)
 
-# 				# copy files
-# 				for src_file in $cp_files
-# 				do
-# 					# echo $(basename $src_file)
-# 					# cp -u $src_file ${outpath}/$(basename $src_file)
+				# copy files
+				for src_file in $cp_files
+				do
+					# Get raw filename without path.
+					dest_file="$(basename "${src_file}")"
 
-# 					# Get raw filename without path.
-# 					dest_file="$(basename "${src_file}")"
+					# Destination path.
+					dest_path="${dest_dir}/${outpath}"
+					dest="${dest_server}:${dest_path}/${dest_file}"
 
-# 					# 
-# 					dest_path="${dest_dir}/${outpath}"
+					# Create destination directory if it doesn't already exist.
+					ssh "${dest_server}" mkdir -p "${dest_path}"
 
-# 					dest="${dest_server}:${dest_path}/${dest_file}"
-
-# 					# Create destination directory if it doesn't already exist.
-# 					ssh "${dest_server}" mkdir -p "${dest_path}"
-
-# 					# Copy the file.
-# 					ssh "${src_server}" "${cp_command}" "${src_file}" "${dest}"
-# 				done
-# 			done
-# 		done
-#     done
-# done
+					# Copy the file.
+					ssh "${src_server}" "${cp_command}" "${src_file}" "${dest}"
+				done
+			done
+		done
+    done
+done
