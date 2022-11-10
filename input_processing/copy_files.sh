@@ -22,7 +22,7 @@ set -euo pipefail
 basepath_in="/g/data/at43/output/NARCliMi/UNSW"
 
 dave="/data/hiestorage/WorkingData/MEDLYN_GROUP/PROJECTS/dynamics_simulations"
-dest_dir="/${dave}/narclim/forcing-raw"
+dest_dir="${dave}/narclim/forcing-raw"
 
 globmods="CCCma-CanESM2 CSIRO-BOM-ACCESS1-0 CSIRO-BOM-ACCESS1-3" # global models
 regmods="UNSW-WRF360J UNSW-WRF360K"  # regional (downscaled) climate models 
@@ -34,7 +34,7 @@ freq="day"
 gadi_user=dh7190
 hies_user=u30062639
 
-src_server="${ssh_user}@gadi-dm.nci.org.au"
+src_server="${gadi_user}@gadi-dm.nci.org.au"
 dest_server="${hies_user}@hie-storage.sstars.ws"
 cp_command="rsync -a --partial --info=progress2 --no-i-r"
 
