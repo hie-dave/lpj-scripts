@@ -17,6 +17,12 @@ vars="tasmin-bc tasmax-bc"  # variables
 version="v1"
 freq="day"
 
+# Set to 0 to disable parallel mode.
+PARALLEL=1
+
+# Max number of parallel jobs.
+MAX_NUM_JOBS=8
+
 gadi_user=jk8585
 hies_user=u30044953
 
@@ -35,6 +41,14 @@ then
 	echo "Error: Cannot connect from ${src_server} to ${dest_server}"
 	exit 1
 fi
+
+# Function to sleep until number of background jobs is less than MAX_NUM_JOBS.
+function wait_for_jobs() {
+	while [ $(jobs | wc -l) -ge ${MAX_NUM_JOBS} ]
+	do
+		sleep 5
+	done
+}
 
 # # The new method, which recreates the old directory structure, but has the
 # # advantage of showing overall progress.
@@ -71,8 +85,18 @@ do
 					# Create destination directory if it doesn't already exist.
 					ssh "${dest_server}" mkdir -p "${dest_path}"
 
+					# Need to fork the command if parallel mode enabled.
+					PARA=
+					if [ PARALLEL -eq 1 ]
+					then
+						PARA=&
+					fi
+
+					# Sleep until number of ongoing downloads is less than max.
+					wait_for_jobs
+
 					# Copy the file.
-					ssh "${src_server}" "${cp_command}" "${src_file}" "${dest}"
+					ssh "${src_server}" "${cp_command}" "${src_file}" "${dest}" ${PARA}
 				done
 			done
 		done
