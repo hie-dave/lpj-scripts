@@ -52,7 +52,8 @@ fi
 
 # The new method, which recreates the old directory structure, but has the
 # advantage of showing overall progress.
-ssh "${src_server}" "${cp_command}" "${basepath_in}/*" "${dest_dir}/"
+ssh "${src_server}" ssh "${dest_server}" mkdir -p "${dest_dir}"
+ssh "${src_server}" "${cp_command}" "${basepath_in}/*" "${dest_server}:${dest_dir}/"
 
 # The older method, which creates a nice directory structure in dest. However,
 # this doesn't report overall progress (only per-file).
