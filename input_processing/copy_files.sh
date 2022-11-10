@@ -8,7 +8,7 @@ set -euo pipefail
 basepath_in="/g/data/at43/output/NARCliMi/UNSW"
 
 dave="/data/hiestorage/WorkingData/MEDLYN_GROUP/PROJECTS/dynamics_simulations"
-dest_dir="${dave}/narclim/forcing-raw"
+dest_dir="${dave}/narclim1.5/forcing-raw"
 
 globmods="CCCma-CanESM2 CSIRO-BOM-ACCESS1-0 CSIRO-BOM-ACCESS1-3" # global models
 regmods="UNSW-WRF360J UNSW-WRF360K"  # regional (downscaled) climate models 
@@ -17,10 +17,10 @@ vars="tasmin-bc tasmax-bc"  # variables
 version="v1"
 freq="day"
 
-gadi_user=dh7190
-hies_user=u30062639
+gadi_user=jk8585
+hies_user=u30044953
 
-src_server="${gadi_user}@gadi.nci.org.au"
+src_server="${gadi_user}@gadi-dm.nci.org.au"
 dest_server="${hies_user}@hie-storage.sstars.ws"
 cp_command="rsync -a --partial --info=progress2 --no-i-r"
 
@@ -52,11 +52,11 @@ do
 			for var in $vars
 			do
 				# create target directory
-				outpath=${basepath_out}/${scenario}/${var}
-				mkdir -p ${outpath}
+				outpath=${dest_dir}/${scenario}/${var}
+				#mkdir -p ${outpath}
 
 				# list files to copy
-				cp_files=$(ls ${basepath_in}/${globmod}/${scenario}/r1i1p1/${regmod}/${version}/${freq}/${var}/*.nc)
+				cp_files=$(echo ${basepath_in}/${globmod}/${scenario}/r1i1p1/${regmod}/${version}/${freq}/${var}/*.nc)
 
 				# copy files
 				for src_file in $cp_files
