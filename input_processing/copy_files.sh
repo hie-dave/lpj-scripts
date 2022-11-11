@@ -49,7 +49,10 @@ cp_command="rsync -a --partial"
 # Initialise progress file.
 printf "%d" 0 >"${PROGRESS_FILE}"
 
-echo "Running in dry-run mode. No files will be downloaded."
+if [ ${DRY_RUN} -eq 1 ]
+then
+	echo "Running in dry-run mode. No files will be downloaded."
+fi
 
 # Check if server connection is possible.
 if ! ssh "${src_server}" echo >/dev/null 2>&1
