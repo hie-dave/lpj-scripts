@@ -171,15 +171,14 @@ do
 						PARA=
 						if [ ${PARALLEL} -eq 1 ]
 						then
-							PARA=&
+							# Sleep until number of ongoing downloads is less than max.
+							wait_for_jobs
+
+							# Copy the file.
+							rsync --partial "${src_server}:${src_file}" "${dest}" && download_completed &
+						else
+							rsync --partial "${src_server}:${src_file}" "${dest}" && download_completed
 						fi
-
-						# Sleep until number of ongoing downloads is less than max.
-						wait_for_jobs
-
-						# Copy the file.
-						eval "${cp_command}" "${src_server}:${src_file}" "${dest}" \
-						&& download_completed ${PARA}
 					fi
 					total_downloaded=$(echo "${total_downloaded} + 1" | bc)
 				done
