@@ -55,17 +55,15 @@ then
 fi
 
 # Check if server connection is possible.
-if ! ssh "${src_server}" echo >/dev/null 2>&1
+SSH_LOG=$(mktemp .copy_files_ssh_XXX.log)
+if ! ssh "${src_server}" echo >"${SSH_LOG}" 2>&1
 then
 	echo "Error: Unable to login to src server ${src_server}."
+	cat "${SSH_LOG}"
+	rm "${SSH_LOG}"
 	exit 1
 fi
-
-if ! ssh "${src_server}" ssh "${dest_server}" echo >/dev/null 2>&1
-then
-	echo "Error: Cannot connect from ${src_server} to ${dest_server}"
-	exit 1
-fi
+rm "${SSH_LOG}"
 
 echo "Connection to server established."
 
