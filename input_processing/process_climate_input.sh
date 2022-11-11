@@ -24,13 +24,13 @@
 
 
 ## Settings
-cf_path_in="/scratch/hw83/jk8585/NARCliM1.5_orig"
-cf_path_out="/scratch/hw83/jk8585/NARCliM1.5_processed"
+cf_path_in="/home/drew/Downloads/narclim"
+cf_path_out="/home/drew/Downloads/narclim-out"
 
-globmods="CCCma-CanESM2 CSIRO-BOM-ACCESS1-0 CSIRO-BOM-ACCESS1-3" # global models
-regmods="UNSW-WRF360J UNSW-WRF360K"  # regional (downscaled) climate models 
-scenarios="historical rcp45 rcp85"   # climate scenarios
-vars="hurs pr rsds sfcWind tas"      # variables
+globmods="CSIRO-BOM-ACCESS1-0" # global models
+regmods="UNSW-WRF360J"  # regional (downscaled) climate models 
+scenarios="historical"   # climate scenarios
+vars="tasmax-bc tasmin-bc"      # variables
 version="v1"
 freq="day"
 lonlatbox="130.0,155.0,-40.0,-20.0"  # format: "lon1,lon2,lat1,lat2"
@@ -61,6 +61,9 @@ for var in $vars ; do
 						fi
 					done
 				fi
+
+				#                                            hurs_historical_CSIRO-BOM-ACCESS1-0_UNSW-WRF360J_daily_1951_2005.nc
+				out_pfx="${cf_path_out}/${scenario}/${var}/${var}_${scenario}_${globmod}_${regmod}_${freq}"
 
 				for ((year=${startyear};year<=${endyear};year++)) ; do
 					# get filename
@@ -95,13 +98,23 @@ for var in $vars ; do
 					esac
 
 					# 3) rename file and save at final location
-					mv tmp.nc ${cf_path_out}/${scenario}/${var}/${var}_${scenario}_${globmod}_${regmod}_${freq}_${year}.nc
+					mv tmp.nc "${out_pfx}_${year}.nc"
 
 					# cleanup
 					if [[ -f ${cf_path_out}/${scenario}/${var}/tmp_${year}.nc ]] ; then
 						rm ${cf_path_out}/${scenario}/${var}/tmp_${year}.nc
 					fi
 				done
+
+				# Merge annual files into a single file containing entire timeseries.
+				cdo mergetime ${out_pfx}*.nc ${out_pfx}_${startyear}_${endyear}.nc
+
+				# Remove intermediate files.
+				for ((year=${startyear};year<=${endyear};year++))
+				do
+					rm "${out_pfx}_${year}.nc"
+				done
+
 			done
 		done
 	done
