@@ -114,9 +114,9 @@ function get_time_str() {
 # (e.g. when writing to a log file), use newline.
 if [ -t 1 ]
 then
-	EOL=$'\r'
-else
 	EOL=$'\n'
+else
+	EOL=$'\r'
 fi
 
 # Called when a download is completed.
