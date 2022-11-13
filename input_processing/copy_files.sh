@@ -78,10 +78,7 @@ function wait_for_jobs() {
 # Total number of files to de downloaded. This is used for progress reporting.
 # It could be determined dynamically, but I leave that as an exercise to the
 # reader.
-total_files=2756
-
-# Start time of script execution.
-START_TIME=$(date +%s)
+total_files=1
 
 # # The new method, which recreates the old directory structure, but has the
 # # advantage of showing overall progress.
@@ -103,23 +100,27 @@ function unlock() {
 
 # Print a time in seconds in hh:mm:ss format.
 function get_time_str() {
-	TIME=${1}
-	HOURS=$(echo "${TIME} / 3600" | bc)
-	MINUTES=$(echo "(${TIME} - ${HOURS} * 3600) / 60" | bc)
-	SECONDS=$(echo "${TIME} - ${HOURS} * 3600 - ${MINUTES} * 60" | bc)
-	printf "%02d:%02d:%02d" ${HOURS} ${MINUTES} ${SECONDS}
+	local TIME=${1}
+	local HOURS=$(echo "${TIME} / 3600" | bc)
+	local MINUTES=$(echo "(${TIME} - ${HOURS} * 3600) / 60" | bc)
+	local SECONDS=$(echo "${TIME} - ${HOURS} * 3600 - ${MINUTES} * 60" | bc)
+
+	# If input is fractional, then SECONDS is likely to be fractional too.
+	# Therefore we need to use a floating point format string in printf.
+	printf "%02d:%02d:%02.0f" ${HOURS} ${MINUTES} ${SECONDS}
 }
 
 # Called when a download is completed.
 function download_completed() {
 	lock
 
+	# Get total number of completed downloads.
 	num_completed=$(echo `cat "${PROGRESS_FILE}"` + 1 | bc)
 
-	# Update progress file.
+	# Write this number to the progress file.
 	printf "%d" ${num_completed} >"${PROGRESS_FILE}"
 
-
+	# Calculate the new progress as proportion and percentage.
 	progress=$(echo "${num_completed} / ${total_files}" | bc -l)
 	progress_percent=$(echo "100 * ${progress}" | bc -l)
 
@@ -142,50 +143,92 @@ function download_completed() {
 # The older method, which creates a nice directory structure in dest. However,
 # this doesn't report overall progress (only per-file).
 total_downloaded=0
-for globmod in $globmods
-do
-    for regmod in $regmods
+
+# Function to download all files for a particular model/scenario/variable.
+# Required arguments:
+# 1. Global Model
+# 2. Regional Model
+# 3. Scenario Name
+# 4. Variable Name
+function download() {
+	globmod="${1}"
+	regmod="${2}"
+	scenario="${3}"
+	var="${4}"
+
+	if [ ${DRY_RUN} -ne 1 ]
+	then
+		# Create destination directory if it doesn't exist.
+		dest_path=${dest_dir}/${scenario}/${var}
+		echo ${dest_path}
+		mkdir -p ${dest_path}
+	fi
+
+	# List files on the source server to be copied.
+	cp_files=$(ssh "${src_server}" echo ${basepath_in}/${globmod}/${scenario}/r1i1p1/${regmod}/${version}/${freq}/${var}/*.nc)
+
+	for src_file in $cp_files
 	do
-		for scenario in $scenarios
+		if [ ${DRY_RUN} -ne 1 ]
+		then
+			# Destination path.
+			dest="${dest_path}/$(basename "${src_file}")"
+
+			# Create destination directory if it doesn't already exist.
+			mkdir -p "${dest_path}"
+
+			# Need to fork the command if parallel mode enabled.
+			PARA=
+			if [ ${PARALLEL} -eq 1 ]
+			then
+				# Sleep until number of ongoing downloads is less than max.
+				wait_for_jobs
+
+				# Copy the file.
+				rsync --partial "${src_server}:${src_file}" "${dest}" && download_completed &
+			else
+				rsync --partial "${src_server}:${src_file}" "${dest}" && download_completed
+			fi
+		fi
+		total_downloaded=$(echo "${total_downloaded} + 1" | bc)
+	done
+}
+
+function download_files() {
+	for globmod in $globmods
+	do
+		for regmod in $regmods
 		do
-			for var in $vars
+			for scenario in $scenarios
 			do
-				# Create destination directory if it doesn't exist.
-				dest_path=${dest_dir}/${scenario}/${var}
-				mkdir -p ${dest_path}
-
-				# List files on the source server to be copied.
-				cp_files=$(ssh "${src_server}" echo ${basepath_in}/${globmod}/${scenario}/r1i1p1/${regmod}/${version}/${freq}/${var}/*.nc)
-
-				for src_file in $cp_files
+				for var in $vars
 				do
-					# Destination path.
-					dest="${dest_path}/$(basename "${src_file}")"
-
-					if [ ${DRY_RUN} -ne 1 ]
-					then
-						# Create destination directory if it doesn't already exist.
-						mkdir -p "${dest_path}"
-
-						# Need to fork the command if parallel mode enabled.
-						PARA=
-						if [ ${PARALLEL} -eq 1 ]
-						then
-							# Sleep until number of ongoing downloads is less than max.
-							wait_for_jobs
-
-							# Copy the file.
-							rsync --partial "${src_server}:${src_file}" "${dest}" && download_completed &
-						else
-							rsync --partial "${src_server}:${src_file}" "${dest}" && download_completed
-						fi
-					fi
-					total_downloaded=$(echo "${total_downloaded} + 1" | bc)
+					download "${globmod}" "${regmod}" "${scenario}" "${var}"
 				done
 			done
 		done
-    done
-done
+	done
+}
 
+# First, count the number of files. This is used for progress reporting.
+printf "Counting files..."
+DRY_RUN=1 download_files
+total_files=${total_downloaded}
+echo "found ${total_files} to download."
+echo "Commencing downloads"
+
+# Start time of script execution.
+START_TIME=$(date +%s)
+total_downloaded=0
+
+# Now download the files for real.
+download_files
+
+# Wait for any ongoing background downloads.
+wait
+
+# Print completion message.
 printf "\n"
 echo "Successfully downloaded ${total_downloaded} files."
+
+rm "${PROGRESS_FILE}"
