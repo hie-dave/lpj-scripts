@@ -110,6 +110,15 @@ function get_time_str() {
 	printf "%02d:%02d:%02.0f" ${HOURS} ${MINUTES} ${SECONDS}
 }
 
+# Progress reporting with \r when stdout is attached to a terminal. Otherwise
+# (e.g. when writing to a log file), use newline.
+if [ -t 1 ]
+then
+	EOL=$'\r'
+else
+	EOL=$'\n'
+fi
+
 # Called when a download is completed.
 function download_completed() {
 	lock
@@ -132,9 +141,10 @@ function download_completed() {
 	REMAINING_TIME=$(echo "${TOTAL_TIME} - ${ELAPSED_TIME}" | bc -l)
 
 	# Report progress to user.
-	printf "Working: %.2f%%; elapsed: %s; remaining: %s\r" \
+	printf "Working: %.2f%%; elapsed: %s; remaining: %s%s" \
 	${progress_percent} $(get_time_str ${ELAPSED_TIME}) \
-	$(get_time_str ${REMAINING_TIME})
+	$(get_time_str ${REMAINING_TIME}) \
+	${EOL}
 
 	# Release mutex lock.
 	unlock
