@@ -170,7 +170,6 @@ function download() {
 	then
 		# Create destination directory if it doesn't exist.
 		dest_path=${dest_dir}/${scenario}/${var}
-		echo ${dest_path}
 		mkdir -p ${dest_path}
 	fi
 
