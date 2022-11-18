@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 ## Script to process climate input data for LPJ-GUESS.
 ## Note that this applies to NARCliM1.5 data only. Also note that
