@@ -44,7 +44,7 @@ num_regional_models=$(echo "${regmods}" | wc -w)
 num_scenarios=$(echo "${scenarios}" | wc -w)
 num_vars=$(echo "${vars}" | wc -w)
 
-num_iter=$(echo "${num_global_models} * ${num_regional_models} * ${num_scenarios} * ${num_vars}" | bc)
+total_iter=$(echo "${num_global_models} * ${num_regional_models} * ${num_scenarios} * ${num_vars}" | bc)
 i=0
 
 # Report current progess to the user. Requires 2 arguments:
