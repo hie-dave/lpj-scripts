@@ -365,8 +365,8 @@ cp "${CONFIG_FILE}" "${INPUTS_DIR}/"
 while IFS=$'\n' read ins_file
 do
   # If multiple .ins files with the same name are imported from
-  # different directories, this will fail with a suitable message.
-  cp -n "${ins_file}" "${INPUTS_DIR}/"
+  # different directories, this will overwrite them.
+  cp "${ins_file}" "${INPUTS_DIR}/"
 
   # Convert .ins file import paths to use just filename so it gets resolved to
   # the file that has been copied into the local directory.
