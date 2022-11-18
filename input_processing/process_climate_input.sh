@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-
+#
 ## Script to process climate input data for LPJ-GUESS.
 ## Note that this applies to NARCliM1.5 data only. Also note that
 ## is highly dataset-specific and requirements might completely different for
 ## another data set.
+#
+# Fail if any command fails.
+set -euo pipefail
 
 ## Juergen Knauer
 ## June 2022
@@ -36,6 +39,29 @@ freq="day"
 lonlatbox="130.0,155.0,-40.0,-20.0"  # format: "lon1,lon2,lat1,lat2"
 # output name format: var_scenario_globmod_regmod_freq_year.nc
 
+num_global_models=$(echo "${globmods}" | wc -w)
+num_regional_models=$(echo "${regmods}" | wc -w)
+num_scenarios=$(echo "${scenarios}" | wc -w)
+num_vars=$(echo "${vars}" | wc -w)
+
+num_iter=$(echo "${num_global_models} * ${num_regional_models} * ${num_scenarios} * ${num_vars}" | bc)
+i=0
+
+# Report current progess to the user. Requires 2 arguments:
+# 1. Current iteration number.
+# 2. Total number of iterations to be completed.
+function report_progress() {
+	progress=$(echo "100 * ${1} / ${2}" | bc -l)
+	# Use \r for line endings if terminal is attached to stdout. Otherwise \n
+	# (e.g. if output has been redirected to a file, \r doesn't work well).
+	if [ -t 1 ]; then
+		local sep='\r'
+	else
+		local sep='\n'
+	fi
+	printf "Working: %.2f%%\r" ${progress}
+}
+
 ### Start processing
 for var in $vars ; do
     for scenario in $scenarios ; do
@@ -49,7 +75,7 @@ for var in $vars ; do
 		mkdir -p ${cf_path_out}/${scenario}/${var}
 		for globmod in $globmods ; do
 			for regmod in $regmods ; do
-
+				report_progress ${i} ${total_iter}
 				# 1) bring to annual resolution (if necessary)
 				if [[ "${globmod}" == "CSIRO-BOM-ACCESS1-3" && "${scenario}" == "historical" ]] ; then
 					for ((year=${startyear};year<=${endyear};year++)) ; do
@@ -73,8 +99,12 @@ for var in $vars ; do
 						cf_file=${cf_path_in}/${scenario}/${var}/${var}_NARCliMi_${globmod}_${scenario}_r1i1p1_${regmod}_${version}_${freq}_${year}0101-${year}1231.nc
 					fi
 
+					report_progress ${i} ${total_iter}
+
 					# 1) crop file
 					cdo -s sellonlatbox,${lonlatbox} ${cf_file} tmp.nc
+
+					report_progress ${i} ${total_iter}
 
 					# 2) correct units and change names
 					case "$var" in
@@ -97,6 +127,8 @@ for var in $vars ; do
 					#;;
 					esac
 
+					report_progress ${i} ${total_iter}
+
 					# 3) rename file and save at final location
 					mv tmp.nc "${out_pfx}_${year}.nc"
 
@@ -109,12 +141,16 @@ for var in $vars ; do
 				# Merge annual files into a single file containing entire timeseries.
 				cdo mergetime ${out_pfx}*.nc ${out_pfx}_${startyear}_${endyear}.nc
 
+				report_progress ${i} ${total_iter}
+
 				# Remove intermediate files.
 				for ((year=${startyear};year<=${endyear};year++))
 				do
 					rm "${out_pfx}_${year}.nc"
 				done
 
+				# Increment i.
+				i=$(echo "${i} + 1" | bc)
 			done
 		done
 	done
