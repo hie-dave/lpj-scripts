@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 from argparse import ArgumentParser
 import datetime, multiprocessing, numpy, os, ozflux_common, re, threading
-import traceback
+import traceback, sys
 from ozflux_logging import *
 from netCDF4 import Dataset, Variable
 from enum import IntEnum
@@ -30,16 +30,40 @@ PARALLEL_AGGREGATION = True
 #######################################################################
 
 # Name of the single variable created in the output file.
-OUT_VARIABLE_FORCING_NAME = "forcing_data"
+OUT_VARIABLE_LSM = "forcing_data"
 
 # Data format in output file.
-OUT_VARIABLE_FORCING_FORMAT = "f8"
+FORMAT_FLOAT = "f8"
 
 # Name of the forcings dimension in the output file.
 OUT_DIM_NAME_FORCINGS = "forcings"
 
 # Name of the time dimension in the output file.
 OUT_DIM_NAME_TIME = "time"
+
+# Name of the longitude dimension in the output file.
+OUT_DIM_NAME_LON = "longitude"
+
+# Name of the latitude dimension in the output file.
+OUT_DIM_NAME_LAT = "latitude"
+
+# Name of the mean temperature variable created in the dailygrass output file.
+DG_OUT_VARIABLE_NAME_TEMP = "tav"
+
+# Name of the insol variable created in the dailygrass output file.
+DG_OUT_VARIABLE_NAME_INSOL = "insol"
+
+# Name of the prec variable created in the dailygrass output file.
+DG_OUT_VARIABLE_NAME_PREC = "prec"
+
+# Name of the co2 variable created in the dailygrass output file.
+DG_OUT_VARIABLE_NAME_CO2 = "co2"
+
+# Name of the tmax variable created in the dailygrass output file.
+DG_OUT_VARIABLE_NAME_TMAX = "tmax"
+
+# Name of the tmin variable created in the dailygrass output file.
+DG_OUT_VARIABLE_NAME_TMIN = "tmin"
 
 # Variable names for the output file.
 outdata_forcing_names = {
@@ -114,24 +138,25 @@ units_synonyms = [
 	["K", "k"],
 	["m/s", "ms^-1"],
 	["Pa", "pa"],
-	["kg/kg", "", "mm/mm", "m/m"] # debatable
+	["kg/kg", "", "mm/mm", "m/m"], # debatable
+	["ppm", "umol/mol"],
+	["degC", "°C", "degrees C"]
 ]
 
-# Whether a particular variable's units are a rate (true) or a magnitude
-# (false) in the input data. This is used when aggregating from one
-# timestep to another.
-indata_units_are_rate = {
-	Forcing.SWDOWN: True,
-	Forcing.PARDF: True,
-	Forcing.PARDR: True,
-	Forcing.LWDOWN: True,
-	Forcing.PRECLS: False, # precip in mm
-	Forcing.PRECCO: False, # precip in mm
-	Forcing.TAIR: True,
-	Forcing.UAIR: True,
-	Forcing.VAIR: True,
-	Forcing.QAIR: True,
-	Forcing.PSURF: True,
+# These are the functions used to aggregate data temporally, when converting
+# from one timestep to another.
+indata_aggregators = {
+	Forcing.SWDOWN: numpy.mean,
+	Forcing.PARDF: numpy.mean,
+	Forcing.PARDR: numpy.mean,
+	Forcing.LWDOWN: numpy.mean,
+	Forcing.PRECLS: numpy.sum, # precip in mm
+	Forcing.PRECCO: numpy.sum, # precip in mm
+	Forcing.TAIR: numpy.mean,
+	Forcing.UAIR: numpy.mean,
+	Forcing.VAIR: numpy.mean,
+	Forcing.QAIR: numpy.mean,
+	Forcing.PSURF: numpy.mean,
 }
 
 # g to kg. This is not really used except as an example.
@@ -152,6 +177,12 @@ MINUTES_PER_HOUR = 60
 # Number of seconds per hour.
 SECONDS_PER_HOUR = SECONDS_PER_MINUTE * MINUTES_PER_HOUR
 
+# Number of hours per day.
+HOURS_PER_DAY = 24
+
+# Number of days per year.
+DAYS_PER_YEAR = 365 # ha
+
 # Recipes for unit conversions.
 #
 # The keys are a tuple of two strings:
@@ -170,7 +201,9 @@ SECONDS_PER_HOUR = SECONDS_PER_MINUTE * MINUTES_PER_HOUR
 units_conversions = {
 	("g", "kg"): lambda x, _: x * G_TO_KG, # (as an example)
 	("mm", "kg/m2/s"): lambda x, t: x / t, # Assuming mm means mm per timestep
+	("kg/m2/s", "mm"): lambda x, t: t * x,
 	("degC", "K"): lambda x, _: x + DEG_C_TO_K,
+	("K", "degC"): lambda x, _: x - DEG_C_TO_K,
 	("kPa", "Pa"): lambda x, _: x * KPA_TO_PA
 }
 
@@ -190,13 +223,32 @@ class Options:
 	@param timestep: Desired output timestep, in minutes.
 	"""
 	def __init__(self, log : LogLevel, files: list[str], odir: str, \
-		prog: bool, parallel: bool, timestep: int):
+		prog: bool, parallel: bool, timestep: int, out_type: OutputType):
 		self.log_level = log
 		self.files = files
 		self.out_dir = odir
 		self.report_progress = prog
 		self.parallel = parallel
 		self.timestep = timestep
+		self.out_type = OutputType(out_type)
+
+class ForcingVariable():
+	def __init__(self, in_name: str, out_name: str, out_units: str
+		, aggregator: Callable[[list[float]], float], lbound: float
+		, ubound: float):
+		self.in_name = in_name
+		self.out_name = out_name
+		self.out_units = out_units
+		self.aggregator = aggregator
+		self.lbound = lbound
+		self.ubound = ubound
+	def new(forcing: Forcing, out_name: str, out_units: str):
+		return ForcingVariable(indata_forcing_names[forcing]
+			, out_name
+			, out_units
+			, indata_aggregators[forcing]
+			, forcing_bounds[forcing][0]
+			, forcing_bounds[forcing][1])
 
 def six_digit_string(x: float) -> str:
 	"""
@@ -224,39 +276,10 @@ def get_units(var_id: Variable) -> str:
 	"""
 	return var_id.units
 
-def copy_data(in_file: Dataset, variable: Variable, timestep: int, \
+def write_data_lsm(variable: Variable, data: list[float], forcing: Forcing, \
 	progress_callback: Callable[[float], None]):
 	"""
-	Copy all data from the input file to the output variable.
-
-	@param input file: Opened .nc file.
-	@param variable: The newly-created and initialised forcing variable.
-	@param timestep: Desired output timestep in minutes.
-	@param progress_callback: Progress reporting function.
-	"""
-	# 0. Get variable IDs.
-	i = 0
-	for forcing in Forcing:
-		if forcing == Forcing.NFORCINGS:
-			break
-		out_name = outdata_forcing_names[forcing]
-		log_diagnostic("----- %s -----" % out_name)
-		log_diagnostic("Reading %s data" % out_name)
-		read_proportion = 0.66
-		write_proportion = 1 - read_proportion
-		data = get_data(in_file, forcing, timestep, lambda p: \
-			progress_callback((i + p * read_proportion) / Forcing.NFORCINGS))
-
-		# 3. Write data to out file.
-		log_diagnostic("Writing %s data" % out_name)
-		write_data(variable, data, forcing, lambda p: progress_callback( \
-			(i + read_proportion + write_proportion * p) / Forcing.NFORCINGS))
-		i += 1
-
-def write_data(variable: Variable, data: list[float], forcing: Forcing, \
-	progress_callback: Callable[[float], None]):
-	"""
-	Write data to the output file.
+	Write data to the output file (LSM mode).
 
 	@param variable: Variable in the output file, to which data will be written.
 	@param data: A column of data to be written.
@@ -264,14 +287,84 @@ def write_data(variable: Variable, data: list[float], forcing: Forcing, \
 	@progress_callback: Called to report progress.
 	"""
 	n = len(data)
-	for i in range(0, n, CHUNK_SIZE):
+
+	# Always use at least this many chunks.
+	MIN_NUM_CHUNKS = 10
+
+	chunk_size = min(CHUNK_SIZE, n / MIN_NUM_CHUNKS)
+	for i in range(0, n, chunk_size):
 		row = i
-		upper = min(n, i + CHUNK_SIZE)
+		upper = min(n, i + chunk_size)
 		col = forcing
 		variable[row:upper, col] = data[i:upper]
 		progress_callback(i / n)
 
 	log_debug("Successfully wrote %d items of %s" % (n, forcing))
+
+def floats_equal(x: float, y: float) -> bool:
+	"""
+	Check if two floating point numbers are equal.
+
+	@param x: The first number.
+	@param y: The second number.
+	"""
+	EPSILON = 1e-10
+	return abs(x - y) < EPSILON
+
+def index_of(xarr: list[float], x: float) -> int:
+	"""
+	Return the index of x in the given list, or -1 if not found.
+
+	@param xarr: A list of floats.
+	@param x: The value for which to search.
+	"""
+	for i in range(0, len(xarr)):
+		if floats_equal(x, xarr[i]):
+			return i
+	return -1
+
+def get_coord_indices(nc_out: Dataset, lon: float, lat: float) \
+	-> tuple[float, float]:
+	"""
+	Get the indices of the longitude and latitude, adding them to the file if
+	they do not already exist. The return value is a tuple of
+	(longitud_index, latitude_index).
+
+	@param nc_out: The output NetCDF file.
+	@param lon: Longitude.
+	@param lat: Latitude.
+	"""
+	var_lon = nc_out.variables[OUT_DIM_NAME_LON]
+	var_lat = nc_out.variables[OUT_DIM_NAME_LAT]
+	index_lon = index_of(var_lon, lon)
+	if index_lon == -1:
+		index_lon = len(var_lon)
+		var_lon[index_lon] = lon
+	index_lat = index_of(var_lat, lat)
+	if index_lat == -1:
+		index_lat = len(var_lat)
+		var_lat[index_lat] = lat
+	return (index_lon, index_lat)
+
+def write_data_dg(nc_out: Dataset, var_name: str, data: list[float], lon: float
+	, lat: float, progress_cb: Callable[[float], None]):
+	"""
+	Write data to the output file (dailygrass mode).
+
+	@param variable: Variable in the output file to which data will be written.
+	@param data: A timeseries of data for a variable for a gridcell.
+	@param lon: Longitude of the data.
+	@param lat: Latitude of the data.
+	@param progress_cb: Called to report progress.
+	"""
+	n = len(data)
+	chunk_size = get_steps_per_year(opts.timestep)
+	for i in range(0, n, chunk_size):
+		upper = min(n, i + chunk_size)
+		(ilon, ilat) = get_coord_indices(nc_out, lon, lat)
+		# Dimension order is time,lat,lon
+		nc_out.variables[var_name][i:upper, ilat, ilon] = data[i:upper]
+		progress_cb((i + chunk_size) / n)
 
 def zeroes(n: int) -> list[float]:
 	"""
@@ -279,8 +372,8 @@ def zeroes(n: int) -> list[float]:
 	"""
 	return [0.0] * n
 
-def aggregate(data: list[float], start: int, stop: int, chunk_size: int
-	, aggregator: Callable[[list[float]], float]
+def aggregate(data: list[float], start: int, stop: int, chunk_size: int \
+	, aggregator: Callable[[list[float]], float] \
 	, progress_cb: Callable[[float], None]) -> list[float]:
 	"""
 	Aggregate the values in the specified dataset between the start and
@@ -313,8 +406,8 @@ def aggregate(data: list[float], start: int, stop: int, chunk_size: int
 			progress_cb(i / niter)
 	return result
 
-def temporal_aggregation(in_file: Dataset, data: list[float], forcing: Forcing\
-	, output_timestep: float
+def temporal_aggregation(in_file: Dataset, data: list[float] \
+	, output_timestep: float, aggregator: Callable[[list[float]], float]
 	, progress_callback: Callable[[float], None]) -> list[float]:
 	"""
 	Aggregate the input data to destination timestep.
@@ -323,6 +416,7 @@ def temporal_aggregation(in_file: Dataset, data: list[float], forcing: Forcing\
 	@param data: Data to be aggregated.
 	@param forcing: The variable represented by the data.
 	@param output_timestep: The desired output timestep.
+	@param aggregator: The function used to aggregate values (typically mean or sum).
 	@param progress_callback: Function used for progress reporting.
 	"""
 	# todo: support other timesteps (both source and target)?
@@ -353,13 +447,8 @@ timestep (%d)"
 		m = "Strange start time: '%s'. Data must start on the hour or half-hour"
 		raise ValueError(m % in_file.time_coverage_start)
 
-	m = "Values are %s and therefore we will take the %s over each timestep"
-	unit_kind = "rate" if indata_units_are_rate[forcing] else "magnitude"
-	agg_kind = "mean" if indata_units_are_rate[forcing] else "sum"
-	agg_func = numpy.mean if indata_units_are_rate[forcing] else numpy.sum
 	# Guaranteed to be an integer division, given the above error checks.
 	timestep_ratio = output_timestep // input_timestep
-	log_debug(m % (unit_kind, agg_kind))
 
 	out: list[float]
 	out = []
@@ -415,7 +504,7 @@ timestep (%d)"
 			stop = len(data) if i == ncpu - 1 else start + chunk_size
 
 			# Create the thread object.
-			t = Aggregator(data, start, stop, timestep_ratio, i, agg_func)
+			t = Aggregator(data, start, stop, timestep_ratio, i, aggregator)
 
 			# Start the thread and store the object reference for later.
 			t.start()
@@ -427,7 +516,7 @@ timestep (%d)"
 			t.join()
 			out.extend(t.result)
 	else:
-		out = aggregate(data, 0, len(data), timestep_ratio, agg_func
+		out = aggregate(data, 0, len(data), timestep_ratio, aggregator
 		, progress_callback)
 
 	n_end = len(out)
@@ -476,6 +565,9 @@ def units_match(unit0: str, unit1: str) -> str:
 	Check if the two units are equivalent.
 	E.g. m/s and ms^-1 would return true, but not m and kg.
 	"""
+	if unit0 == unit1:
+		return True
+
 	for case in units_synonyms:
 		if unit0 in case and unit1 in case:
 			return True
@@ -606,17 +698,24 @@ def bounds_checks(data: list[float], xmin: float, xmax: float) -> list[float]:
 			data[i] = xmax
 	return data
 
-def get_data(in_file: Dataset, forcing: Forcing \
+def get_data(in_file: Dataset \
+	, in_name: str
+	, out_name: str \
 	, output_timestep: int \
+	, in_units: str \
+	, out_units: str \
+	, aggregator: Callable[[list[float]], float] \
+	, lower_bound: float \
+	, upper_bound: float \
 	, progress_cb: Callable[[float], None]) -> list[float]:
 		"""
 		Get all data from the input file and convert it to a format
 		suitable for the output file.
-		"""
-		# 0. Get variable ID from variable name.
-		in_name = indata_forcing_names[forcing]
-		out_name = outdata_forcing_names[forcing]
 
+		@param in_name: Name of the variable in the input file.
+		@param out_name: Name of the variable in the output file.
+		@param output_timestep: Output timestep width in minutes.
+		"""
 		# Some variables are not translated directly into the output
 		# file and can be ignored (ie filled with zeroes).
 		if in_name == "zero":
@@ -631,8 +730,8 @@ def get_data(in_file: Dataset, forcing: Forcing \
 			raise ValueError(m % in_name)
 
 		var_id = in_file.variables[in_name]
-		in_units = get_units(var_id)
-		out_units = forcing_units[forcing]
+		# in_units = get_units(var_id)
+		# out_units = forcing_units[forcing]
 		matching_units = units_match(in_units, out_units)
 
 		# About 1/3 of time to fix units (if units need fixing).
@@ -650,11 +749,11 @@ def get_data(in_file: Dataset, forcing: Forcing \
 			- units_time_proportion \
 			- fixnan_time_proportion
 
-		# 1. Read data from netcdf file.
+		# Read data from netcdf file.
 		data = read_data(var_id, lambda p:progress_cb(read_time_proportion * p))
 		log_debug("Successfully read %d values from netcdf" % len(data))
 
-		# 2. Replace NaN with a mean of nearby values.
+		# Replace NaN with a mean of nearby values.
 		log_diagnostic("Removing NaNs")
 		step_start = read_time_proportion
 		step_size = fixnan_time_proportion
@@ -662,16 +761,16 @@ def get_data(in_file: Dataset, forcing: Forcing \
 		, lambda p: progress_cb(step_start + step_size * p))
 		step_start += fixnan_time_proportion
 
-		# 2. Change timestep to something suitable for lpj-guess.
+		# Change timestep to something suitable for lpj-guess.
 		log_diagnostic("Aggregating %s to hourly timestep" % out_name)
-		data = temporal_aggregation(in_file, data, forcing, output_timestep
+		data = temporal_aggregation(in_file, data, output_timestep, aggregator
 		, lambda p: progress_cb(step_start + aggregation_time_proportion * p))
 		step_start += aggregation_time_proportion
 
-		# 3. Trim data to the start of a year.
+		# Trim data to the start of a year.
 		data = trim_to_start_year(in_file, output_timestep, data)
 
-		# 4. Ensure units are correct.
+		# Ensure units are correct.
 		if not matching_units:
 			log_diagnostic("Converting %s from %s to %s" % \
 				(out_name, in_units, out_units))
@@ -681,13 +780,231 @@ def get_data(in_file: Dataset, forcing: Forcing \
 		else:
 			log_diagnostic("No units conversion required for %s" % out_name)
 
-		data = bounds_checks(data, *forcing_bounds[forcing])
+		data = bounds_checks(data, lower_bound, upper_bound)
 
 		# Done!
 		return data
 
-def process_file(in_file: str, out_file: str, timestep: int, \
+def copy_data_lsm(in_file: Dataset, variable: Variable, timestep: int, \
 	progress_callback: Callable[[float], None]):
+	"""
+	Copy all data from the input file to the output variable.
+
+	@param input file: Opened .nc file.
+	@param variable: The newly-created and initialised forcing variable.
+	@param timestep: Desired output timestep in minutes.
+	@param progress_callback: Progress reporting function.
+	"""
+	# 0. Get variable IDs.
+	i = 0
+	for forcing in Forcing:
+		if forcing == Forcing.NFORCINGS:
+			break
+		out_name = outdata_forcing_names[forcing]
+		log_diagnostic("----- %s -----" % out_name)
+		log_diagnostic("Reading %s data" % out_name)
+		read_proportion = 0.66
+		write_proportion = 1 - read_proportion
+		
+		data = get_data(in_file, indata_forcing_names[forcing]
+		, outdata_forcing_names[forcing]
+		, timestep
+		, get_units(in_file.variables[indata_forcing_names[forcing]])
+		, forcing_units[forcing]
+		, indata_aggregators[forcing]
+		*forcing_bounds[forcing]
+		, lambda p: \
+			progress_callback((i + p * read_proportion) / Forcing.NFORCINGS))
+
+		# 3. Write data to out file.
+		log_diagnostic("Writing %s data" % out_name)
+		write_data_lsm(variable, data, forcing, lambda p: progress_callback( \
+			(i + read_proportion + write_proportion * p) / Forcing.NFORCINGS))
+		i += 1
+
+def copy_data_dailygrass(nc_in: Dataset, nc_out: Dataset, timestep: int
+	, progress_cb: Callable[[float], None]):
+	"""
+	Copy data to the output file in dailygrass format.
+
+	@param nc_in: Input NetCDF file.
+	@param nc_out: Output NetCDF file.
+	@param timestep: Output timestep length in minutes.
+	@param progress_cb: Progress callback function.
+	"""
+	i = 0
+
+	# Output units for temperature variables.
+	temp_out_units = "degC"
+
+	# Lower and upper bounds for temperature variables.
+	temp_min_degc = -100
+	temp_max_degc = 100
+
+	# Variables to be added to output file.
+	variables = [
+	ForcingVariable(indata_forcing_names[Forcing.TAIR]
+		, DG_OUT_VARIABLE_NAME_TEMP, temp_out_units, numpy.mean, temp_min_degc
+		, temp_max_degc)
+	, ForcingVariable.new(Forcing.SWDOWN, DG_OUT_VARIABLE_NAME_INSOL, "W/m2")
+	, ForcingVariable.new(Forcing.PRECLS, DG_OUT_VARIABLE_NAME_PREC, "mm")
+	, ForcingVariable("CO2", DG_OUT_VARIABLE_NAME_CO2, "ppm", numpy.mean, 250
+		, 900)
+	]
+
+	step_width = opts.timestep / MINUTES_PER_HOUR
+
+	# If generating a daily file, need to include tmax/tmin variables in output.
+	if step_width == 24:
+		name_tav = indata_forcing_names[Forcing.TAIR]
+		variables.append(ForcingVariable(name_tav, DG_OUT_VARIABLE_NAME_TMAX, temp_out_units
+			, numpy.amax, temp_min_degc, temp_max_degc))
+		variables.append(ForcingVariable(name_tav, DG_OUT_VARIABLE_NAME_TMIN, temp_out_units
+			, numpy.amin, temp_min_degc, temp_max_degc))
+
+	# 2/3 of time to read
+	read_prop = 0.66
+	write_prop = 1 - read_prop
+
+	lon = float(nc_in.longitude)
+	lat = float(nc_in.latitude)
+
+	n = 0
+	for var in variables:
+		log_diagnostic("----- %s -----" % var.in_name)
+		log_diagnostic("Reading %s data")
+		in_units = get_units(nc_in.variables[var.in_name])
+
+		data = get_data(nc_in, var.in_name, var.out_name, timestep, in_units \
+		, var.out_units, var.aggregator, var.lbound, var.ubound \
+		, lambda p: progress_cb( (i + p * read_prop) / len(variables)))
+
+		n = max(n, len(data))
+
+		log_diagnostic("Writing %s data")
+		write_data_dg(nc_out, var.out_name, data, lon, lat, lambda p: \
+		progress_cb( (i + read_prop + write_prop * p) / len(variables)))
+
+		# Copy a few attributes.
+		in_var = nc_in.variables[var.in_name]
+		out_var = nc_out.variables[var.out_name]
+
+		out_var.units = var.out_units
+		if 'standard_name' in in_var.ncattrs():
+			out_var.standard_name = in_var.standard_name
+		else:
+			out_var.standard_name = var.in_name
+		out_var.long_name = in_var.long_name
+
+		i += 1
+
+	# Copy data into time variable. This is # of hours since start date.
+	# So it starts at 0 and increments by timestep width (in hours).
+	# Write data in chunks to speed things up a bit.
+	timesteps = [i * step_width for i in range(n)]
+	for i in range(0, n, CHUNK_SIZE):
+		up = min(n, i + CHUNK_SIZE)
+		nc_out.variables[OUT_DIM_NAME_TIME][i:up] = timesteps[i:up]
+
+def get_steps_per_year(timestep: int) -> int:
+	"""
+	Calculate the number of timesteps in a year.
+	"""
+	step_width_hour = opts.timestep / MINUTES_PER_HOUR
+	return int(HOURS_PER_DAY / step_width_hour * DAYS_PER_YEAR)
+
+def create_dailygrass_variables(nc: Dataset):
+	"""
+	Create the variables required for dailygrass mode.
+
+	@param nc: The output netcdf file.
+	"""
+	dims = (OUT_DIM_NAME_TIME, OUT_DIM_NAME_LAT, OUT_DIM_NAME_LON)
+	chunksizes = (get_steps_per_year(opts.timestep), 1, 1)
+	format = FORMAT_FLOAT
+
+	create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_TEMP, format, dims, chunksizes)
+	create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_INSOL, format, dims, chunksizes)
+	create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_PREC, format, dims, chunksizes)
+	create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_CO2, format, dims, chunksizes)
+	# When generating daily outputs, we need to include tmax/tmin.
+	if opts.timestep == 1440:
+		create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_TMAX, format, dims, chunksizes)
+		create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_TMIN, format, dims, chunksizes)
+
+def create_dim_if_not_exists(nc: Dataset, name: str):
+	"""
+	Create an unlimited dimension in the NetCDF file if it does not already
+	exist.
+
+	@param nc: The NetCDF file.
+	@param name: Name of the dimension.
+	"""
+	if not name in nc.dimensions:
+		nc.createDimension(name)
+
+def create_var_if_not_exists(nc: Dataset, name: str, format: str
+	, dims: tuple[str], chunksizes: tuple[int] = None):
+	"""
+	Create a variable in the NetCDF file if it does not already exist.
+
+	@param nc: The NetCDF file.
+	@param name: Name of the variable.
+	@param format: Format of the variable.
+	@param dims: Dimensions of the variable.
+	"""
+	if not name in nc.variables:
+		nc.createVariable(name, format, dims, compression = 'zlib'
+		, chunksizes = chunksizes)
+
+def prepare_outfile(nc: Dataset, out_type: OutputType):
+	"""
+	Create the variables in the output NetCDF file. The variables created
+	will depend to some degree on the output type.
+	"""
+	# 0. Create dimensions in output file.
+	log_debug("Creating output dimensions")
+	if (out_type == OutputType.LSM):
+		# LSM mode needs a forcings dimension.
+		nc.createDimension(OUT_DIM_NAME_FORCINGS, Forcing.NFORCINGS)
+	else:
+		# Dailygrass mode needs lon/lat dimensions (as it's gridded).
+		create_dim_if_not_exists(nc, OUT_DIM_NAME_LON)
+		create_dim_if_not_exists(nc, OUT_DIM_NAME_LAT)
+		create_var_if_not_exists(nc, OUT_DIM_NAME_LON
+			, FORMAT_FLOAT, (OUT_DIM_NAME_LON))
+		create_var_if_not_exists(nc, OUT_DIM_NAME_LAT
+			, FORMAT_FLOAT, (OUT_DIM_NAME_LAT))
+		var_lon = nc.variables[OUT_DIM_NAME_LON]
+		var_lat = nc.variables[OUT_DIM_NAME_LAT]
+		var_lon.long_name = "longitude"
+		var_lat.long_name = "latitude"
+		var_lon.standard_name = "longitude"
+		var_lat.standard_name = "latitude"
+		var_lon.units = "degree_east"
+		var_lat.units = "degree_north"
+
+	# Time dimension is needed in both LSM and daily_grass mode.
+	create_dim_if_not_exists(nc, OUT_DIM_NAME_TIME)
+
+	if out_type == OutputType.DAILY_GRASS:
+		create_var_if_not_exists(nc, OUT_DIM_NAME_TIME, FORMAT_FLOAT
+			, (OUT_DIM_NAME_TIME))
+
+	# 1. Create variables in output file.
+	log_debug("Creating output variables")
+	if (out_type == OutputType.LSM):
+		# LSM mode only requires a single variable.
+		nc.createVariable(OUT_VARIABLE_LSM \
+		, FORMAT_FLOAT \
+		, (OUT_DIM_NAME_TIME,OUT_DIM_NAME_FORCINGS), compression = 'zlib')
+	else:
+		# I've created a separate function for the dailygrass variables to
+		# improve readability in this function.
+		create_dailygrass_variables(nc)
+
+def process_file(in_file: str, out_file: str, timestep: int \
+	, out_type: OutputType, progress_callback: Callable[[float], None]):
 	"""
 	Read the input file and generate an output file at the specified
 	path in LPJ-Guess (lsminput) format.
@@ -698,7 +1015,7 @@ def process_file(in_file: str, out_file: str, timestep: int, \
 	"""
 	log_information("Processing %s..." % in_file)
 	log_debug("Opening output file %s for writing" % out_file)
-	with Dataset(out_file, "w", format=ozflux_common.NC_FORMAT) as nc_out:
+	with Dataset(out_file, "r+", format=ozflux_common.NC_FORMAT) as nc_out:
 		log_debug("Opening input file %s for reading" % in_file)
 		with Dataset(in_file, "r", format=ozflux_common.NC_FORMAT) as nc_in:
 			# Quick sanity check of time step.
@@ -710,21 +1027,15 @@ def process_file(in_file: str, out_file: str, timestep: int, \
 				m = "Invalid input timestep: %d. Must be an integer multiple of output timestep (%d)"
 				raise ValueError(m % (instep, timestep))
 
-			# 0. Create dimensions in output file.
-			log_debug("Creating output dimensions")
-			nc_out.createDimension(OUT_DIM_NAME_FORCINGS, Forcing.NFORCINGS)
-			nc_out.createDimension(OUT_DIM_NAME_TIME, None)
-
-			# 1. Create variables in output file.
-			log_debug("Creating output variable")
-			out_variable = nc_out.createVariable( \
-				OUT_VARIABLE_FORCING_NAME \
-				, OUT_VARIABLE_FORCING_FORMAT \
-				, (OUT_DIM_NAME_TIME,OUT_DIM_NAME_FORCINGS))
+			prepare_outfile(nc_out, out_type)
 
 			# 2. Copy data into this variable.
 			log_debug("Migrating data")
-			copy_data(nc_in, out_variable, timestep, progress_callback)
+			if out_type == OutputType.LSM:
+				copy_data_lsm(nc_in, nc_out.variables[OUT_VARIABLE_LSM]
+					, timestep, progress_callback)
+			else:
+				copy_data_dailygrass(nc_in, nc_out, timestep, progress_callback)
 
 			# 3. Metadata for output file.
 			nc_out.time_step = str(timestep) # in minutes.
@@ -738,6 +1049,12 @@ def process_file(in_file: str, out_file: str, timestep: int, \
 			site_name = os.path.basename(in_file)
 			site_name = os.path.splitext(site_name)[0]
 			nc_out.site_name = site_name
+			if opts.out_type == OutputType.DAILY_GRASS:
+				var_time = nc_out.variables[OUT_DIM_NAME_TIME]
+				var_time.calendar = "gregorian"
+				var_time.long_name = OUT_DIM_NAME_TIME
+				var_time.standard_name = OUT_DIM_NAME_TIME
+				var_time.units = "hours since %s" % nc_out.time_coverage_start
 			for forcing in Forcing:
 				if forcing == Forcing.NFORCINGS:
 					break
@@ -761,11 +1078,13 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
 	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel (highly experimental, use at own risk)")
 	parser.add_argument("-t", "--timestep", type = int, required = True, help = "Output timestep in minutes")
+	parser.add_argument("-c", "--output-compatibility", type = int, required = True, help = "Output compatibility type (0 = daily_grass, 1 = LSM)")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + VERSION)
 
 	parsed = parser.parse_args(argv[1:])
 	return Options(parsed.verbosity, parsed.files, parsed.out_dir
-	, parsed.show_progress, parsed.parallel, parsed.timestep)
+	, parsed.show_progress, parsed.parallel, parsed.timestep
+	, parsed.output_compatibility)
 
 def main(opts: Options):
 	"""
@@ -825,7 +1144,13 @@ def main(opts: Options):
 
 	for i in range(len(opts.files)):
 		infile = opts.files[i]
-		outfile = os.path.join(opts.out_dir, get_output_filename(infile))
+		out_file_name = os.path.basename(infile)
+		if opts.out_type == OutputType.LSM:
+			out_file_name = get_output_filename(infile)
+
+		outfile = os.path.join(opts.out_dir, out_file_name)
+		if os.path.exists(outfile):
+			os.remove(outfile)
 
 		if opts.parallel:
 			# Run task in a background thread.
@@ -834,7 +1159,7 @@ def main(opts: Options):
 			threads.append(t)
 		else:
 			# Run task in this thread.
-			process_file(infile, outfile, opts.timestep
+			process_file(infile, outfile, opts.timestep, opts.out_type
 			, lambda p: progress_reporter(p, i))
 
 	# Wait for threads to exit.
