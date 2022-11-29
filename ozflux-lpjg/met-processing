@@ -850,6 +850,7 @@ def copy_data_dailygrass(nc_in: Dataset, nc_out: Dataset, timestep: int
 	, ForcingVariable.new(Forcing.PRECLS, DG_OUT_VARIABLE_NAME_PREC, "mm")
 	, ForcingVariable("CO2", DG_OUT_VARIABLE_NAME_CO2, "ppm", numpy.mean, 250
 		, 900)
+	, ForcingVariable("VPD", "vpd", "kPa", numpy.mean, 0, 100)
 	]
 
 	step_width = opts.timestep / MINUTES_PER_HOUR
