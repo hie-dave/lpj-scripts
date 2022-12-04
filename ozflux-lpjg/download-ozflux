@@ -148,6 +148,9 @@ def download(site: str, out_dir: str, progress_report: typing.Callable[[float],N
 
 	file_name = url.split("/")[-1]
 	out_file = "%s/%s" % (out_dir, file_name)
+	if os.path.exists(out_file):
+		print("Skipping %s as it already exists" % site)
+		return
 	progress_report(0)
 	resp = requests.get(url, stream = True)
 	total = int(resp.headers.get("Content-Length"))
