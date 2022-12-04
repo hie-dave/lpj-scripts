@@ -69,6 +69,17 @@
 			"justMyCode": true
 		},
 		{
+			"name": "download-ozflux",
+			"type": "python",
+			"request": "launch",
+			"program": "${workspaceRoot}/ozflux-lpjg/download-ozflux",
+			"args": [
+				"${workspaceRoot}/ozflux-lpjg/inputs/met/raw"
+			],
+			"console": "integratedTerminal",
+			"justMyCode": true
+		},
+		{
 			"name": "met-processing",
 			"type": "python",
 			"request": "launch",
