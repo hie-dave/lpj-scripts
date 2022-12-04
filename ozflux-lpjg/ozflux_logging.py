@@ -15,6 +15,10 @@ class LogLevel(enum.IntEnum):
 	DIAGNOSTIC = 4,
 	DEBUG = 5
 
+class OutputType(enum.IntEnum):
+	DAILY_GRASS = 0,
+	LSM = 1
+
 # Configuration options, which can be set via one of the below
 # functions. Best not to set these directly from user code.
 _log_level: LogLevel

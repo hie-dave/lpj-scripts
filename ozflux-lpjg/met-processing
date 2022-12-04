@@ -59,6 +59,9 @@ DG_OUT_VARIABLE_NAME_PREC = "prec"
 # Name of the co2 variable created in the dailygrass output file.
 DG_OUT_VARIABLE_NAME_CO2 = "co2"
 
+# Name of the VPD variable created in the dailygrass output file.
+DG_OUT_VARIABLE_NAME_VPD = "vpd"
+
 # Name of the tmax variable created in the dailygrass output file.
 DG_OUT_VARIABLE_NAME_TMAX = "tmax"
 
@@ -850,7 +853,7 @@ def copy_data_dailygrass(nc_in: Dataset, nc_out: Dataset, timestep: int
 	, ForcingVariable.new(Forcing.PRECLS, DG_OUT_VARIABLE_NAME_PREC, "mm")
 	, ForcingVariable("CO2", DG_OUT_VARIABLE_NAME_CO2, "ppm", numpy.mean, 250
 		, 900)
-	, ForcingVariable("VPD", "vpd", "kPa", numpy.mean, 0, 100)
+	, ForcingVariable("VPD", DG_OUT_VARIABLE_NAME_VPD, "kPa", numpy.mean, 0, 100)
 	]
 
 	step_width = opts.timestep / MINUTES_PER_HOUR
@@ -928,6 +931,8 @@ def create_dailygrass_variables(nc: Dataset):
 	create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_INSOL, format, dims, chunksizes)
 	create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_PREC, format, dims, chunksizes)
 	create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_CO2, format, dims, chunksizes)
+	create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_VPD, format, dims, chunksizes)
+
 	# When generating daily outputs, we need to include tmax/tmin.
 	if opts.timestep == 1440:
 		create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_TMAX, format, dims, chunksizes)
