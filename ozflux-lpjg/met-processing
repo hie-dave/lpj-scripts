@@ -975,12 +975,14 @@ def prepare_outfile(nc: Dataset, out_type: OutputType):
 		nc.createDimension(OUT_DIM_NAME_FORCINGS, Forcing.NFORCINGS)
 	else:
 		# Dailygrass mode needs lon/lat dimensions (as it's gridded).
+		# Chunk size for geographic (ie lat/lon) variables.
+		geo_chunk_size = (1,)
 		create_dim_if_not_exists(nc, OUT_DIM_NAME_LON)
 		create_dim_if_not_exists(nc, OUT_DIM_NAME_LAT)
 		create_var_if_not_exists(nc, OUT_DIM_NAME_LON
-			, FORMAT_FLOAT, (OUT_DIM_NAME_LON))
+			, FORMAT_FLOAT, (OUT_DIM_NAME_LON), geo_chunk_size)
 		create_var_if_not_exists(nc, OUT_DIM_NAME_LAT
-			, FORMAT_FLOAT, (OUT_DIM_NAME_LAT))
+			, FORMAT_FLOAT, (OUT_DIM_NAME_LAT), geo_chunk_size)
 		var_lon = nc.variables[OUT_DIM_NAME_LON]
 		var_lat = nc.variables[OUT_DIM_NAME_LAT]
 		var_lon.long_name = "longitude"
@@ -995,7 +997,7 @@ def prepare_outfile(nc: Dataset, out_type: OutputType):
 
 	if out_type == OutputType.DAILY_GRASS:
 		create_var_if_not_exists(nc, OUT_DIM_NAME_TIME, FORMAT_FLOAT
-			, (OUT_DIM_NAME_TIME))
+			, (OUT_DIM_NAME_TIME), (get_steps_per_year(opts.timestep),))
 
 	# 1. Create variables in output file.
 	log_debug("Creating output variables")
