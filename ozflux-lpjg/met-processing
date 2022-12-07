@@ -25,6 +25,12 @@ CHUNK_SIZE = 16384
 # any reason to set this to false, which is why this isn't a CLI option.
 PARALLEL_AGGREGATION = True
 
+# If this is true, the latitude/longitude dimensions will be created unlimited
+# in size. This is not recommended, as it slows down reading of the NetCDF. When
+# this is false, the dimensions will have exactly the length required, which is
+# the number of input files. (This assumes 1 grid point per input file.)
+UNLIMITED_DIMS = False
+
 #######################################################################
 # Constants related to .nc format/processing
 #######################################################################
@@ -341,11 +347,17 @@ def get_coord_indices(nc_out: Dataset, lon: float, lat: float) \
 	var_lat = nc_out.variables[OUT_DIM_NAME_LAT]
 	index_lon = index_of(var_lon, lon)
 	if index_lon == -1:
-		index_lon = len(var_lon)
+		if nc_out.dimensions[OUT_DIM_NAME_LON].isunlimited():
+			index_lon = len(var_lon)
+		else:
+			index_lon = numpy.ma.flatnotmasked_edges(var_lon)[0]
 		var_lon[index_lon] = lon
 	index_lat = index_of(var_lat, lat)
 	if index_lat == -1:
-		index_lat = len(var_lat)
+		if nc_out.dimensions[OUT_DIM_NAME_LAT].isunlimited():
+			index_lat = len(var_lat)
+		else:
+			index_lat = numpy.ma.flatnotmasked_edges(var_lat)[0]
 		var_lat[index_lat] = lat
 	return (index_lon, index_lat)
 
@@ -938,7 +950,7 @@ def create_dailygrass_variables(nc: Dataset):
 		create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_TMAX, format, dims, chunksizes)
 		create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_TMIN, format, dims, chunksizes)
 
-def create_dim_if_not_exists(nc: Dataset, name: str):
+def create_dim_if_not_exists(nc: Dataset, name: str, size: int = 0):
 	"""
 	Create an unlimited dimension in the NetCDF file if it does not already
 	exist.
@@ -947,7 +959,7 @@ def create_dim_if_not_exists(nc: Dataset, name: str):
 	@param name: Name of the dimension.
 	"""
 	if not name in nc.dimensions:
-		nc.createDimension(name)
+		nc.createDimension(name, size)
 
 def create_var_if_not_exists(nc: Dataset, name: str, format: str
 	, dims: tuple[str], chunksizes: tuple[int] = None):
@@ -977,8 +989,9 @@ def prepare_outfile(nc: Dataset, out_type: OutputType):
 		# Dailygrass mode needs lon/lat dimensions (as it's gridded).
 		# Chunk size for geographic (ie lat/lon) variables.
 		geo_chunk_size = (1,)
-		create_dim_if_not_exists(nc, OUT_DIM_NAME_LON)
-		create_dim_if_not_exists(nc, OUT_DIM_NAME_LAT)
+		dim_size = 0 if UNLIMITED_DIMS else len(opts.files)
+		create_dim_if_not_exists(nc, OUT_DIM_NAME_LON, dim_size)
+		create_dim_if_not_exists(nc, OUT_DIM_NAME_LAT, dim_size)
 		create_var_if_not_exists(nc, OUT_DIM_NAME_LON
 			, FORMAT_FLOAT, (OUT_DIM_NAME_LON), geo_chunk_size)
 		create_var_if_not_exists(nc, OUT_DIM_NAME_LAT
