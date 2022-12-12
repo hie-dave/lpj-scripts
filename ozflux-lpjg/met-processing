@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 from argparse import ArgumentParser
-import datetime, multiprocessing, numpy, os, ozflux_common, re, threading, time
+import datetime, numpy, os, ozflux_common, re, threading, time
+import multiprocessing, multiprocessing.connection
 import traceback, sys
 from ozflux_logging import *
 from netCDF4 import Dataset, Variable
@@ -1194,7 +1195,7 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("files", nargs = "+", help = "Input .nc files to be processed")
 	parser.add_argument("-o", "--out-dir", required = True, help = "Path to the output directory. Processed files will be saved with the same file name into this directory")
 	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
-	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel (highly experimental, use at own risk)")
+	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel")
 	parser.add_argument("-t", "--timestep", type = int, required = True, help = "Output timestep in minutes")
 	parser.add_argument("-c", "--output-compatibility", type = int, required = True, help = "Output compatibility type (0 = daily_grass, 1 = LSM)")
 	parser.add_argument("--compression-level", type = int, nargs = "?", default = 4, help = "Compression quality for output file [0, 9]. 0 = none, 1 = fastest compression, largest filesize, 9 = slowest compression, smallest filesize (default 4)")
@@ -1228,7 +1229,7 @@ def main(opts: Options):
 	file_weightings = [x / total_weight for x in file_weightings]
 
 	# These are only required in parallel mode.
-	threads = []
+	processes = []
 	mutex = multiprocessing.BoundedSemaphore(1)
 
 	def progress_reporter(progress: float, file_idx: int):
@@ -1254,15 +1255,33 @@ def main(opts: Options):
 			aggregate_progress = sum(overall_progress) / sum(file_weightings)
 			log_progress(aggregate_progress)
 
-	class ProcessingThread(threading.Thread):
-		def __init__(self, infile: str, outfile: str, idx: int):
-			threading.Thread.__init__(self)
+	class ProcessingTask(multiprocessing.Process):
+		"""
+		A sub-process which will process a single file, with process reporting
+		via a pipe back to the main process.
+
+		Using multiple processes because the hdf5 library is not threadsafe.
+		"""
+		def __init__(self, infile: str, outfile: str, idx: int, timestep: int
+		, output_type: OutputType
+		, progress_writer: multiprocessing.connection.Connection):
+			multiprocessing.Process.__init__(self)
 			self.index = idx
 			self.infile = infile
 			self.outfile = outfile
+			self.timestep = timestep
+			self.output_type = output_type
+			self.progress_writer = progress_writer
 		def run(self):
-			process_file(self.infile, self.outfile, opts.timestep, opts.out_type
-			, lambda p: progress_reporter(p, self.index))
+			# Do main processing.
+			process_file(self.infile, self.outfile, self.timestep
+			, self.output_type
+			, lambda p: self.progress_writer.send((p, self.index)))
+
+			# Close progress reporter pipe.
+			self.progress_writer.close()
+
+	readers: list[multiprocessing.connection.Connection] = []
 
 	for i in range(len(opts.files)):
 		infile = opts.files[i]
@@ -1275,18 +1294,49 @@ def main(opts: Options):
 			os.remove(outfile)
 
 		if opts.parallel:
-			# Run task in a background thread.
-			t = ProcessingThread(infile, outfile, i)
-			t.start()
-			threads.append(t)
+			# Run task in a background process (hdf5/netcdf is not thread-safe).
+
+			# Create a pipe for 1-way communication (progress reporting).
+			reader, writer = multiprocessing.connection.Pipe(duplex = False)
+			# Put the read pipe handle into the readers list.
+			readers.append(reader)
+
+			# Start the process.
+			p = ProcessingTask(infile, outfile, i, opts.timestep, opts.out_type
+				, writer)
+			p.start()
+
+			# Close the writable end of the pipe now, to be sure that p is the
+			# only process which owns a handle for it. This ensures that when p
+			# closes its handle for the writable end, wait() will promptly
+			# report the readable end as being ready.
+			writer.close()
+
+			# Store the process handle for later use.
+			processes.append(p)
 		else:
-			# Run task in this thread.
+			# Run task in the current thread.
 			process_file(infile, outfile, opts.timestep, opts.out_type
 			, lambda p: progress_reporter(p, i))
 
-	# Wait for threads to exit.
-	for t in threads:
-		t.join()
+	if opts.parallel:
+		while readers:
+			for reader in readers:
+				try:
+					msg = None
+					if reader.poll():
+						msg = reader.recv()
+				except EOFError:
+					readers.remove(reader)
+				else:
+					if msg is not None:
+						(progress, process_index) = msg
+						progress_reporter(progress, process_index)
+
+		# Wait for processes to exit (actually, they should have all finished by
+		# the time we get to here).
+		for p in processes:
+			p.join()
 
 if __name__ == "__main__":
 	# Parse CLI args
