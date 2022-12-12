@@ -1326,12 +1326,10 @@ def main(opts: Options):
 					msg = None
 					if reader.poll():
 						msg = reader.recv()
-				except EOFError:
-					readers.remove(reader)
-				else:
-					if msg is not None:
 						(progress, process_index) = msg
 						progress_reporter(progress, process_index)
+				except EOFError:
+					readers.remove(reader)
 
 		# Wait for processes to exit (actually, they should have all finished by
 		# the time we get to here).
