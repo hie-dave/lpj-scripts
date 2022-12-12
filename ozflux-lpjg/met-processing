@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 from argparse import ArgumentParser
-import datetime, multiprocessing, numpy, os, ozflux_common, re, threading
+import datetime, multiprocessing, numpy, os, ozflux_common, re, threading, time
 import traceback, sys
 from ozflux_logging import *
 from netCDF4 import Dataset, Variable
@@ -220,6 +220,31 @@ units_conversions = {
 # End of .nc constants
 #######################################################################
 
+# Global estimates of how much time it takes to perform various tasks (as a
+# proportion of total time spent in get_data() function [0, 1]). These get
+# updated during program execution and are used for progress reporting.
+get_data_read_prop = 0.5
+get_data_fixnan_prop = 0.05
+get_data_t_agg_prop = 0.35
+get_data_unit_prop = 0.05
+get_data_bounds_prop = 0.05
+
+# Global time estimates for reading vs writing data, as a proportion of time
+# spent reading (which includes aggregation, unit conversion, etc) vs writing.
+global_read_prop = 0.95
+global_write_prop = 0.05
+
+# Global mutex
+mutex = multiprocessing.BoundedSemaphore(1)
+
+# get_data() time proportion lock. Used to synchronise access to the
+# get_data_*_prop variables.
+gd_tp_lock = multiprocessing.BoundedSemaphore(1)
+
+# copy_data_*() time proportion lock. Used to synchronise access to the
+# global_*_prop variables.
+cd_tp_lock = multiprocessing.BoundedSemaphore(1)
+
 class Options:
 	"""
 	Class for storing CLI arguments from the user.
@@ -230,15 +255,20 @@ class Options:
 	@param prog: True to write progress messages, 0 otherwise.
 	@param parallel: True to process files in parallel.
 	@param timestep: Desired output timestep, in minutes.
+	@param compression_level: Compression quality for output file [0, 9]. 0 = none, 1 = fastest compression, largest filesize, 9 = slowest compression, smallest filesize.
+	@param compression_type: Compression algorithm to be used (default 'zlib').
 	"""
 	def __init__(self, log : LogLevel, files: list[str], odir: str, \
-		prog: bool, parallel: bool, timestep: int, out_type: OutputType):
+		prog: bool, parallel: bool, timestep: int, out_type: OutputType,
+		compression_level: int, compression_type: str):
 		self.log_level = log
 		self.files = files
 		self.out_dir = odir
 		self.report_progress = prog
 		self.parallel = parallel
 		self.timestep = timestep
+		self.compression_level = compression_level
+		self.compression_type = compression_type
 		self.out_type = OutputType(out_type)
 
 class ForcingVariable():
@@ -484,8 +514,6 @@ timestep (%d)"
 
 		global thread_progress
 		thread_progress = [0.0] * ncpu
-		global mutex
-		mutex = multiprocessing.BoundedSemaphore(1)
 		def update_progress(progress: float, tid: int):
 			global thread_progress
 			global mutex
@@ -693,7 +721,8 @@ def remove_nans(data: list[float]
 			progress_cb(i / n)
 	return data
 
-def bounds_checks(data: list[float], xmin: float, xmax: float) -> list[float]:
+def bounds_checks(data: list[float], xmin: float, xmax: float
+	, progress_cb: Callable[[float], None]) -> list[float]:
 	"""
 	Bounds checking. Any values in the list which exceed theses bounds will be
 	set to the boundary value.
@@ -701,8 +730,10 @@ def bounds_checks(data: list[float], xmin: float, xmax: float) -> list[float]:
 	@param data: The data to be checked.
 	@param xmin: Lower boundary.
 	@param xmax: Upper boundary.
+	@param progress_cb: Progress reporting function.
 	"""
-	for i in range(len(data)):
+	n = len(data)
+	for i in range(n):
 		if data[i] < xmin:
 			m = "Value %.2f in row %d exceeds lower bound of %.2f"
 			log_debug(m % (data[i], i, xmin))
@@ -711,6 +742,8 @@ def bounds_checks(data: list[float], xmin: float, xmax: float) -> list[float]:
 			m = "Value %.2f in row %d exceeds upper bound of %.2f"
 			log_debug(m % (data[i], i, xmax))
 			data[i] = xmax
+		if i % PROGRESS_CHUNK_SIZE == 0:
+			progress_cb(i / n)
 	return data
 
 def get_data(in_file: Dataset \
@@ -749,43 +782,55 @@ def get_data(in_file: Dataset \
 		# out_units = forcing_units[forcing]
 		matching_units = units_match(in_units, out_units)
 
+		global get_data_read_prop, get_data_fixnan_prop, get_data_t_agg_prop
+		global get_data_unit_prop, get_data_bounds_prop
+
 		# About 1/3 of time to fix units (if units need fixing).
-		units_time_proportion = 0 if matching_units else 1 / 3
+		units_time_proportion = 0 if matching_units else get_data_unit_prop
+
+		prop_tot = get_data_read_prop + get_data_fixnan_prop + \
+			get_data_t_agg_prop + units_time_proportion + get_data_bounds_prop
 
 		# About 2/3 of remaining time to read the data from input file.
-		read_time_proportion = 0.05
+		read_time_proportion = get_data_read_prop / prop_tot
 
 		# 5% of time to remove NaNs. Need to check this.
-		fixnan_time_proportion = 0.05
+		fixnan_time_proportion = get_data_fixnan_prop / prop_tot
 
 		# Rest of time is spent aggregating over the timestep.
-		aggregation_time_proportion = 1 \
-			- read_time_proportion \
-			- units_time_proportion \
-			- fixnan_time_proportion
+		aggregation_time_proportion = get_data_t_agg_prop / prop_tot
+
+		bounds_time_prop = get_data_bounds_prop / prop_tot
 
 		# Read data from netcdf file.
+		read_start = time.time()
 		data = read_data(var_id, lambda p:progress_cb(read_time_proportion * p))
+		read_tot = time.time() - read_start
 		log_debug("Successfully read %d values from netcdf" % len(data))
 
 		# Replace NaN with a mean of nearby values.
 		log_diagnostic("Removing NaNs")
 		step_start = read_time_proportion
 		step_size = fixnan_time_proportion
+		fixnan_start = time.time()
 		data = remove_nans(data
 		, lambda p: progress_cb(step_start + step_size * p))
 		step_start += fixnan_time_proportion
+		fixnan_tot = time.time() - fixnan_start
 
 		# Change timestep to something suitable for lpj-guess.
 		log_diagnostic("Aggregating %s to hourly timestep" % out_name)
+		t_agg_start = time.time()
 		data = temporal_aggregation(in_file, data, output_timestep, aggregator
 		, lambda p: progress_cb(step_start + aggregation_time_proportion * p))
 		step_start += aggregation_time_proportion
+		t_agg_tot = time.time() - t_agg_start
 
 		# Trim data to the start of a year.
 		data = trim_to_start_year(in_file, output_timestep, data)
 
 		# Ensure units are correct.
+		unit_start = time.time()
 		if not matching_units:
 			log_diagnostic("Converting %s from %s to %s" % \
 				(out_name, in_units, out_units))
@@ -794,8 +839,35 @@ def get_data(in_file: Dataset \
 					step_start + units_time_proportion * p))
 		else:
 			log_diagnostic("No units conversion required for %s" % out_name)
+		unit_tot = time.time() - unit_start
 
-		data = bounds_checks(data, lower_bound, upper_bound)
+		step_start += units_time_proportion
+
+		bounds_start = time.time()
+		data = bounds_checks(data, lower_bound, upper_bound, lambda p: \
+			progress_cb(step_start + bounds_time_prop * p))
+		bounds_tot = time.time() - bounds_start
+
+		time_tot = read_tot + fixnan_tot + t_agg_tot + bounds_tot + unit_tot
+		read_prop = 100.0 * read_tot / time_tot
+		fixnan_prop = 100.0 * fixnan_tot / time_tot
+		t_agg_prop = 100.0 * t_agg_tot / time_tot
+		bounds_prop = 100.0 * bounds_tot / time_tot
+		unit_prop = 100.0 * unit_tot / time_tot
+
+		# Update global time estimates of all activities.
+		if opts.parallel:
+			global gd_tp_lock
+			gd_tp_lock.acquire()
+		get_data_read_prop = read_prop
+		get_data_fixnan_prop = fixnan_prop
+		get_data_t_agg_prop = t_agg_prop
+		get_data_bounds_prop = bounds_prop
+		if not matching_units:
+			get_data_unit_prop = unit_prop
+		if opts.parallel:
+			# global gd_tp_lock
+			gd_tp_lock.release()
 
 		# Done!
 		return data
@@ -878,30 +950,52 @@ def copy_data_dailygrass(nc_in: Dataset, nc_out: Dataset, timestep: int
 		variables.append(ForcingVariable(name_tav, DG_OUT_VARIABLE_NAME_TMIN, temp_out_units
 			, numpy.amin, temp_min_degc, temp_max_degc))
 
-	# 2/3 of time to read
-	read_prop = 0.66
-	write_prop = 1 - read_prop
+	# 95% of time to read
+	global global_read_prop, global_write_prop
 
 	lon = float(nc_in.longitude)
 	lat = float(nc_in.latitude)
 
 	n = 0
 	for var in variables:
+		if opts.parallel:
+			global cd_tp_lock
+			cd_tp_lock.acquire()
+		read_prop = global_read_prop
+		write_prop = global_write_prop
+		if opts.parallel:
+			cd_tp_lock.release()
+
 		log_diagnostic("----- %s -----" % var.in_name)
 		log_diagnostic("Reading %s data")
 		in_units = get_units(nc_in.variables[var.in_name])
 
+		read_start = time.time()
 		data = get_data(nc_in, var.in_name, var.out_name, timestep, in_units \
 		, var.out_units, var.aggregator, var.lbound, var.ubound \
 		, lambda p: progress_cb( (i + p * read_prop) / len(variables)))
+		read_time = time.time() - read_start
 
 		n = max(n, len(data))
 
 		log_diagnostic("Writing %s data")
+		write_start = time.time()
 		write_data_dg(nc_out, var.out_name, data, lon, lat, lambda p: \
 		progress_cb( (i + read_prop + write_prop * p) / len(variables)))
+		write_time = time.time() - write_start
 
-		# Copy a few attributes.
+		# Bookkeeping.
+		total_time = read_time + write_time
+		if opts.parallel:
+			cd_tp_lock.acquire()
+		global_read_prop = read_time / total_time
+		global_write_prop = write_time / total_time
+		log_debug("Read: %.2f%%, Write: = %.2f%%" % \
+			(global_read_prop, global_write_prop))
+		if opts.parallel:
+			cd_tp_lock.release()
+
+		# Copy a few attributes.f
 		in_var = nc_in.variables[var.in_name]
 		out_var = nc_out.variables[var.out_name]
 
@@ -971,8 +1065,11 @@ def create_var_if_not_exists(nc: Dataset, name: str, format: str
 	@param format: Format of the variable.
 	@param dims: Dimensions of the variable.
 	"""
+	compression = None if opts.compression_level == 0 else opts.compression_type
+	log_diagnostic("Compression = %s L%d"%(compression, opts.compression_level))
 	if not name in nc.variables:
-		nc.createVariable(name, format, dims, compression = 'zlib'
+		nc.createVariable(name, format, dims, compression = compression
+		, complevel = opts.compression_level
 		, chunksizes = chunksizes)
 
 def prepare_outfile(nc: Dataset, out_type: OutputType):
@@ -1100,12 +1197,15 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel (highly experimental, use at own risk)")
 	parser.add_argument("-t", "--timestep", type = int, required = True, help = "Output timestep in minutes")
 	parser.add_argument("-c", "--output-compatibility", type = int, required = True, help = "Output compatibility type (0 = daily_grass, 1 = LSM)")
+	parser.add_argument("--compression-level", type = int, nargs = "?", default = 4, help = "Compression quality for output file [0, 9]. 0 = none, 1 = fastest compression, largest filesize, 9 = slowest compression, smallest filesize (default 4)")
+	parser.add_argument("--compression-type", default = "zlib", help = "Compression algorithm to be used (default 'zlib')")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + VERSION)
 
 	parsed = parser.parse_args(argv[1:])
 	return Options(parsed.verbosity, parsed.files, parsed.out_dir
 	, parsed.show_progress, parsed.parallel, parsed.timestep
-	, parsed.output_compatibility)
+	, parsed.output_compatibility, parsed.compression_level
+	, parsed.compression_type)
 
 def main(opts: Options):
 	"""
@@ -1161,7 +1261,8 @@ def main(opts: Options):
 			self.infile = infile
 			self.outfile = outfile
 		def run(self):
-			process_file(self.infile, self.outfile, lambda p: progress_reporter(p, self.index))
+			process_file(self.infile, self.outfile, opts.timestep, opts.out_type
+			, lambda p: progress_reporter(p, self.index))
 
 	for i in range(len(opts.files)):
 		infile = opts.files[i]
