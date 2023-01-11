@@ -75,6 +75,15 @@ DG_OUT_VARIABLE_NAME_TMAX = "tmax"
 # Name of the tmin variable created in the dailygrass output file.
 DG_OUT_VARIABLE_NAME_TMIN = "tmin"
 
+# Name of the pressure variable created in the dailygrass output file.
+DG_OUT_VARIABLE_NAME_PS = "ps"
+
+# Atmospheric pressure lower bound (Pa). todo: is this too conservative?
+LBOUND_PS = 50000
+
+# Atmospheric pressure upper bound (Pa). todo: is this too conservative?
+UBOUND_PS = 150000
+
 # Variable names for the output file.
 outdata_forcing_names = {
 	Forcing.SWDOWN: "swdown",
@@ -939,6 +948,8 @@ def copy_data_dailygrass(nc_in: Dataset, nc_out: Dataset, timestep: int
 	, ForcingVariable("CO2", DG_OUT_VARIABLE_NAME_CO2, "ppm", numpy.mean, 250
 		, 900)
 	, ForcingVariable("VPD", DG_OUT_VARIABLE_NAME_VPD, "kPa", numpy.mean, 0, 100)
+	, ForcingVariable("ps", DG_OUT_VARIABLE_NAME_PS, "Pa", numpy.mean, LBOUND_PS
+		, UBOUND_PS)
 	]
 
 	step_width = opts.timestep / MINUTES_PER_HOUR
@@ -1039,6 +1050,7 @@ def create_dailygrass_variables(nc: Dataset):
 	create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_PREC, format, dims, chunksizes)
 	create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_CO2, format, dims, chunksizes)
 	create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_VPD, format, dims, chunksizes)
+	create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_PS, format, dims, chunksizes)
 
 	# When generating daily outputs, we need to include tmax/tmin.
 	if opts.timestep == 1440:
