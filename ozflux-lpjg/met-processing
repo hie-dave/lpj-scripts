@@ -418,7 +418,7 @@ def write_data_dg(nc_out: Dataset, var_name: str, data: list[float], lon: float
 		upper = min(n, i + chunk_size)
 		(ilon, ilat) = get_coord_indices(nc_out, lon, lat)
 		# Dimension order is time,lat,lon
-		nc_out.variables[var_name][i:upper, ilat, ilon] = data[i:upper]
+		nc_out.variables[var_name][ilat, ilon, i:upper] = data[i:upper]
 		progress_cb(upper / n)
 
 def zeroes(n: int) -> list[float]:
@@ -1041,8 +1041,8 @@ def create_dailygrass_variables(nc: Dataset):
 
 	@param nc: The output netcdf file.
 	"""
-	dims = (OUT_DIM_NAME_TIME, OUT_DIM_NAME_LAT, OUT_DIM_NAME_LON)
-	chunksizes = (get_steps_per_year(opts.timestep), 1, 1)
+	dims = (OUT_DIM_NAME_LAT, OUT_DIM_NAME_LON, OUT_DIM_NAME_TIME)
+	chunksizes = (1, 1, get_steps_per_year(opts.timestep))
 	format = FORMAT_FLOAT
 
 	create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_TEMP, format, dims, chunksizes)
