@@ -6,17 +6,22 @@ import traceback, sys
 from ozflux_logging import *
 from netCDF4 import Dataset, Variable
 from enum import IntEnum
-from ozflux_common import Forcing
+from ozflux_common import LsmVariables
 from sys import argv
 from typing import Callable
 from ozflux_netcdf import *
 
-# Semantic version number.
-VERSION = "1.0"
-
 #######################################################################
 # Constants related to .nc format/processing
 #######################################################################
+
+def lsm_var(forcing: LsmVariables, out_name: str, out_units: str) -> ForcingVariable:
+	return ForcingVariable(ozflux_var_names[forcing]
+		, out_name
+		, out_units
+		, indata_aggregators[forcing]
+		, forcing_bounds[forcing][0]
+		, forcing_bounds[forcing][1])
 
 # Name of the single variable created in the output file.
 OUT_VARIABLE_LSM = "forcing_data"
@@ -58,33 +63,33 @@ LBOUND_PS = 50000
 UBOUND_PS = 150000
 
 # Variable names for the output file.
-outdata_forcing_names = {
-	Forcing.SWDOWN: "swdown",
-	Forcing.PARDF: "pardf",
-	Forcing.PARDR: "pardr",
-	Forcing.LWDOWN: "lwdown",
-	Forcing.PRECLS: "precls",
-	Forcing.PRECCO: "precco",
-	Forcing.TAIR: "tair",
-	Forcing.UAIR: "uair",
-	Forcing.VAIR: "vair",
-	Forcing.QAIR: "qair",
-	Forcing.PSURF: "psurf"
+lsm_var_names_out = {
+	LsmVariables.SWDOWN: "swdown",
+	LsmVariables.PARDF: "pardf",
+	LsmVariables.PARDR: "pardr",
+	LsmVariables.LWDOWN: "lwdown",
+	LsmVariables.PRECLS: "precls",
+	LsmVariables.PRECCO: "precco",
+	LsmVariables.TAIR: "tair",
+	LsmVariables.UAIR: "uair",
+	LsmVariables.VAIR: "vair",
+	LsmVariables.QAIR: "qair",
+	LsmVariables.PSURF: "psurf"
 }
 
 # Variable names for the ozflux input file.
-indata_forcing_names = {
-	Forcing.SWDOWN: "Fsd",
-	Forcing.PARDF: "zero",
-	Forcing.PARDR: "zero",
-	Forcing.LWDOWN: "Fld",
-	Forcing.PRECLS: "Precip",
-	Forcing.PRECCO: "zero",
-	Forcing.TAIR: "Ta",
-	Forcing.UAIR: "Ws",
-	Forcing.VAIR: "zero",
-	Forcing.QAIR: "SH",
-	Forcing.PSURF: "ps"
+ozflux_var_names = {
+	LsmVariables.SWDOWN: "Fsd",
+	LsmVariables.PARDF: "zero",
+	LsmVariables.PARDR: "zero",
+	LsmVariables.LWDOWN: "Fld",
+	LsmVariables.PRECLS: "Precip",
+	LsmVariables.PRECCO: "zero",
+	LsmVariables.TAIR: "Ta",
+	LsmVariables.UAIR: "Ws",
+	LsmVariables.VAIR: "zero",
+	LsmVariables.QAIR: "SH",
+	LsmVariables.PSURF: "ps"
 }
 
 # From DMB:
@@ -95,48 +100,48 @@ indata_forcing_names = {
 # > Air specific humidity (QAIR) -> kg/kg (unitless)
 # > Pressure (PSURF) -> Pa
 forcing_units = {
-	Forcing.SWDOWN: "W/m2",
-	Forcing.PARDF: "W/m2",
-	Forcing.PARDR: "W/m2",
-	Forcing.LWDOWN: "W/m2",
-	Forcing.PRECLS: "kg/m2/s",
-	Forcing.PRECCO: "kg/m2/s",
-	Forcing.TAIR: "K",
-	Forcing.UAIR: "m/s",
-	Forcing.VAIR: "m/s",
-	Forcing.QAIR: "",
-	Forcing.PSURF: "Pa"
+	LsmVariables.SWDOWN: "W/m2",
+	LsmVariables.PARDF: "W/m2",
+	LsmVariables.PARDR: "W/m2",
+	LsmVariables.LWDOWN: "W/m2",
+	LsmVariables.PRECLS: "kg/m2/s",
+	LsmVariables.PRECCO: "kg/m2/s",
+	LsmVariables.TAIR: "K",
+	LsmVariables.UAIR: "m/s",
+	LsmVariables.VAIR: "m/s",
+	LsmVariables.QAIR: "",
+	LsmVariables.PSURF: "Pa"
 }
 
 # Min and max values for each forcing variable, in output units.
 forcing_bounds = {
-	Forcing.SWDOWN: (0, 1e5),
-	Forcing.PARDF: (0, 1e5),
-	Forcing.PARDR: (0, 1e5),
-	Forcing.LWDOWN: (0, 1e5),
-	Forcing.PRECLS: (0, 1e4),
-	Forcing.PRECCO: (0, 1e3), # Always zero, not used.
-	Forcing.TAIR: (200, 373), # Kelvins
-	Forcing.UAIR: (0, 100),
-	Forcing.VAIR: (0, 1), # Always zero, not used.
-	Forcing.QAIR: (0, 0.2),
-	Forcing.PSURF: (3e4, 1.5e5)
+	LsmVariables.SWDOWN: (0, 1e5),
+	LsmVariables.PARDF: (0, 1e5),
+	LsmVariables.PARDR: (0, 1e5),
+	LsmVariables.LWDOWN: (0, 1e5),
+	LsmVariables.PRECLS: (0, 1e4),
+	LsmVariables.PRECCO: (0, 1e3), # Always zero, not used.
+	LsmVariables.TAIR: (200, 373), # Kelvins
+	LsmVariables.UAIR: (0, 100),
+	LsmVariables.VAIR: (0, 1), # Always zero, not used.
+	LsmVariables.QAIR: (0, 0.2),
+	LsmVariables.PSURF: (3e4, 1.5e5)
 }
 
 # These are the functions used to aggregate data temporally, when converting
 # from one timestep to another.
 indata_aggregators = {
-	Forcing.SWDOWN: numpy.mean,
-	Forcing.PARDF: numpy.mean,
-	Forcing.PARDR: numpy.mean,
-	Forcing.LWDOWN: numpy.mean,
-	Forcing.PRECLS: numpy.sum, # precip in mm
-	Forcing.PRECCO: numpy.sum, # precip in mm
-	Forcing.TAIR: numpy.mean,
-	Forcing.UAIR: numpy.mean,
-	Forcing.VAIR: numpy.mean,
-	Forcing.QAIR: numpy.mean,
-	Forcing.PSURF: numpy.mean,
+	LsmVariables.SWDOWN: numpy.mean,
+	LsmVariables.PARDF: numpy.mean,
+	LsmVariables.PARDR: numpy.mean,
+	LsmVariables.LWDOWN: numpy.mean,
+	LsmVariables.PRECLS: numpy.sum, # precip in mm
+	LsmVariables.PRECCO: numpy.sum, # precip in mm
+	LsmVariables.TAIR: numpy.mean,
+	LsmVariables.UAIR: numpy.mean,
+	LsmVariables.VAIR: numpy.mean,
+	LsmVariables.QAIR: numpy.mean,
+	LsmVariables.PSURF: numpy.mean,
 }
 
 #######################################################################
@@ -169,24 +174,6 @@ class Options:
 		self.compression_type = compression_type
 		self.out_type = OutputType(out_type)
 
-class ForcingVariable():
-	def __init__(self, in_name: str, out_name: str, out_units: str
-		, aggregator: Callable[[list[float]], float], lbound: float
-		, ubound: float):
-		self.in_name = in_name
-		self.out_name = out_name
-		self.out_units = out_units
-		self.aggregator = aggregator
-		self.lbound = lbound
-		self.ubound = ubound
-	def new(forcing: Forcing, out_name: str, out_units: str):
-		return ForcingVariable(indata_forcing_names[forcing]
-			, out_name
-			, out_units
-			, indata_aggregators[forcing]
-			, forcing_bounds[forcing][0]
-			, forcing_bounds[forcing][1])
-
 def six_digit_string(x: float) -> str:
 	"""
 	Return a number, encoded as a 6 digit string.
@@ -207,7 +194,7 @@ def get_output_filename(infile: str) -> str:
 
 		return ozflux_common.get_met_filename(lon, lat)
 
-def write_data_lsm(variable: Variable, data: list[float], forcing: Forcing, \
+def write_data_lsm(variable: Variable, data: list[float], forcing: LsmVariables, \
 	progress_callback: Callable[[float], None]):
 	"""
 	Write data to the output file (LSM mode).
@@ -280,29 +267,23 @@ def copy_data_lsm(in_file: Dataset, variable: Variable, timestep: int, \
 	# 0. Get variable IDs.
 	i = 0
 	for forcing in Forcing:
-		if forcing == Forcing.NFORCINGS:
+		if forcing == LsmVariables.NFORCINGS:
 			break
-		out_name = outdata_forcing_names[forcing]
+		out_name = lsm_var_names_out[forcing]
 		log_diagnostic("----- %s -----" % out_name)
 		log_diagnostic("Reading %s data" % out_name)
 		read_proportion = 0.66
 		write_proportion = 1 - read_proportion
+
+		var = lsm_var(forcing, out_name, forcing_units[forcing])
 		
-		data = get_data(in_file, indata_forcing_names[forcing]
-		, outdata_forcing_names[forcing]
-		, timestep
-		, get_units(in_file.variables[indata_forcing_names[forcing]])
-		, forcing_units[forcing]
-		, indata_aggregators[forcing]
-		*forcing_bounds[forcing]
-		, opts.parallel
-		, lambda p: \
-			progress_callback((i + p * read_proportion) / Forcing.NFORCINGS))
+		data = get_data(in_file, var, timestep, lambda p: \
+			progress_callback((i + p * read_proportion) / LsmVariables.NFORCINGS))
 
 		# 3. Write data to out file.
 		log_diagnostic("Writing %s data" % out_name)
 		write_data_lsm(variable, data, forcing, lambda p: progress_callback( \
-			(i + read_proportion + write_proportion * p) / Forcing.NFORCINGS))
+			(i + read_proportion + write_proportion * p) / LsmVariables.NFORCINGS))
 		i += 1
 
 def copy_data_dailygrass(nc_in: Dataset, nc_out: Dataset, timestep: int
@@ -326,11 +307,11 @@ def copy_data_dailygrass(nc_in: Dataset, nc_out: Dataset, timestep: int
 
 	# Variables to be added to output file.
 	variables = [
-	ForcingVariable(indata_forcing_names[Forcing.TAIR]
+	ForcingVariable(ozflux_var_names[LsmVariables.TAIR]
 		, DG_OUT_VARIABLE_NAME_TEMP, temp_out_units, numpy.mean, temp_min_degc
 		, temp_max_degc)
-	, ForcingVariable.new(Forcing.SWDOWN, DG_OUT_VARIABLE_NAME_INSOL, "W/m2")
-	, ForcingVariable.new(Forcing.PRECLS, DG_OUT_VARIABLE_NAME_PREC, "mm")
+	, lsm_var(LsmVariables.SWDOWN, DG_OUT_VARIABLE_NAME_INSOL, "W/m2")
+	, lsm_var(LsmVariables.PRECLS, DG_OUT_VARIABLE_NAME_PREC, "mm")
 	, ForcingVariable("CO2", DG_OUT_VARIABLE_NAME_CO2, "ppm", numpy.mean, 250
 		, 900)
 	, ForcingVariable("VPD", DG_OUT_VARIABLE_NAME_VPD, "kPa", numpy.mean, 0, 100)
@@ -342,7 +323,7 @@ def copy_data_dailygrass(nc_in: Dataset, nc_out: Dataset, timestep: int
 
 	# If generating a daily file, need to include tmax/tmin variables in output.
 	if step_width == 24:
-		name_tav = indata_forcing_names[Forcing.TAIR]
+		name_tav = ozflux_var_names[LsmVariables.TAIR]
 		variables.append(ForcingVariable(name_tav, DG_OUT_VARIABLE_NAME_TMAX, temp_out_units
 			, numpy.amax, temp_min_degc, temp_max_degc))
 		variables.append(ForcingVariable(name_tav, DG_OUT_VARIABLE_NAME_TMIN, temp_out_units
@@ -366,11 +347,9 @@ def copy_data_dailygrass(nc_in: Dataset, nc_out: Dataset, timestep: int
 
 		log_diagnostic("----- %s -----" % var.in_name)
 		log_diagnostic("Reading %s data")
-		in_units = get_units(nc_in.variables[var.in_name])
 
 		read_start = time.time()
-		data = get_data(nc_in, var.in_name, var.out_name, timestep, in_units \
-		, var.out_units, var.aggregator, var.lbound, var.ubound, opts.parallel \
+		data = get_data(nc_in, var, timestep
 		, lambda p: progress_cb( (i + p * read_prop) / len(variables)))
 		read_time = time.time() - read_start
 
@@ -473,12 +452,14 @@ def prepare_outfile(nc: Dataset, out_type: OutputType):
 	log_debug("Creating output dimensions")
 	if (out_type == OutputType.LSM):
 		# LSM mode needs a forcings dimension.
-		nc.createDimension(OUT_DIM_NAME_FORCINGS, Forcing.NFORCINGS)
+		nc.createDimension(OUT_DIM_NAME_FORCINGS, LsmVariables.NFORCINGS)
 	else:
 		# Dailygrass mode needs lon/lat dimensions (as it's gridded).
 		# Chunk size for geographic (ie lat/lon) variables.
 		geo_chunk_size = (1,)
-		dim_size = 0 if UNLIMITED_DIMS else len(opts.files)
+		# todo: writing all data into single file? If so, will need to set
+		# dim_size to len(files).
+		dim_size = 0 if UNLIMITED_DIMS else 1 #len(opts.files)
 		create_dim_if_not_exists(nc, OUT_DIM_NAME_LON, dim_size)
 		create_dim_if_not_exists(nc, OUT_DIM_NAME_LAT, dim_size)
 		create_var_if_not_exists(nc, OUT_DIM_NAME_LON
@@ -565,13 +546,14 @@ def process_file(in_file: str, out_file: str, timestep: int \
 				var_time.long_name = OUT_DIM_NAME_TIME
 				var_time.standard_name = OUT_DIM_NAME_TIME
 				var_time.units = "hours since %s" % nc_out.time_coverage_start
-			for forcing in Forcing:
-				if forcing == Forcing.NFORCINGS:
-					break
-				oname = outdata_forcing_names[forcing]
-				units = forcing_units[forcing]
-				attr_name = "col_%d_%s_units" % (forcing, oname)
-				setattr(nc_out, attr_name, units)
+			else:
+				for forcing in LsmVariables:
+					if forcing == LsmVariables.NFORCINGS:
+						break
+					oname = lsm_var_names_out[forcing]
+					units = forcing_units[forcing]
+					attr_name = "col_%d_%s_units" % (forcing, oname)
+					setattr(nc_out, attr_name, units)
 
 def parse_args(argv: list[str]) -> Options:
 	"""
@@ -591,7 +573,7 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-c", "--output-compatibility", type = int, required = True, help = "Output compatibility type (0 = daily_grass, 1 = LSM)")
 	parser.add_argument("--compression-level", type = int, nargs = "?", default = 4, help = "Compression quality for output file [0, 9]. 0 = none, 1 = fastest compression, largest filesize, 9 = slowest compression, smallest filesize (default 4)")
 	parser.add_argument("--compression-type", default = "zlib", help = "Compression algorithm to be used (default 'zlib')")
-	parser.add_argument("--version", action = "version", version = "%(prog)s " + VERSION)
+	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
 
 	parsed = parser.parse_args(argv[1:])
 	return Options(parsed.verbosity, parsed.files, parsed.out_dir

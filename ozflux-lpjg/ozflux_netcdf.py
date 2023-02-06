@@ -4,7 +4,7 @@ import traceback, sys
 from ozflux_logging import *
 from netCDF4 import Dataset, Variable
 from enum import IntEnum
-from ozflux_common import Forcing
+from ozflux_common import LsmVariables
 from sys import argv
 from typing import Callable
 
@@ -18,10 +18,10 @@ OUT_DIM_NAME_LON = "longitude"
 OUT_DIM_NAME_LAT = "latitude"
 
 # g to kg. This is not really used except as an example.
-G_TO_KG = 1e-3
+KG_PER_G = 1e-3
 
 # KPa to Pa
-KPA_TO_PA = 1e3
+PA_PER_KPA = 1e3
 
 # °C to K
 DEG_C_TO_K = 273.15
@@ -40,6 +40,15 @@ HOURS_PER_DAY = 24
 
 # Number of days per year.
 DAYS_PER_YEAR = 365 # ha
+
+# Moles per micromole.
+MOL_PER_UMOL = 1e-6
+
+# Atomic mass of carbon (g/mol).
+G_C_PER_MOL = 12.011
+
+# Number of seconds per day.
+SECONDS_PER_DAY = SECONDS_PER_MINUTE * MINUTES_PER_HOUR * HOURS_PER_DAY
 
 # Inputs/outputs will be read/written in chunks of this size.
 # Increasing this will improve performance but increase memory usage.
@@ -86,7 +95,7 @@ gd_tp_lock = multiprocessing.BoundedSemaphore(1)
 cd_tp_lock = multiprocessing.BoundedSemaphore(1)
 
 # Common alternative names for various units which we may reasonably encounter.
-units_synonyms = [
+_units_synonyms = [
 	["W/m2", "W/m^2", "Wm^-2"],
 	["kg/m2/s", "kg/m^2/s", "kgm^-2s^-1"],
 	["K", "k"],
@@ -94,7 +103,8 @@ units_synonyms = [
 	["Pa", "pa"],
 	["kg/kg", "", "mm/mm", "m/m"], # debatable
 	["ppm", "umol/mol"],
-	["degC", "°C", "degrees C"]
+	["degC", "°C", "degrees C"],
+	["umol/m2/s", "umol/m^2/s"]
 ]
 
 #
@@ -114,13 +124,25 @@ units_synonyms = [
 # Note that units are changed after timestep aggregation occurs. So the input
 # variable will already be in the output timestep at this point in time.
 units_conversions = {
-	("g", "kg"): lambda x, _: x * G_TO_KG, # (as an example)
+	("g", "kg"): lambda x, _: x * KG_PER_G, # (as an example)
 	("mm", "kg/m2/s"): lambda x, t: x / t, # Assuming mm means mm per timestep
 	("kg/m2/s", "mm"): lambda x, t: t * x,
 	("degC", "K"): lambda x, _: x + DEG_C_TO_K,
 	("K", "degC"): lambda x, _: x - DEG_C_TO_K,
-	("kPa", "Pa"): lambda x, _: x * KPA_TO_PA
+	("kPa", "Pa"): lambda x, _: x * PA_PER_KPA,
+	("umol/m2/s", "kgC/m2/day"): lambda x, _: x * MOL_PER_UMOL * G_C_PER_MOL * KG_PER_G * SECONDS_PER_DAY
 }
+
+class ForcingVariable():
+	def __init__(self, in_name: str, out_name: str, out_units: str
+		, aggregator: Callable[[list[float]], float], lbound: float
+		, ubound: float):
+		self.in_name = in_name
+		self.out_name = out_name
+		self.out_units = out_units
+		self.aggregator = aggregator
+		self.lbound = lbound
+		self.ubound = ubound
 
 def zeroes(n: int) -> list[float]:
 	"""
@@ -135,15 +157,27 @@ def get_units(var_id: Variable) -> str:
 	return var_id.units
 
 def get_data(in_file: Dataset \
-	, in_name: str
-	, out_name: str \
+	, var: ForcingVariable \
 	, output_timestep: int \
-	, in_units: str \
+	, progress_cb: Callable[[float], None]) -> list[float]:
+	"""
+	Get all data from the input file and convert it to a format suitable for the
+	output file.
+
+	@param in_file: Input .nc file.
+	@param var: Describes how variable is to be read/aggregated.
+	@param progress_cb: Progress callback function.
+	"""
+	return _get_data(in_file, var.in_name, output_timestep, var.out_units
+	, var.aggregator, var.lbound, var.ubound, progress_cb)
+
+def _get_data(in_file: Dataset \
+	, in_name: str
+	, output_timestep: int \
 	, out_units: str \
 	, aggregator: Callable[[list[float]], float] \
 	, lower_bound: float \
 	, upper_bound: float \
-	, parallel: bool \
 	, progress_cb: Callable[[float], None]) -> list[float]:
 		"""
 		Get all data from the input file and convert it to a format
@@ -156,7 +190,7 @@ def get_data(in_file: Dataset \
 		# Some variables are not translated directly into the output
 		# file and can be ignored (ie filled with zeroes).
 		if in_name == "zero":
-			log_diagnostic("Using zeroes for %s" % out_name)
+			log_diagnostic("Using zeroes for %s" % in_name)
 			input_timestep = int(in_file.time_step)
 			timestep_ratio = output_timestep // input_timestep
 			n = in_file.variables["time"].size // timestep_ratio
@@ -167,8 +201,11 @@ def get_data(in_file: Dataset \
 			raise ValueError(m % in_name)
 
 		var_id = in_file.variables[in_name]
-		# in_units = get_units(var_id)
-		# out_units = forcing_units[forcing]
+
+		# Get units of the input variable.
+		in_units = get_units(var_id)
+
+		# Check if a unit conversion is required.
 		matching_units = units_match(in_units, out_units)
 
 		global get_data_read_prop, get_data_fixnan_prop, get_data_t_agg_prop
@@ -208,7 +245,7 @@ def get_data(in_file: Dataset \
 		fixnan_tot = time.time() - fixnan_start
 
 		# Change timestep to something suitable for lpj-guess.
-		log_diagnostic("Aggregating %s to hourly timestep" % out_name)
+		log_diagnostic("Aggregating %s to hourly timestep" % in_name)
 		t_agg_start = time.time()
 		data = temporal_aggregation(in_file, data, output_timestep, aggregator
 		, lambda p: progress_cb(step_start + aggregation_time_proportion * p))
@@ -222,12 +259,12 @@ def get_data(in_file: Dataset \
 		unit_start = time.time()
 		if not matching_units:
 			log_diagnostic("Converting %s from %s to %s" % \
-				(out_name, in_units, out_units))
+				(in_name, in_units, out_units))
 			data = fix_units(data, in_units, out_units, output_timestep, \
 				lambda p: progress_cb( \
 					step_start + units_time_proportion * p))
 		else:
-			log_diagnostic("No units conversion required for %s" % out_name)
+			log_diagnostic("No units conversion required for %s" % in_name)
 		unit_tot = time.time() - unit_start
 
 		step_start += units_time_proportion
@@ -238,25 +275,30 @@ def get_data(in_file: Dataset \
 		bounds_tot = time.time() - bounds_start
 
 		time_tot = read_tot + fixnan_tot + t_agg_tot + bounds_tot + unit_tot
-		read_prop = 100.0 * read_tot / time_tot
-		fixnan_prop = 100.0 * fixnan_tot / time_tot
-		t_agg_prop = 100.0 * t_agg_tot / time_tot
-		bounds_prop = 100.0 * bounds_tot / time_tot
-		unit_prop = 100.0 * unit_tot / time_tot
+		read_prop = read_tot / time_tot
+		fixnan_prop = fixnan_tot / time_tot
+		t_agg_prop = t_agg_tot / time_tot
+		bounds_prop = bounds_tot / time_tot
+		unit_prop = unit_tot / time_tot
 
 		# Update global time estimates of all activities.
-		if parallel:
-			global gd_tp_lock
-			gd_tp_lock.acquire()
+
+		# First acquire the global time proportion mutex. This isn't really
+		# necessary unless running in parallel mode, but it shouldn't really
+		# cost much time if not running in parallel mode. And it's hard to know
+		# if parallel mode is enabled from in here.
+		global gd_tp_lock
+		gd_tp_lock.acquire()
+
 		get_data_read_prop = read_prop
 		get_data_fixnan_prop = fixnan_prop
 		get_data_t_agg_prop = t_agg_prop
 		get_data_bounds_prop = bounds_prop
 		if not matching_units:
 			get_data_unit_prop = unit_prop
-		if parallel:
-			# global gd_tp_lock
-			gd_tp_lock.release()
+
+		# Release global time proportion mutex.
+		gd_tp_lock.release()
 
 		# Done!
 		return data
@@ -340,7 +382,7 @@ def units_match(unit0: str, unit1: str) -> str:
 	if unit0 == unit1:
 		return True
 
-	for case in units_synonyms:
+	for case in _units_synonyms:
 		if unit0 in case and unit1 in case:
 			return True
 	return False
@@ -616,6 +658,13 @@ def find_units_conversion(current_units: str, desired_units: str) \
 	combination = (current_units, desired_units)
 	if combination in units_conversions:
 		return units_conversions[combination]
+	for units_type in _units_synonyms:
+		if current_units in units_type:
+			for synonym in units_type:
+				combination = (synonym, desired_units)
+				if (combination in units_conversions):
+					return units_conversions[combination]
+
 	m = "No unit conversion exists from '%s' to '%s'"
 	raise ValueError(m % (current_units, desired_units))
 

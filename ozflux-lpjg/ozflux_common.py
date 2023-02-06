@@ -4,6 +4,9 @@ from typing import Callable
 
 ## Constants
 
+# Semantic version number.
+VERSION = "1.0"
+
 # Number of seconds in half an hour (leap seconds are a myth).
 SECONDS_PER_MINUTE = 60
 
@@ -15,7 +18,7 @@ DATE_FORMAT = r"%Y-%m-%d %H:%M:%S"
 
 # Forcing variable IDs (and column IDs too - this defines the order of
 # the columns in the output file).
-class Forcing(IntEnum):
+class LsmVariables(IntEnum):
 	"""
 	Indices of variables in the output .nc file.
 	"""
