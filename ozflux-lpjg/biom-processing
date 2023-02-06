@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+#
+# This script reads site biomass observation files (.csv), aggregates the
+# readings across individuals and outputs the observations in convenient units
+# and structure for further use by the other benchmarking tools.
+#
+
+import datetime, numpy, ozflux_common, pandas, re, time, traceback
+
+from argparse import ArgumentParser
+from ozflux_logging import *
+from ozflux_netcdf import *
+from sys import argv
+from typing import Callable
+
+# Proportion of time spent reading data.
+_read_prop = 1 / 3
+
+# Proportion of time spent procesing data.
+_proc_prop = 1 / 3
+
+# Proportion of time spent writing data.
+_write_prop = 1 - _read_prop - _proc_prop
+
+# Number of square metres in a hectare.
+M2_PER_HA = 10_000
+
+# Number of metres in a kilometre.
+M_PER_KM = 1_000
+
+# Number of metres in an astronomical unit.
+M_PER_AU = 1.495979e+11
+
+class Options:
+	"""
+	Class for storing CLI arguments from the user.
+
+	@param log: Log level.
+	@param files: Input files.
+	@param odir: Output directory.
+	@param prog: True to write progress messages, 0 otherwise.
+	"""
+	def __init__(self, log : LogLevel, files: list[str], odir: str, prog: bool):
+		self.log_level = log
+		self.files = files
+		self.out_dir = odir
+		self.report_progress = prog
+
+def parse_args(argv: list[str]) -> Options:
+	"""
+	Parse CLI arguments, return a parsed options object.
+
+	@param argv: Raw CLI arguments.
+
+	@return Parsed Options object.
+	"""
+	parser = ArgumentParser(prog=argv[0], description = "Formatting ozflux data into a format suitable for consumption by LPJ-Guess")
+	parser.add_argument("-v", "--verbosity", type = int, help = "Logging verbosity (1-5, default 3)", nargs = "?", const = LogLevel.INFORMATION, default = LogLevel.INFORMATION)
+	parser.add_argument("files", nargs = "+", help = "Input .nc files to be processed")
+	parser.add_argument("-o", "--out-dir", required = True, help = "Path to the output directory. Processed files will be saved with the same file name into this directory")
+	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
+	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
+
+	p = parser.parse_args(argv[1:])
+	return Options(p.verbosity, p.files, p.out_dir, p.show_progress)
+
+def to_metres(length: float, units: str):
+	"""
+	Convert the value to metres.
+	@param length: The numeric value.
+	@param units: Units of length.
+	"""
+	units = units.lower().strip()
+	if units == "m":
+		return length
+	if units == "km":
+		return length * M_PER_KM
+	if units == "au": # Just for fun
+		return length * M_PER_AU
+	raise ValueError("Unknown units: '%s'" % units)
+
+def get_length(length: str) -> float:
+	"""
+	Read a string with a units suffix and attempt to return the length in
+	metres. E.g.
+
+	5m -> 5
+	1.024 km -> 1024
+
+	@param length: The length with a units suffix.
+	"""
+	pattern = r'[ \t]*([0-9]+\.?[0-9]*)[ \t]*([A-Za-z]*)'
+	match = re.match(pattern, length)
+	if match == None:
+		raise ValueError("Cannot parse length from '%s'" % length)
+	value = float(match.groups()[0])
+	suffix = match.groups()[1]
+	return to_metres(value, suffix)
+
+def get_biomass(row) -> float:
+	"""
+	Get biomass reading for a given row in kg/ha.
+
+	@param row: A row from the input DataFrame.
+	"""
+	col_biom = "aboveGroundBiomass_kilograms"
+	col_trwidth = "transectWidth_metres"
+	col_trlength = "transectLength_metres"
+	biomass = float(row[col_biom])
+
+	# Get transect area in m2.
+	transect_width = get_length(row[col_trwidth])
+	transect_length = get_length(row[col_trlength])
+	transect_area = transect_length * transect_width
+
+	# Convert to ha.
+	area_ha = transect_area / M2_PER_HA
+
+	return biomass / area_ha
+
+def process(data: pandas.DataFrame, pcb: Callable[[float], None]) \
+	-> list[tuple[datetime.date, float]]:
+	"""
+	Aggregate biomass from per-individual into kg/ha.
+
+	Returns a list of tuples of (date, biomass).
+	"""
+	# Name of the date column.
+	col_date = "startVisitDate"
+
+	# Date format in input data.
+	date_fmt = "%d/%m/%y"
+
+	result = []
+
+	groups = data.groupby(col_date)
+	n = len(groups.groups)
+	i = 0
+	for date, rows in groups.groups.items():
+		biomass = 0 # kg/ha
+		for row in rows:
+			biomass += get_biomass(data.iloc[row])
+		result.append((datetime.datetime.strptime(date, date_fmt), biomass))
+		i += 1
+		pcb(i / n)
+	return result
+
+def write(data: list[tuple[datetime.date, float]], out_file: str
+	, pcb: Callable[[float], None]):
+	"""
+	Write data to the specified output file in .csv format.
+	"""
+	log_diagnostic("Writing '%s'..." % out_file)
+	with open(out_file, "w") as file:
+		i = 0
+		file.write("date,biomass\n")
+		for (date, biomass) in data:
+			file.write("%s,%.2f\n" % (date.strftime("%Y-%m-%d"), biomass))
+			i += 1
+			pcb(i / len(data))
+
+def process_file(file: str, out_dir: str, pcb: Callable[[float], None]):
+	"""
+	Read input data from file, aggregate data, write to a new file in out dir.
+
+	@param file: Input file.
+	@param out_dir: Output directory.
+	@param pcb: Progress callback function.
+	"""
+	log_information("Processing '%s'..." % file)
+
+	global _read_prop, _proc_prop, _write_prop
+
+	pcb(0)
+	read_start = time.time()
+	data = pandas.read_csv(file, parse_dates = True)
+	read_time = time.time() - read_start
+	pcb(_read_prop)
+
+	proc_start = time.time()
+	data = process(data, lambda p: pcb(_read_prop + p * _proc_prop))
+	proc_time = time.time() - proc_start
+
+	# Determine output file name.
+	filename = os.path.basename(file)
+	filename = filename.split('_')[0] + '.csv'
+	out_file = os.path.join(out_dir, os.path.basename(file))
+
+	start = _read_prop + _proc_prop
+	write_start = time.time()
+	write(data, out_file, lambda p: pcb(start + _write_prop * p))
+	write_time = time.time() - write_start
+
+	total_time = read_time + proc_time + write_time
+	_read_prop = read_time / total_time
+	_proc_prop = proc_time / total_time
+	_write_prop = write_time / total_time
+	log_diagnostic("Time distribution: read=%.2f%%, process=%.2f%%, write=%.2f%%" \
+		% (_read_prop, _proc_prop, _write_prop))
+	log_debug("Successfully processed file '%s'" % file)
+
+def main(opts: Options):
+	"""
+	Main function.
+
+	@param opts: Parsed CLI options provided by the user..
+	"""
+	step = 1 / len(opts.files)
+	start = 0
+	for file in opts.files:
+		process_file(file, opts.out_dir, lambda p: log_progress(start + step*p))
+		start += step
+
+if __name__ == "__main__":
+	# Parse CLI args
+	opts = parse_args(argv)
+
+	set_log_level(opts.log_level)
+	set_show_progress(opts.report_progress)
+
+	try:
+		# Actual logic is in main().
+		main(opts)
+	except BaseException as error:
+		# Basic error handling.
+		log_error(traceback.format_exc())
+		exit(1)

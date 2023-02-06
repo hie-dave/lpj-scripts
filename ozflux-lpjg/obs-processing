@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+#
+# This script reads the raw .nc files and produces csv files with observations
+# used in benchmarking.
+#
+
+import datetime, numpy, ozflux_common, time, traceback
+
+from argparse import ArgumentParser
+from ozflux_logging import *
+from ozflux_netcdf import *
+from sys import argv
+from netCDF4 import Dataset, Variable
+from typing import Callable
+
+# Standard variables in the ozflux files which will be used for benchmarking.
+_standard_variables = [
+	# GPP shouldn't get this high, but this is mainly for error checking anyway.
+	ForcingVariable("GPP_LT", "gpp", "kgC/m2/day", numpy.mean, 0, 1e6),
+
+	# todo: are these bounds sensible?
+	ForcingVariable("ET", "et", "kg/m2/s", numpy.mean, -10, 10),
+	ForcingVariable("ER_LT", "resp", "kgC/m2/day", numpy.mean, -10, 10),
+	ForcingVariable("NEE_LT", "nee", "kgC/m2/day", numpy.mean, -10, 10)
+]
+
+class Options:
+	"""
+	Class for storing CLI arguments from the user.
+
+	@param log: Log level.
+	@param files: Input files.
+	@param odir: Output directory.
+	@param prog: True to write progress messages, 0 otherwise.
+	@param parallel: True to process files in parallel.
+	@param timestep: Desired output timestep, in hours.
+	"""
+	def __init__(self, log : LogLevel, files: list[str], odir: str, prog: bool,
+		parallel: bool, timestep: int):
+		self.log_level = log
+		self.files = files
+		self.out_dir = odir
+		self.report_progress = prog
+		self.parallel = parallel
+		self.timestep = timestep
+
+def parse_args(argv: list[str]) -> Options:
+	"""
+	Parse CLI arguments, return a parsed options object.
+
+	@param argv: Raw CLI arguments.
+
+	@return Parsed Options object.
+	"""
+	parser = ArgumentParser(prog=argv[0], description = "Formatting ozflux data into a format suitable for consumption by LPJ-Guess")
+	parser.add_argument("-v", "--verbosity", type = int, help = "Logging verbosity (1-5, default 3)", nargs = "?", const = LogLevel.INFORMATION, default = LogLevel.INFORMATION)
+	parser.add_argument("files", nargs = "+", help = "Input .nc files to be processed")
+	parser.add_argument("-o", "--out-dir", required = True, help = "Path to the output directory. Processed files will be saved with the same file name into this directory")
+	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
+	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel")
+	parser.add_argument("-t", "--timestep", type = int, required = True, help = "Output timestep in hours")
+	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
+
+	p = parser.parse_args(argv[1:])
+	return Options(p.verbosity, p.files, p.out_dir, p.show_progress, p.parallel,
+		p.timestep)
+
+def write_csv(outfile: str, names: list[str], data: list[list[float]], \
+	start_date: datetime.datetime, timestep: int \
+	, pcb: Callable[[float], None], delim = ","):
+	"""
+	Write the data to a csv file.
+
+	@param outfile: Output file path.
+	@param names: Output file column names.
+	@param data: 2D data array where each element is a single column of data.
+	@param start_date: First date in the data.
+	@param timestep: Output timestep (in hours).
+	"""
+	if len(names) != len(data):
+		raise ValueError("Number of column names (%d) doesn't match number of columns (%d)" % (len(names), len(data)))
+	if len(names) == 0:
+		log_warning("Writing 0 columns to output file")
+		return
+
+	nrow = len(data[0])
+	for i in range(1, len(data)):
+		if len(data[i]) != nrow:
+			raise ValueError("Incorrect number of rows in column '%s'. Expected %d but was %d" % (names[i], nrow, len(data[i])))
+
+	write_hours = timestep % 24 != 0
+
+	with open(outfile, "w") as csv:
+		csv.write("year%sdoy%s" % (delim, delim))
+		if write_hours:
+			csv.write("hour%s" % delim)
+		csv.write("%s\n" % str.join(delim, names))
+		date = start_date
+		for i in range(nrow):
+			if i % PROGRESS_CHUNK_SIZE == 0:
+				pcb(i / nrow)
+			# %j is day of year (1-366), but lpj-guess writes day of year as
+			# (0-365), so we subtract one here to put it in the same "units".
+			doy = str(int(date.strftime("%j")) - 1)
+			csv.write("%s%s%s%s" % (date.year, delim, doy, delim))
+			if write_hours:
+				csv.write("%s%s" % (date.hour, delim))
+			csv.write("%s\n" % str.join(delim, [str(column[i]) for column in data]))
+			date += datetime.timedelta(hours = timestep)
+	pcb(1)
+
+def process_file(file: str, out_dir: str, timestep: int,
+	pcb: Callable[[float], None]):
+	"""
+	Extract the standard variables from the input file, write them to a .csv
+	file in the specified output directory in the specified timestep.
+
+	@param file: Input file path.
+	@param out_dir: Output directory.
+	@param timestep: Output timestep in hours.
+	@param pcb: Progress callback function.
+	"""
+	log_information("Processing '%s'..." % file)
+
+	read_prop = 0.99
+	write_prop = 1 - read_prop
+
+	variables = _standard_variables
+
+	log_debug("Opening input file '%s' for reading..." % file)
+
+	data = []
+	read_start = time.time()
+	timestep_minutes = timestep * MINUTES_PER_HOUR
+	start_date: datetime
+	with Dataset(file, "r", format=ozflux_common.NC_FORMAT) as nc:
+		step_size = 1 / len(variables)
+		step_start = 0
+		for var in variables:
+			data.append(get_data(nc, var, timestep_minutes, lambda p: \
+				pcb(step_start + step_size * read_prop * p)))
+			step_start += step_size
+		start_date = get_next_year(ozflux_common.parse_date(nc.time_coverage_start))
+	read_time = time.time() - read_start
+
+	file = os.path.basename(file)
+	filename = "%s.csv" % os.path.splitext(file)[0]
+	outfile = os.path.join(out_dir, filename)
+
+	write_start = time.time()
+	names = ["%s" % v.out_name for v in variables]
+
+	timestep_hours = timestep
+	write_csv(outfile, names, data, start_date, timestep_hours, lambda p: \
+		pcb(read_prop + write_prop * p))
+	write_time = time.time() - write_start
+
+	read_prop = read_time / (read_time + write_time)
+	log_information("Time spent reading: %.2f%%; Time spent writing: %.2f%%"
+	% (100 * read_prop, 100 * (1 - read_prop)))
+
+def main(opts: Options):
+	"""
+	Main function.
+
+	@param opts: Parsed CLI options provided by the user..
+	"""
+	step = 1 / len(opts.files)
+	start = 0
+	for file in opts.files:
+		process_file(file, opts.out_dir, opts.timestep, lambda p: \
+			log_progress(start + step * p))
+		start += step
+
+if __name__ == "__main__":
+	# Parse CLI args
+	opts = parse_args(argv)
+
+	set_log_level(opts.log_level)
+	set_show_progress(opts.report_progress)
+
+	try:
+		# Actual logic is in main().
+		main(opts)
+	except BaseException as error:
+		# Basic error handling.
+		log_error(traceback.format_exc())
+		exit(1)
