@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+
+#######################################################################
+# Imports
+#######################################################################
+
+import sys
+import requests, encodings, re, os, time
+from typing import Callable
+
+#######################################################################
+# Constants/Inputs
+#######################################################################
+
+# Chunk size for downloads.
+CHUNK_SIZE = 8192
+
+# Number of seconds in one minute.
+SECONDS_PER_MINUTE = 60
+
+# Number of minutes in one hour.
+MINUTES_PER_HOUR = 60
+
+# Number of seconds in one hour.
+SECONDS_PER_HOUR = SECONDS_PER_MINUTE * MINUTES_PER_HOUR
+
+# Base CSIRO DAP URL.
+url_base = "https://webdav-bm.data.csiro.au/dap_prd_000011379v003/"
+
+# Temporary username/password. Valid until 24 Jan, 2023.
+usr = "aaranyagayathri18@gmail.com"
+pwd = "DT4yP02o"
+
+download_start_time = None
+
+#######################################################################
+# Classes
+#######################################################################
+
+class File:
+	def __init__(self, size: float, url: str):
+		self.url = url
+		self.size = size
+	def download(self, out_dir: str, prog: Callable[[float], None]):
+		# tbi
+		file_name = self.url.split("/")[-1]
+		out_file = "%s/%s" % (out_dir, file_name)
+		if os.path.exists(out_file):
+			print("Skipping %s as it already exists" % file_name)
+			return
+		prog(0)
+		resp = requests.get(self.url, stream = True, auth = (usr, pwd))
+		if not resp.ok:
+			raise ValueError("Unable to download file (received HTTP %d). Reason: %s" % (resp.status_code, resp.reason))
+		total = int(resp.headers.get("Content-Length"))
+		chunk_size = min(CHUNK_SIZE, total // 2)
+		with open(out_file, "wb") as file:
+			downloaded = 0
+			for data in resp.iter_content(chunk_size = chunk_size):
+					downloaded += len(data)
+					file.write(data)
+					progress = 1.0 * downloaded / total
+					prog(progress)
+
+class Directory:
+	def __init__(self, url: str, files, subdirectories):
+		self.url = url
+		self.files = files
+		self.subdirectories = subdirectories
+	def download(self, out_dir: str, prog: Callable[[float], None]):
+		total = self.get_size()
+		dl = 0
+		for file in self.files:
+			file.download(out_dir, lambda p: prog(dl / total + p * file.size / total))
+			dl += file.size
+		for dir in self.subdirectories:
+			dsize = dir.get_size()
+			dir.download(out_dir, lambda p: prog(dl / total + p * dsize / total))
+			dl += dir.get_size()
+
+	def get_size(self) -> float:
+		"""
+		Return total file size of all files under this directory, recursively.
+		"""
+		size = 0.0
+		for file in self.files:
+			size += file.size
+		for dir in self.subdirectories:
+			size += dir.get_size()
+		return size
+
+#######################################################################
+# Main Program
+#######################################################################
+
+def request_string(url: str) -> str:
+	"""
+	Make a request to the given URL and return the body of the response
+	decoded as utf8.
+	"""
+	resp = requests.get(url, auth = (usr, pwd)).content
+	return encodings.utf_8.decode(resp)[0]
+
+def suffix_size(sfx: str) -> float:
+	"""
+	Get a byte size for a given suffix. E.g. "K" -> 1024
+	"""
+	sfx = sfx.strip().upper()
+	if sfx == "K":
+		return 2**10
+	elif sfx == "M":
+		return 2**20
+	elif sfx == "G":
+		return 2**30
+	elif sfx == "T":
+		return 2**40
+	elif sfx == "P":
+		return 2**50
+	else:
+		raise ValueError("Unable to get size from suffix '%s'" % sfx)
+
+def to_friendly_str(size: int) -> str:
+	"""
+	Get a human-readable file size from a byte count.
+	E.g. 1024 -> 1 KiB
+	"""
+	sizes = [
+		(2**50, "PiB"),
+		(2**40, "TiB"),
+		(2**30, "GiB"),
+		(2**20, "MiB"),
+		(2**10, "KiB"),
+	]
+	for (threshold, sfx) in sizes:
+		if size >= threshold:
+			return "%.2f%s" % (1.0 * size / threshold, sfx)
+	return "%d bytes" % size
+
+def parse_size(size_str: str) -> float:
+	"""
+	Parse a size in bytes from a size string. E.g. "36K" or "14G".
+	"""
+	size_str = size_str.strip()
+	suffix = size_str[-1]
+	multiplier = suffix_size(suffix)
+	size = float(size_str[:-1])
+	return size * multiplier
+
+def get_files(url: str):
+	"""
+	Parse a page body and return a list of files and directories.
+	Parent Directory is not included in return value.
+	"""
+	body = request_string(url)
+	pattern = r"<tr>(.+)<\/tr>"
+	matches = re.findall(pattern, body)
+	dirs = []
+	files = []
+	for row in matches:
+		if row.startswith("<th"):
+			continue
+		urls = re.findall(r".*<a href=\"([^\"]+)\".*", row)
+		if len(urls) != 1:
+			print("WARNING: no URL for match; skipping...")
+			print(row)
+			continue
+		new_url = "%s/%s" % (url, urls[0])
+		icons = re.findall(r".*<img src=\"([^\"]+)\".*", row)
+		if len(icons) != 1:
+			print("WARNING: missing icon; skipping...")
+			print(row)
+			continue
+		icon = icons[0]
+		if icon == "/icons/back.gif":
+			# Parent directory
+			continue
+		if icon == "/icons/folder.gif":
+			# Directory
+			dirs.append(Directory(new_url, *get_files(new_url)))
+		else:
+			# Probably a file.
+			cells = re.findall(r"<td align=\"right\">([^(<\/td>)]+)<\/td>", row)
+			if len(cells) < 2:
+				print("WARNING: insufficient cells in row; skipping...")
+				print(row)
+				continue
+			size_cell = cells[len(cells) - 1]
+			size = parse_size(size_cell)
+			files.append(File(size, new_url))
+	return (files, dirs)
+
+def time_str(t: int) -> str:
+	"""
+	Convert an integer number of seconds to an HH:MM:SS string.
+	"""
+	hours = t // SECONDS_PER_HOUR
+	seconds = t % SECONDS_PER_HOUR
+
+	minutes = seconds // SECONDS_PER_MINUTE
+	seconds = seconds % SECONDS_PER_MINUTE
+
+	return "%02d:%02d:%02d" % (hours, minutes, seconds)
+
+def write_progress(p: float):
+	msg = "Working: %.2f%%" % (100.0 * p)
+	if p > 0:
+		global download_start_time
+		elapsed = time.time() - download_start_time # in seconds
+		elapsed_str = time_str(elapsed)
+		total = int(elapsed / p)
+		remaining = total - elapsed
+		remaining_str = time_str(remaining)
+		msg = "%s; elapsed: %s; remaining: %s     " % (msg, elapsed_str, remaining_str)
+	print(msg, end = "\r")
+
+def main(out_dir: str):
+	"""
+	Main function.
+	"""
+	print("Discovering files...")
+	(files, dirs) = get_files(url_base)
+	dir = Directory(url_base, files, dirs)
+	print("Total download size is %s" % to_friendly_str(dir.get_size()))
+	global download_start_time
+	download_start_time = time.time()
+	dir.download(out_dir, lambda p: write_progress(p))
+	print("Successfully downloaded all files")
+
+if __name__ == "__main__":
+	if len(sys.argv) != 2:
+		print("Usage: download <out-path>")
+		exit(1)
+	out_dir = sys.argv[1]
+	main(out_dir)
