@@ -44,7 +44,7 @@ USAGE="Usage: ${0} -s <config-file> [-h] [-d]
     to PBS.
 -q  Quiet mode."
 
-while getopts ":s:hd" opt; do
+while getopts ":s:hdq" opt; do
     case $opt in
       s ) source "${OPTARG}"; CONF=1 CONFIG_FILE="${OPTARG}" ;;
       h ) echo "${USAGE}"; exit 0 ;;
