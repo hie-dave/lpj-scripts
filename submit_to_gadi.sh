@@ -34,19 +34,22 @@ SUBMIT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
 # Parse the command line arguments
 CONF=
 DRY_RUN=0
+QUIET=0
 USAGE="Usage: ${0} -s <config-file> [-h] [-d]
 
 -s  Path to the configuration file, which provides run settings such as
     number of CPUs, instruction file path, etc.
 -h  Display this help info
 -d  Dry run. Create the run directory but don't actually submit the job
-    to PBS."
+    to PBS.
+-q  Quiet mode."
 
 while getopts ":s:hd" opt; do
     case $opt in
       s ) source "${OPTARG}"; CONF=1 CONFIG_FILE="${OPTARG}" ;;
       h ) echo "${USAGE}"; exit 0 ;;
-      d ) DRY_RUN=1
+      d ) DRY_RUN=1 ;;
+      q ) QUIET=1 ;;
     esac
 done
 
@@ -149,6 +152,12 @@ BINARY="$(get_absolute_path "${BINARY}")"
 OUT_DIR="$(get_absolute_path "${OUT_DIR}")"
 GRIDLIST="$(get_absolute_path "${GRIDLIST}")"
 
+LOGFILE=
+if [ ${QUIET} -eq 1 ]
+then
+  LOGFILE=>/dev/null
+fi
+
 function print_settings() {
   echo OUT_DIR=${OUT_DIR}
   echo BINARY=${BINARY}
@@ -169,7 +178,8 @@ function print_settings() {
   echo OUTPATH=${OUTPATH}
   echo
 }
-print_settings
+
+print_settings ${LOGFILE}
 
 # Input checking/validation.
 
