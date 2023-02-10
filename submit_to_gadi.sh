@@ -93,16 +93,22 @@ function get_gridlist() {
   # Note to self: sed does not currently support non-capturing groups.
   # (Although grep -P does...)
 	local gridlist_regex="[ \t]*param[ \t]*\"file_gridlist(_cf)?\"[ \t]*\(str[ \t]*\"([^\"]+)\"[ \t]*\)\r?"
+  local nc_gridlist_regex="[ \t]*file_gridlist[ \t]*\"([^\"]+)\".*"
 
 	# Note: this will not work if any of the instruction file names contain
 	# a newline character.
 	while IFS=$'\n' read ins_file
 	do
 		local gridlist="$(sed -rn "s/${gridlist_regex}/\2/gmp" "${ins_file}")"
+    local nc_gridlist="$(sed -rn "s/${nc_gridlist_regex}/\1/gmp" "${ins_file}")"
 		if [ -n "${gridlist}" ]
 		then
 			echo "${gridlist}"
 			return 0
+    elif [ -n "${nc_gridlist}" ]
+    then
+      echo "${nc_gridlist}"
+      return 0
 		fi
 	done < <(get_all_insfiles $1)
 
@@ -380,7 +386,7 @@ do
 
   # Convert .ins file import paths to use just filename so it gets resolved to
   # the file that has been copied into the local directory.
-  rx='^[ \t]*import ".*\/([^\/]+)"$'
+  rx='^[ \t]*import[ \t]+".*\/([^\/]+)"$'
   sed -ri "s/${rx}/import \"\1\"/gm" "${INPUTS_DIR}/$(basename "${ins_file}")"
 done < <(get_all_insfiles "${INSFILE}")
 TARGET_INSFILE="${INPUTS_DIR}/$(basename "${INSFILE}")"
