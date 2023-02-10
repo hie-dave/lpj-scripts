@@ -20,7 +20,7 @@ _standard_variables = [
 
 	# todo: are these bounds sensible?
 	ForcingVariable("ET", "et", "kg/m2/s", numpy.mean, -10, 10),
-	ForcingVariable("ER_LT", "resp", "kgC/m2/day", numpy.mean, -10, 10),
+	ForcingVariable("ER_LT", "resp", "kgC/m2/day", numpy.mean, -10, 10, True),
 	ForcingVariable("NEE_LT", "nee", "kgC/m2/day", numpy.mean, -10, 10)
 ]
 

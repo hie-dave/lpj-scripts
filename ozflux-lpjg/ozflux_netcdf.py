@@ -134,15 +134,18 @@ units_conversions = {
 }
 
 class ForcingVariable():
+	# Create a new ForcingVariable instance.
+	# @param invert: If true, the variable will be multiplied by -1.
 	def __init__(self, in_name: str, out_name: str, out_units: str
 		, aggregator: Callable[[list[float]], float], lbound: float
-		, ubound: float):
+		, ubound: float, invert: bool = False):
 		self.in_name = in_name
 		self.out_name = out_name
 		self.out_units = out_units
 		self.aggregator = aggregator
 		self.lbound = lbound
 		self.ubound = ubound
+		self.invert = invert
 
 def zeroes(n: int) -> list[float]:
 	"""
@@ -169,7 +172,7 @@ def get_data(in_file: Dataset \
 	@param progress_cb: Progress callback function.
 	"""
 	return _get_data(in_file, var.in_name, output_timestep, var.out_units
-	, var.aggregator, var.lbound, var.ubound, progress_cb)
+	, var.aggregator, var.lbound, var.ubound, var.invert, progress_cb)
 
 def _get_data(in_file: Dataset \
 	, in_name: str
@@ -178,6 +181,7 @@ def _get_data(in_file: Dataset \
 	, aggregator: Callable[[list[float]], float] \
 	, lower_bound: float \
 	, upper_bound: float \
+	, invert: bool \
 	, progress_cb: Callable[[float], None]) -> list[float]:
 		"""
 		Get all data from the input file and convert it to a format
@@ -260,7 +264,7 @@ def _get_data(in_file: Dataset \
 		if not matching_units:
 			log_diagnostic("Converting %s from %s to %s" % \
 				(in_name, in_units, out_units))
-			data = fix_units(data, in_units, out_units, output_timestep, \
+			data = fix_units(data, in_units, out_units, output_timestep, invert,
 				lambda p: progress_cb( \
 					step_start + units_time_proportion * p))
 		else:
@@ -557,7 +561,8 @@ timestep (%d)"
 	return out
 
 def fix_units(data: list[float], current_units: str, desired_units: str, \
-	timestep: int, progress_callback: Callable[[float], None]) -> list[float]:
+	timestep: int, invert: bool, progress_callback: Callable[[float], None]) \
+		-> list[float]:
 	"""
 	Convert data to the units required for the output file.
 	This will modify the existing array.
@@ -571,8 +576,9 @@ def fix_units(data: list[float], current_units: str, desired_units: str, \
 	conversion = find_units_conversion(current_units, desired_units)
 	n = len(data)
 	timestep *= SECONDS_PER_MINUTE
+	scalar = -1 if invert else 1
 	for i in range(n):
-		data[i] = conversion(data[i], timestep)
+		data[i] = conversion(data[i], timestep) * scalar
 		if i % PROGRESS_CHUNK_SIZE == 0:
 			progress_callback(i / n)
 	return data
