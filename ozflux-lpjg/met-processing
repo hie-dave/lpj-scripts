@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 from argparse import ArgumentParser
-import datetime, numpy, os, ozflux_common, re, threading, time
+import datetime, numpy, os, re, threading, time
+import ozflux_common, ozflux_netcdf
 import multiprocessing, multiprocessing.connection
 import traceback, sys
 from ozflux_logging import *
@@ -540,6 +541,10 @@ def process_file(in_file: str, out_file: str, timestep: int \
 			site_name = os.path.basename(in_file)
 			site_name = os.path.splitext(site_name)[0]
 			nc_out.site_name = site_name
+
+			# Write additional metadata.
+			ozflux_netcdf.write_metadata(nc_out)
+
 			if opts.out_type == OutputType.DAILY_GRASS:
 				var_time = nc_out.variables[OUT_DIM_NAME_TIME]
 				var_time.calendar = "gregorian"

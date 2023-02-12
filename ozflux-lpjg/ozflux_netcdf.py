@@ -687,3 +687,9 @@ def get_start_minute(in_file: Dataset):
 		m = "Unable to parse start time; expected yyyy-MM-dd hh:mm:ss format, but was '%s'"
 		raise ValueError(m % in_file.time_coverage_start)
 	return int(matches[0])
+
+def write_metadata(nc: Dataset):
+	"""
+	Write standard metadata to the specified output file.
+	"""
+	setattr(nc, "processor_script_version", ozflux_common.VERSION)
