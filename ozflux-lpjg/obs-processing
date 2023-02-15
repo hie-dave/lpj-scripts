@@ -4,7 +4,9 @@
 # used in benchmarking.
 #
 
-import datetime, numpy, ozflux_common, time, traceback
+import math
+import biom_processing, datetime, glob, numpy, time, traceback
+import ozflux_common, ozflux_netcdf
 
 from argparse import ArgumentParser
 from ozflux_logging import *
@@ -34,15 +36,20 @@ class Options:
 	@param prog: True to write progress messages, 0 otherwise.
 	@param parallel: True to process files in parallel.
 	@param timestep: Desired output timestep, in hours.
+	@param biomass_file: Optional file containing biomass readings
+	@param biomass_searchpath: Search path for biomass readings. If provided, will search under here for a file containing biomass readings for the site
 	"""
 	def __init__(self, log : LogLevel, files: list[str], odir: str, prog: bool,
-		parallel: bool, timestep: int):
+		parallel: bool, timestep: int, biomass_file: str
+		, biomass_searchpath: str):
 		self.log_level = log
 		self.files = files
 		self.out_dir = odir
 		self.report_progress = prog
 		self.parallel = parallel
 		self.timestep = timestep
+		self.biomass_file = biomass_file
+		self.biomass_searchpath = biomass_searchpath
 
 def parse_args(argv: list[str]) -> Options:
 	"""
@@ -61,12 +68,18 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-t", "--timestep", type = int, required = True, help = "Output timestep in hours")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
 
-	p = parser.parse_args(argv[1:])
-	return Options(p.verbosity, p.files, p.out_dir, p.show_progress, p.parallel,
-		p.timestep)
+	biomass_group = parser.add_mutually_exclusive_group()
+	biomass_group.add_argument("-b", "--biomass-readings", required = False, help = "Optional file containing biomass readings")
+	biomass_group.add_argument("-s", "--biomass-searchpath", required = False, help = "Search path for biomass readings. If provided, will search under here for a file containing biomass readings for the site")
 
-def write_csv(outfile: str, names: list[str], data: list[list[float]], \
-	start_date: datetime.datetime, timestep: int \
+	p = parser.parse_args(argv[1:])
+
+	return Options(p.verbosity, p.files, p.out_dir, p.show_progress, p.parallel,
+		p.timestep, p.biomass_readings, p.biomass_searchpath)
+
+def write_csv(outfile: str, names: list[str], data: list[list[float]]
+	, biomass_data: list[biom_processing.BiomassReading]
+	, start_date: datetime.datetime, timestep: int \
 	, pcb: Callable[[float], None], delim = ","):
 	"""
 	Write the data to a csv file.
@@ -90,11 +103,23 @@ def write_csv(outfile: str, names: list[str], data: list[list[float]], \
 
 	write_hours = timestep % 24 != 0
 
+	delta = datetime.timedelta(hours = timestep)
+	end_date = start_date + nrow * delta
+
+	biomass_data = [b for b in biomass_data if b.date >= start_date and b.date <= end_date]
+	biomass_data = sorted(biomass_data, key = lambda b: b.date)
+
+	write_biomass = len(biomass_data) > 0
+
+	biomass_index = 0
 	with open(outfile, "w") as csv:
 		csv.write("year%sdoy%s" % (delim, delim))
 		if write_hours:
 			csv.write("hour%s" % delim)
-		csv.write("%s\n" % str.join(delim, names))
+		csv.write("%s" % str.join(delim, names))
+		if write_biomass:
+			csv.write(",live_biomass,dead_biomass")
+		csv.write("\n")
 		date = start_date
 		for i in range(nrow):
 			if i % PROGRESS_CHUNK_SIZE == 0:
@@ -103,14 +128,74 @@ def write_csv(outfile: str, names: list[str], data: list[list[float]], \
 			# (0-365), so we subtract one here to put it in the same "units".
 			doy = str(int(date.strftime("%j")) - 1)
 			csv.write("%s%s%s%s" % (date.year, delim, doy, delim))
+
+			# Write the hour column.
 			if write_hours:
 				csv.write("%s%s" % (date.hour, delim))
-			csv.write("%s\n" % str.join(delim, [str(column[i]) for column in data]))
-			date += datetime.timedelta(hours = timestep)
+
+			# Write the data columns.
+			csv.write("%s" % str.join(delim, [str(column[i]) for column in data]))
+
+			# Write the biomass column.
+			if write_biomass:
+				live_str = ""
+				dead_str = ""
+				if biomass_index < len(biomass_data):
+					reading = biomass_data[biomass_index]
+					if reading.date == date:
+						biomass_index += 1
+						if not math.isnan(reading.live):
+							live_str = reading.live
+						if not math.isnan(reading.dead):
+							dead_str = reading.dead
+				csv.write("%s%s%s%s" % (delim, live_str, delim, dead_str))
+			csv.write("\n")
+			date += delta
 	pcb(1)
 
-def process_file(file: str, out_dir: str, timestep: int,
-	pcb: Callable[[float], None]):
+def get_biomass_data(nc_file: str, biom_file: str, biom_searchpath: str,
+	pcb: Callable[[float], None]) \
+	-> list[biom_processing.BiomassReading]:
+	"""
+	Attempt to read biomass data corresponding to the site specified by the .nc
+	file name.
+
+	@param nc_file: Input .nc file (may be used to determine site name).
+	@param biom_file: -b CLI argument from user (or None if not given).
+	@param biom_searchpath: -s CLI argument from user (or None if not given).
+	"""
+	if biom_file != None:
+		raw = biom_processing.read_raw_data(biom_file)
+		return biom_processing.read_biomass_data(raw, pcb)
+
+	if biom_searchpath == None:
+		log_warning("No biomass input data file was given. No biomass data will be included in output file.")
+		return []
+
+	# Determine site name, convert to lower case.
+	site_name = ozflux_netcdf.get_site_name(nc_file)
+	site_name = site_name.replace(" ", "_").lower()
+
+	if "CumberlandPlain" in nc_file:
+		site_name = "cumberland_plains"
+
+	site_dir = "%s/%s" % (biom_searchpath, site_name)
+	dir = site_dir if os.path.exists(site_dir) else biom_searchpath
+
+	for file in glob.glob("%s/*.csv" % dir):
+		log_diagnostic("Attempting to read biomass data from '%s'..." % file)
+		try:
+			raw = biom_processing.read_raw_data(file)
+			return biom_processing.read_biomass_data(raw, pcb)
+		except BaseException as error:
+			log_warning("Failed to read biomass data from file '%s'. This is not necessarily a problem." % file)
+			log_warning(error)
+			continue
+	# Cannot find a .csv file containing valid biomass readings.
+	return []
+
+def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
+	, biomass_searchpath: str, pcb: Callable[[float], None]):
 	"""
 	Extract the standard variables from the input file, write them to a .csv
 	file in the specified output directory in the specified timestep.
@@ -122,10 +207,16 @@ def process_file(file: str, out_dir: str, timestep: int,
 	"""
 	log_information("Processing '%s'..." % file)
 
-	read_prop = 0.99
-	write_prop = 1 - read_prop
+	read_prop = 0.85
+	biom_prop = 0.14
+	write_prop = 1 - read_prop - biom_prop
 
 	variables = _standard_variables
+
+	biom_start = time.time()
+	biomass_data = get_biomass_data(file, biomass_file, biomass_searchpath
+		, lambda p: pcb(biom_prop * p))
+	biom_time = time.time() - biom_start
 
 	log_debug("Opening input file '%s' for reading..." % file)
 
@@ -134,11 +225,11 @@ def process_file(file: str, out_dir: str, timestep: int,
 	timestep_minutes = timestep * MINUTES_PER_HOUR
 	start_date: datetime
 	with Dataset(file, "r", format=ozflux_common.NC_FORMAT) as nc:
-		step_size = 1 / len(variables)
-		step_start = 0
+		step_size = read_prop / len(variables)
+		step_start = biom_prop
 		for var in variables:
 			data.append(get_data(nc, var, timestep_minutes, lambda p: \
-				pcb(step_start + step_size * read_prop * p)))
+				pcb(step_start + step_size * p)))
 			step_start += step_size
 		start_date = get_next_year(ozflux_common.parse_date(nc.time_coverage_start))
 	read_time = time.time() - read_start
@@ -147,17 +238,25 @@ def process_file(file: str, out_dir: str, timestep: int,
 	filename = "%s.csv" % os.path.splitext(file)[0]
 	outfile = os.path.join(out_dir, filename)
 
+	if not os.path.exists(out_dir):
+		os.makedirs(out_dir)
+
 	write_start = time.time()
 	names = ["%s" % v.out_name for v in variables]
 
 	timestep_hours = timestep
-	write_csv(outfile, names, data, start_date, timestep_hours, lambda p: \
-		pcb(read_prop + write_prop * p))
+	write_csv(outfile, names, data, biomass_data, start_date, timestep_hours, lambda p: \
+		pcb(biom_prop + read_prop + write_prop * p))
 	write_time = time.time() - write_start
 
-	read_prop = read_time / (read_time + write_time)
-	log_information("Time spent reading: %.2f%%; Time spent writing: %.2f%%"
-	% (100 * read_prop, 100 * (1 - read_prop)))
+	total_time = read_time + write_time + biom_time
+
+	read_prop = read_time / total_time
+	write_prop = write_time / total_time
+	biom_prop = biom_time / total_time
+
+	log_diagnostic("Time spent reading: %.2f%%; Time spent writing: %.2f%%; Time spenting reading biomass data: %.2f%%"
+	% (100 * read_prop, 100 * write_prop, 100 * biom_prop))
 
 def main(opts: Options):
 	"""
@@ -168,8 +267,8 @@ def main(opts: Options):
 	step = 1 / len(opts.files)
 	start = 0
 	for file in opts.files:
-		process_file(file, opts.out_dir, opts.timestep, lambda p: \
-			log_progress(start + step * p))
+		process_file(file, opts.out_dir, opts.timestep, opts.biomass_file
+		, opts.biomass_searchpath, lambda p: log_progress(start + step * p))
 		start += step
 
 if __name__ == "__main__":

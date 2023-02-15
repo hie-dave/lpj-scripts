@@ -6,7 +6,6 @@ import multiprocessing, multiprocessing.connection
 import traceback, sys
 from ozflux_logging import *
 from netCDF4 import Dataset, Variable
-from enum import IntEnum
 from ozflux_common import LsmVariables
 from sys import argv
 from typing import Callable

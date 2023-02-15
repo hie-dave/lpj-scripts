@@ -693,3 +693,12 @@ def write_metadata(nc: Dataset):
 	Write standard metadata to the specified output file.
 	"""
 	setattr(nc, "processor_script_version", ozflux_common.VERSION)
+
+def get_site_name(nc_file: str) -> str:
+	"""
+	Get the site name for the specified .nc file.
+
+	@param nc_file: netcdf file containing met forcing data for the site.
+	"""
+	with Dataset(nc_file, "r", format=ozflux_common.NC_FORMAT) as nc:
+		return nc.site_name
