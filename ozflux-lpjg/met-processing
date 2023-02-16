@@ -266,7 +266,7 @@ def copy_data_lsm(in_file: Dataset, variable: Variable, timestep: int, \
 	"""
 	# 0. Get variable IDs.
 	i = 0
-	for forcing in Forcing:
+	for forcing in LsmVariables:
 		if forcing == LsmVariables.NFORCINGS:
 			break
 		out_name = lsm_var_names_out[forcing]
