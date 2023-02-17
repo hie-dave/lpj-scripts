@@ -162,7 +162,7 @@ def download(site: str, out_dir: str, annual: bool, progress_report: typing.Call
 	progress_report(0)
 	resp = requests.get(url, stream = True)
 	total = int(resp.headers.get("Content-Length"))
-	chunk_size = min(8192, total / 2)
+	chunk_size = min(8192, total // 2)
 	with open(out_file, "wb") as file:
 		downloaded = 0
 		for data in resp.iter_content(chunk_size = chunk_size):
