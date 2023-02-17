@@ -84,7 +84,7 @@ def get_latest_version_and_level(site: str) -> tuple[str, str]:
 			# Otherwise, ignore error and try next version
 			pass
 
-def get_available_files(site: str, version: str, level: str) -> list[str]:
+def get_available_files(site: str, version: str, level: str, annual: bool) -> list[str]:
 	"""
 	Get a list of all files available for the specified site, version,
 	and processing level. Returns a list of URLs.
@@ -93,18 +93,20 @@ def get_available_files(site: str, version: str, level: str) -> list[str]:
 	download_page = request_string(download_page_url)
 
 	pattern = r"<a href='[^']+(%s_L\d+_\d+_\d+\.nc)" % site
+	if annual:
+		pattern = r"<a href='[^']+(%s_L\d+_\d+_\d+_Annual\.nc)" % site
 	files = re.findall(pattern, download_page)
 	return ["%s/%s/%s/%s/default/%s" % \
 		(download_url_base, site, version, level, file) \
 		for file in files]
 
-def get_download_url(site: str) -> str:
+def get_download_url(site: str, annual: bool) -> str:
 	"""
 	Get the download URL to the data file for the latest version of the
 	data available for the specified site.
 	"""
 	(version, level) = get_latest_version_and_level(site)
-	files = get_available_files(site, version, level)
+	files = get_available_files(site, version, level, annual)
 
 	# Length should be 1.
 	if len(files) < 1:
@@ -116,7 +118,7 @@ def get_latlon_code(site: str) -> str:
 	"""
 	Get the lat/lon code for the specified site.
 	"""
-	url = get_download_url(site)
+	url = get_download_url(site, False)
 	body = request_string(url)
 	# regex_match
 	pattern = r"_L[0-9]+_([0-9]{8}_[0-9]{8})\.nc"
@@ -137,12 +139,12 @@ def find_site(code: str) -> str:
 			return site
 	raise ValueError("No site found for code '%s'" % code)
 
-def download(site: str, out_dir: str, progress_report: typing.Callable[[float],None]):
+def download(site: str, out_dir: str, annual: bool, progress_report: typing.Callable[[float],None]):
 	"""
 	Download latest version of the data for the specified site into the
 	specified directory.
 	"""
-	url = get_download_url(site)
+	url = get_download_url(site, annual)
 	if url is None:
 		return
 
@@ -178,6 +180,7 @@ def write_progress(i: int, n: int, p: float):
 	print("Downloading: %.2f%%\r" % overall, end = "")
 
 def main():
+	annual = True
 	sites = get_sites()
 	if len(sys.argv) < 2:
 		print("Usage: %s: <out-dir>" % sys.argv[0])
@@ -191,7 +194,7 @@ def main():
 	for site in sites:
 		# code = get_latlon_code(site)
 		print("Downloading %s..." % site)
-		download(site, out_dir, lambda p: write_progress(i, len(sites), p))
+		download(site, out_dir, annual, lambda p: write_progress(i, len(sites), p))
 		i += 1
 
 if __name__ == "__main__":
