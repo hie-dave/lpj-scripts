@@ -1,54 +1,21 @@
-import datetime, numpy, os, ozflux_common, re, threading, time
+import datetime, numpy, os, re, threading, time
 import multiprocessing, multiprocessing.connection
 import traceback, sys
+from ozflux_common import *
 from ozflux_logging import *
 from netCDF4 import Dataset, Variable
 from enum import IntEnum
-from ozflux_common import LsmVariables
 from sys import argv
 from typing import Callable
 
 # Name of the time dimension in the output file.
-OUT_DIM_NAME_TIME = "time"
+DIM_TIME = "time"
 
 # Name of the longitude dimension in the output file.
-OUT_DIM_NAME_LON = "longitude"
+DIM_LON = "longitude"
 
 # Name of the latitude dimension in the output file.
-OUT_DIM_NAME_LAT = "latitude"
-
-# g to kg. This is not really used except as an example.
-KG_PER_G = 1e-3
-
-# KPa to Pa
-PA_PER_KPA = 1e3
-
-# °C to K
-DEG_C_TO_K = 273.15
-
-# Number of seconds per minute.
-SECONDS_PER_MINUTE = 60
-
-# Number of minutes per hour.
-MINUTES_PER_HOUR = 60
-
-# Number of seconds per hour.
-SECONDS_PER_HOUR = SECONDS_PER_MINUTE * MINUTES_PER_HOUR
-
-# Number of hours per day.
-HOURS_PER_DAY = 24
-
-# Number of days per year.
-DAYS_PER_YEAR = 365 # ha
-
-# Moles per micromole.
-MOL_PER_UMOL = 1e-6
-
-# Atomic mass of carbon (g/mol).
-G_C_PER_MOL = 12.011
-
-# Number of seconds per day.
-SECONDS_PER_DAY = SECONDS_PER_MINUTE * MINUTES_PER_HOUR * HOURS_PER_DAY
+DIM_LAT = "latitude"
 
 # Inputs/outputs will be read/written in chunks of this size.
 # Increasing this will improve performance but increase memory usage.
@@ -68,6 +35,9 @@ PARALLEL_AGGREGATION = True
 # this is false, the dimensions will have exactly the length required, which is
 # the number of input files. (This assumes 1 grid point per input file.)
 UNLIMITED_DIMS = False
+
+# Data format in output file.
+FORMAT_FLOAT = "f8"
 
 # Global estimates of how much time it takes to perform various tasks (as a
 # proportion of total time spent in get_data() function [0, 1]). These get
@@ -215,22 +185,20 @@ def _get_data(in_file: Dataset \
 		global get_data_read_prop, get_data_fixnan_prop, get_data_t_agg_prop
 		global get_data_unit_prop, get_data_bounds_prop
 
-		# About 1/3 of time to fix units (if units need fixing).
 		units_time_proportion = 0 if matching_units else get_data_unit_prop
 
 		prop_tot = get_data_read_prop + get_data_fixnan_prop + \
 			get_data_t_agg_prop + units_time_proportion + get_data_bounds_prop
 
-		# About 2/3 of remaining time to read the data from input file.
 		read_time_proportion = get_data_read_prop / prop_tot
 
-		# 5% of time to remove NaNs. Need to check this.
 		fixnan_time_proportion = get_data_fixnan_prop / prop_tot
 
-		# Rest of time is spent aggregating over the timestep.
 		aggregation_time_proportion = get_data_t_agg_prop / prop_tot
 
 		bounds_time_prop = get_data_bounds_prop / prop_tot
+
+		units_time_proportion /= prop_tot
 
 		# Read data from netcdf file.
 		read_start = time.time()
@@ -339,18 +307,18 @@ def get_coord_indices(nc_out: Dataset, lon: float, lat: float) \
 	@param lon: Longitude.
 	@param lat: Latitude.
 	"""
-	var_lon = nc_out.variables[OUT_DIM_NAME_LON]
-	var_lat = nc_out.variables[OUT_DIM_NAME_LAT]
+	var_lon = nc_out.variables[DIM_LON]
+	var_lat = nc_out.variables[DIM_LAT]
 	index_lon = index_of(var_lon, lon)
 	if index_lon == -1:
-		if nc_out.dimensions[OUT_DIM_NAME_LON].isunlimited():
+		if nc_out.dimensions[DIM_LON].isunlimited():
 			index_lon = len(var_lon)
 		else:
 			index_lon = numpy.ma.flatnotmasked_edges(var_lon)[0]
 		var_lon[index_lon] = lon
 	index_lat = index_of(var_lat, lat)
 	if index_lat == -1:
-		if nc_out.dimensions[OUT_DIM_NAME_LAT].isunlimited():
+		if nc_out.dimensions[DIM_LAT].isunlimited():
 			index_lat = len(var_lat)
 		else:
 			index_lat = numpy.ma.flatnotmasked_edges(var_lat)[0]
@@ -362,7 +330,7 @@ def trim_to_start_year(in_file: Dataset, timestep: int
 	"""
 	Trim the given data to the start of the next year.
 	"""
-	start_date = ozflux_common.parse_date(in_file.time_coverage_start)
+	start_date = parse_date(in_file.time_coverage_start)
 	if (start_date.minute == 30):
 		# temporal_aggregation() trims the first value if it lies on the
 		# half-hour boundary. We need to do the same here.
@@ -401,7 +369,7 @@ def remove_nans(data: list[float]
 	for i in range(n):
 		if data[i].mask:
 			# Use mean of 5 closest values if value is nan.
-			x = ozflux_common.neighbouring_mean(data, i, N_NEIGHBOUR)
+			x = neighbouring_mean(data, i, N_NEIGHBOUR)
 			m = "Replacing NaN at %d with mean %.2f (n = %d)"
 			log_debug(m % (i, x, N_NEIGHBOUR))
 			data[i] = x
@@ -688,11 +656,15 @@ def get_start_minute(in_file: Dataset):
 		raise ValueError(m % in_file.time_coverage_start)
 	return int(matches[0])
 
-def write_metadata(nc: Dataset):
+def write_common_metadata(nc: Dataset, timestep: int):
 	"""
 	Write standard metadata to the specified output file.
+
+	@param nc: Output nc file.
+	@param timestep: Output timestep in minutes.
 	"""
-	setattr(nc, "processor_script_version", ozflux_common.VERSION)
+	setattr(nc, "processor_script_version", VERSION)
+	setattr(nc, "time_step",str(timestep)) # in minutes.
 
 def get_site_name(nc_file: str) -> str:
 	"""
@@ -700,5 +672,35 @@ def get_site_name(nc_file: str) -> str:
 
 	@param nc_file: netcdf file containing met forcing data for the site.
 	"""
-	with Dataset(nc_file, "r", format=ozflux_common.NC_FORMAT) as nc:
+	with Dataset(nc_file, "r", format=NC_FORMAT) as nc:
 		return nc.site_name
+
+def create_var_if_not_exists(nc: Dataset, name: str, format: str
+	, dims: tuple[str], compression_level: int = 0, compression_type: str = None
+	, chunksizes: tuple[int] = None):
+	"""
+	Create a variable in the NetCDF file if it does not already exist.
+
+	@param nc: The NetCDF file.
+	@param name: Name of the variable.
+	@param format: Format of the variable.
+	@param dims: Dimensions of the variable.
+	@param compression_level: Compression level [1-9], 9 = slowest/smallest.
+	@param compression_type: Compression algorithm to be used (or None).
+	"""
+	compression = None if compression_level == 0 else compression_type
+	log_diagnostic("Compression = %s L%d" % (compression, compression_level))
+	if not name in nc.variables:
+		nc.createVariable(name, format, dims, compression = compression
+		, complevel = compression_level, chunksizes = chunksizes)
+
+def create_dim_if_not_exists(nc: Dataset, name: str, size: int = 0):
+	"""
+	Create an unlimited dimension in the NetCDF file if it does not already
+	exist.
+
+	@param nc: The NetCDF file.
+	@param name: Name of the dimension.
+	"""
+	if not name in nc.dimensions:
+		nc.createDimension(name, size)

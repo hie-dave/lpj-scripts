@@ -1,148 +1,21 @@
 #!/usr/bin/env python
 from argparse import ArgumentParser
 import datetime, numpy, os, re, threading, time
-import ozflux_common, ozflux_netcdf
+import ozflux_dave, ozflux_netcdf
 import multiprocessing, multiprocessing.connection
 import traceback, sys
 from ozflux_logging import *
 from netCDF4 import Dataset, Variable
-from ozflux_common import LsmVariables
 from sys import argv
 from typing import Callable
 from ozflux_netcdf import *
+from ozflux_common import *
+from ozflux_dave import get_dailygrass_vars
+import ozflux_lsm
 
 #######################################################################
 # Constants related to .nc format/processing
 #######################################################################
-
-def lsm_var(forcing: LsmVariables, out_name: str, out_units: str) -> ForcingVariable:
-	return ForcingVariable(ozflux_var_names[forcing]
-		, out_name
-		, out_units
-		, indata_aggregators[forcing]
-		, forcing_bounds[forcing][0]
-		, forcing_bounds[forcing][1])
-
-# Name of the single variable created in the output file.
-OUT_VARIABLE_LSM = "forcing_data"
-
-# Data format in output file.
-FORMAT_FLOAT = "f8"
-
-# Name of the forcings dimension in the output file.
-OUT_DIM_NAME_FORCINGS = "forcings"
-
-# Name of the mean temperature variable created in the dailygrass output file.
-DG_OUT_VARIABLE_NAME_TEMP = "tav"
-
-# Name of the insol variable created in the dailygrass output file.
-DG_OUT_VARIABLE_NAME_INSOL = "insol"
-
-# Name of the prec variable created in the dailygrass output file.
-DG_OUT_VARIABLE_NAME_PREC = "prec"
-
-# Name of the co2 variable created in the dailygrass output file.
-DG_OUT_VARIABLE_NAME_CO2 = "co2"
-
-# Name of the VPD variable created in the dailygrass output file.
-DG_OUT_VARIABLE_NAME_VPD = "vpd"
-
-# Name of the tmax variable created in the dailygrass output file.
-DG_OUT_VARIABLE_NAME_TMAX = "tmax"
-
-# Name of the tmin variable created in the dailygrass output file.
-DG_OUT_VARIABLE_NAME_TMIN = "tmin"
-
-# Name of the pressure variable created in the dailygrass output file.
-DG_OUT_VARIABLE_NAME_PS = "ps"
-
-# Atmospheric pressure lower bound (Pa). todo: is this too conservative?
-LBOUND_PS = 50000
-
-# Atmospheric pressure upper bound (Pa). todo: is this too conservative?
-UBOUND_PS = 150000
-
-# Variable names for the output file.
-lsm_var_names_out = {
-	LsmVariables.SWDOWN: "swdown",
-	LsmVariables.PARDF: "pardf",
-	LsmVariables.PARDR: "pardr",
-	LsmVariables.LWDOWN: "lwdown",
-	LsmVariables.PRECLS: "precls",
-	LsmVariables.PRECCO: "precco",
-	LsmVariables.TAIR: "tair",
-	LsmVariables.UAIR: "uair",
-	LsmVariables.VAIR: "vair",
-	LsmVariables.QAIR: "qair",
-	LsmVariables.PSURF: "psurf"
-}
-
-# Variable names for the ozflux input file.
-ozflux_var_names = {
-	LsmVariables.SWDOWN: "Fsd",
-	LsmVariables.PARDF: "zero",
-	LsmVariables.PARDR: "zero",
-	LsmVariables.LWDOWN: "Fld",
-	LsmVariables.PRECLS: "Precip",
-	LsmVariables.PRECCO: "zero",
-	LsmVariables.TAIR: "Ta",
-	LsmVariables.UAIR: "Ws",
-	LsmVariables.VAIR: "zero",
-	LsmVariables.QAIR: "SH",
-	LsmVariables.PSURF: "ps"
-}
-
-# From DMB:
-# > Radiation (SWDOWN, PARDF, PARDR, LWDOWN)-> W/m^2
-# > Precipitation (PRECLS, PRECCO) -> kg/m^2/s
-# > Air temperature (TAIR) -> K
-# > Wind speed (UAIR, VAIR) -> m/s (u = eastward, v = northward)
-# > Air specific humidity (QAIR) -> kg/kg (unitless)
-# > Pressure (PSURF) -> Pa
-forcing_units = {
-	LsmVariables.SWDOWN: "W/m2",
-	LsmVariables.PARDF: "W/m2",
-	LsmVariables.PARDR: "W/m2",
-	LsmVariables.LWDOWN: "W/m2",
-	LsmVariables.PRECLS: "kg/m2/s",
-	LsmVariables.PRECCO: "kg/m2/s",
-	LsmVariables.TAIR: "K",
-	LsmVariables.UAIR: "m/s",
-	LsmVariables.VAIR: "m/s",
-	LsmVariables.QAIR: "",
-	LsmVariables.PSURF: "Pa"
-}
-
-# Min and max values for each forcing variable, in output units.
-forcing_bounds = {
-	LsmVariables.SWDOWN: (0, 1e5),
-	LsmVariables.PARDF: (0, 1e5),
-	LsmVariables.PARDR: (0, 1e5),
-	LsmVariables.LWDOWN: (0, 1e5),
-	LsmVariables.PRECLS: (0, 1e4),
-	LsmVariables.PRECCO: (0, 1e3), # Always zero, not used.
-	LsmVariables.TAIR: (200, 373), # Kelvins
-	LsmVariables.UAIR: (0, 100),
-	LsmVariables.VAIR: (0, 1), # Always zero, not used.
-	LsmVariables.QAIR: (0, 0.2),
-	LsmVariables.PSURF: (3e4, 1.5e5)
-}
-
-# These are the functions used to aggregate data temporally, when converting
-# from one timestep to another.
-indata_aggregators = {
-	LsmVariables.SWDOWN: numpy.mean,
-	LsmVariables.PARDF: numpy.mean,
-	LsmVariables.PARDR: numpy.mean,
-	LsmVariables.LWDOWN: numpy.mean,
-	LsmVariables.PRECLS: numpy.sum, # precip in mm
-	LsmVariables.PRECCO: numpy.sum, # precip in mm
-	LsmVariables.TAIR: numpy.mean,
-	LsmVariables.UAIR: numpy.mean,
-	LsmVariables.VAIR: numpy.mean,
-	LsmVariables.QAIR: numpy.mean,
-	LsmVariables.PSURF: numpy.mean,
-}
 
 #######################################################################
 # End of .nc constants
@@ -160,10 +33,11 @@ class Options:
 	@param timestep: Desired output timestep, in minutes.
 	@param compression_level: Compression quality for output file [0, 9]. 0 = none, 1 = fastest compression, largest filesize, 9 = slowest compression, smallest filesize.
 	@param compression_type: Compression algorithm to be used (default 'zlib').
+	@param single_outfile: Iff true, inputs will be written to a single output file.
 	"""
 	def __init__(self, log : LogLevel, files: list[str], odir: str, \
-		prog: bool, parallel: bool, timestep: int, out_type: OutputType,
-		compression_level: int, compression_type: str):
+		prog: bool, parallel: bool, timestep: int, out_type: LpjVersion,
+		compression_level: int, compression_type: str, single_outfile: bool):
 		self.log_level = log
 		self.files = files
 		self.out_dir = odir
@@ -172,7 +46,8 @@ class Options:
 		self.timestep = timestep
 		self.compression_level = compression_level
 		self.compression_type = compression_type
-		self.out_type = OutputType(out_type)
+		self.out_type = LpjVersion(out_type)
+		self.single_outfile = single_outfile
 
 def six_digit_string(x: float) -> str:
 	"""
@@ -187,37 +62,12 @@ def get_output_filename(infile: str) -> str:
 	"""
 	Get the expected output file name for the given input .nc file.
 	"""
-	with Dataset(infile, "r", format=ozflux_common.NC_FORMAT) as nc:
+	with Dataset(infile, "r", format=NC_FORMAT) as nc:
 		# Read latitude/longitude from input .nc file.
 		lon = float(nc.longitude)
 		lat = float(nc.latitude)
 
-		return ozflux_common.get_met_filename(lon, lat)
-
-def write_data_lsm(variable: Variable, data: list[float], forcing: LsmVariables, \
-	progress_callback: Callable[[float], None]):
-	"""
-	Write data to the output file (LSM mode).
-
-	@param variable: Variable in the output file, to which data will be written.
-	@param data: A column of data to be written.
-	@param forcing: Column of the variable to which the data will be written.
-	@progress_callback: Called to report progress.
-	"""
-	n = len(data)
-
-	# Always use at least this many chunks.
-	MIN_NUM_CHUNKS = 10
-
-	chunk_size = min(CHUNK_SIZE, n / MIN_NUM_CHUNKS)
-	for i in range(0, n, chunk_size):
-		row = i
-		upper = min(n, i + chunk_size)
-		col = forcing
-		variable[row:upper, col] = data[i:upper]
-		progress_callback(i / n)
-
-	log_debug("Successfully wrote %d items of %s" % (n, forcing))
+		return get_met_filename(lon, lat)
 
 def write_data_dg(nc_out: Dataset, var_name: str, data: list[float], lon: float
 	, lat: float, progress_cb: Callable[[float], None]):
@@ -254,86 +104,91 @@ def change_start_minute(datetime: str, minute: int) -> str:
 		raise ValueError(m % datetime)
 	return "%s%d%s" % (matches[0], minute, matches[1])
 
-def copy_data_lsm(in_file: Dataset, variable: Variable, timestep: int, \
-	progress_callback: Callable[[float], None]):
+def get_vars(version: LpjVersion, timestep: int) -> list[ForcingVariable]:
+	"""
+	Get the list of variables to be copied to the output file.
+
+	@param version: The target lpj-guess version.
+	@param timestep: Output timestep in minutes.
+	"""
+	if version == LpjVersion.LSM:
+		return ozflux_lsm.get_lsm_vars()
+	if version == LpjVersion.DAILY_GRASS:
+		return get_dailygrass_vars(timestep)
+	raise ValueError("Unknown output mode: %d" % version)
+
+def copy_data_lsm(in_file: Dataset, out_file: Dataset, timestep: int, \
+	pcb: Callable[[float], None]):
 	"""
 	Copy all data from the input file to the output variable.
 
 	@param input file: Opened .nc file.
 	@param variable: The newly-created and initialised forcing variable.
 	@param timestep: Desired output timestep in minutes.
-	@param progress_callback: Progress reporting function.
+	@param pcb: Progress reporting function.
 	"""
 	# 0. Get variable IDs.
 	i = 0
-	for forcing in LsmVariables:
-		if forcing == LsmVariables.NFORCINGS:
-			break
-		out_name = lsm_var_names_out[forcing]
-		log_diagnostic("----- %s -----" % out_name)
-		log_diagnostic("Reading %s data" % out_name)
+	vars = ozflux_lsm.get_lsm_vars()
+	nvar = len(vars)
+	n = LsmVariables.NFORCINGS
+	for var in vars:
+		log_diagnostic("----- %s -----" % var.out_name)
+		log_diagnostic("Reading %s data" % var.out_name)
 		read_proportion = 0.66
 		write_proportion = 1 - read_proportion
 
-		var = lsm_var(forcing, out_name, forcing_units[forcing])
-		
 		data = get_data(in_file, var, timestep, lambda p: \
-			progress_callback((i + p * read_proportion) / LsmVariables.NFORCINGS))
+			pcb((i + p * read_proportion) / nvar))
 
 		# 3. Write data to out file.
-		log_diagnostic("Writing %s data" % out_name)
-		write_data_lsm(variable, data, forcing, lambda p: progress_callback( \
-			(i + read_proportion + write_proportion * p) / LsmVariables.NFORCINGS))
+		start = i + read_proportion
+		step = write_proportion
+		log_diagnostic("Writing %s data" % var.out_name)
+		reporter = lambda p: pcb((start + step * p) / n)
+		ozflux_lsm.write_data(out_file, data, var, reporter)
 		i += 1
 
-def copy_data_dailygrass(nc_in: Dataset, nc_out: Dataset, timestep: int
-	, progress_cb: Callable[[float], None]):
+def write_data(nc_in: Dataset, nc_out: Dataset, data: list[float] \
+	, var: ForcingVariable, version: LpjVersion, pcb: Callable[[float], None]):
+	"""
+	Write the data to the output file.
+
+	@param nc: The output netcdf file.
+	@param data: The data to be written.
+	@param var: The variable being copied.
+	@param version: The lpj-guess version selected by the user.
+	@param pcb: Progress callback function.
+	"""
+	if version == LpjVersion.LSM:
+		ozflux_lsm.write_data(nc_out, data, var, pcb)
+	elif version == LpjVersion.DAILY_GRASS:
+		lon = float(nc_in.longitude)
+		lat = float(nc_in.latitude)
+		write_data_dg(nc_out, var.out_name, data, lon, lat, pcb)
+	else:
+		raise ValueError("Unknown lpj version %d" % version)
+
+def copy_data(nc_in: Dataset, nc_out: Dataset, timestep: int
+	, version: LpjVersion , pcb: Callable[[float], None]):
 	"""
 	Copy data to the output file in dailygrass format.
 
 	@param nc_in: Input NetCDF file.
 	@param nc_out: Output NetCDF file.
 	@param timestep: Output timestep length in minutes.
+	@param version: Output lpj-guess version selected by the user.
 	@param progress_cb: Progress callback function.
 	"""
 	i = 0
 
-	# Output units for temperature variables.
-	temp_out_units = "degC"
-
-	# Lower and upper bounds for temperature variables.
-	temp_min_degc = -100
-	temp_max_degc = 100
-
 	# Variables to be added to output file.
-	variables = [
-	ForcingVariable(ozflux_var_names[LsmVariables.TAIR]
-		, DG_OUT_VARIABLE_NAME_TEMP, temp_out_units, numpy.mean, temp_min_degc
-		, temp_max_degc)
-	, lsm_var(LsmVariables.SWDOWN, DG_OUT_VARIABLE_NAME_INSOL, "W/m2")
-	, lsm_var(LsmVariables.PRECLS, DG_OUT_VARIABLE_NAME_PREC, "mm")
-	, ForcingVariable("CO2", DG_OUT_VARIABLE_NAME_CO2, "ppm", numpy.mean, 250
-		, 900)
-	, ForcingVariable("VPD", DG_OUT_VARIABLE_NAME_VPD, "kPa", numpy.mean, 0, 100)
-	, ForcingVariable("ps", DG_OUT_VARIABLE_NAME_PS, "Pa", numpy.mean, LBOUND_PS
-		, UBOUND_PS)
-	]
-
-	step_width = opts.timestep / MINUTES_PER_HOUR
-
-	# If generating a daily file, need to include tmax/tmin variables in output.
-	if step_width == 24:
-		name_tav = ozflux_var_names[LsmVariables.TAIR]
-		variables.append(ForcingVariable(name_tav, DG_OUT_VARIABLE_NAME_TMAX, temp_out_units
-			, numpy.amax, temp_min_degc, temp_max_degc))
-		variables.append(ForcingVariable(name_tav, DG_OUT_VARIABLE_NAME_TMIN, temp_out_units
-			, numpy.amin, temp_min_degc, temp_max_degc))
+	variables = get_vars(version, timestep)
 
 	# 95% of time to read
 	global global_read_prop, global_write_prop
 
-	lon = float(nc_in.longitude)
-	lat = float(nc_in.latitude)
+	nvar = len(variables)
 
 	n = 0
 	for var in variables:
@@ -348,17 +203,17 @@ def copy_data_dailygrass(nc_in: Dataset, nc_out: Dataset, timestep: int
 		log_diagnostic("----- %s -----" % var.in_name)
 		log_diagnostic("Reading %s data")
 
+		reporter = lambda p: pcb( (i + p * read_prop) / nvar)
 		read_start = time.time()
-		data = get_data(nc_in, var, timestep
-		, lambda p: progress_cb( (i + p * read_prop) / len(variables)))
+		data = get_data(nc_in, var, timestep, reporter)
 		read_time = time.time() - read_start
 
 		n = max(n, len(data))
 
 		log_diagnostic("Writing %s data")
+		reporter = lambda p: pcb( (i + read_prop + write_prop * p) / nvar)
 		write_start = time.time()
-		write_data_dg(nc_out, var.out_name, data, lon, lat, lambda p: \
-		progress_cb( (i + read_prop + write_prop * p) / len(variables)))
+		write_data(nc_in, nc_out, data, var, version, reporter)
 		write_time = time.time() - write_start
 
 		# Bookkeeping.
@@ -388,127 +243,116 @@ def copy_data_dailygrass(nc_in: Dataset, nc_out: Dataset, timestep: int
 	# Copy data into time variable. This is # of hours since start date.
 	# So it starts at 0 and increments by timestep width (in hours).
 	# Write data in chunks to speed things up a bit.
+	step_width = opts.timestep / MINUTES_PER_HOUR
 	timesteps = [i * step_width for i in range(n)]
 	for i in range(0, n, CHUNK_SIZE):
 		up = min(n, i + CHUNK_SIZE)
-		nc_out.variables[OUT_DIM_NAME_TIME][i:up] = timesteps[i:up]
+		nc_out.variables[DIM_TIME][i:up] = timesteps[i:up]
 
-def create_dailygrass_variables(nc: Dataset):
+def create_dimensions(nc: Dataset, version: LpjVersion, ngridcell: int):
 	"""
-	Create the variables required for dailygrass mode.
-
-	@param nc: The output netcdf file.
+	Create the required dimensions in the output file.
 	"""
-	dims = (OUT_DIM_NAME_LAT, OUT_DIM_NAME_LON, OUT_DIM_NAME_TIME)
-	chunksizes = (1, 1, get_steps_per_year(opts.timestep))
-	format = FORMAT_FLOAT
-
-	create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_TEMP, format, dims, chunksizes)
-	create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_INSOL, format, dims, chunksizes)
-	create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_PREC, format, dims, chunksizes)
-	create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_CO2, format, dims, chunksizes)
-	create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_VPD, format, dims, chunksizes)
-	create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_PS, format, dims, chunksizes)
-
-	# When generating daily outputs, we need to include tmax/tmin.
-	if opts.timestep == 1440:
-		create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_TMAX, format, dims, chunksizes)
-		create_var_if_not_exists(nc, DG_OUT_VARIABLE_NAME_TMIN, format, dims, chunksizes)
-
-def create_dim_if_not_exists(nc: Dataset, name: str, size: int = 0):
-	"""
-	Create an unlimited dimension in the NetCDF file if it does not already
-	exist.
-
-	@param nc: The NetCDF file.
-	@param name: Name of the dimension.
-	"""
-	if not name in nc.dimensions:
-		nc.createDimension(name, size)
-
-def create_var_if_not_exists(nc: Dataset, name: str, format: str
-	, dims: tuple[str], chunksizes: tuple[int] = None):
-	"""
-	Create a variable in the NetCDF file if it does not already exist.
-
-	@param nc: The NetCDF file.
-	@param name: Name of the variable.
-	@param format: Format of the variable.
-	@param dims: Dimensions of the variable.
-	"""
-	compression = None if opts.compression_level == 0 else opts.compression_type
-	log_diagnostic("Compression = %s L%d"%(compression, opts.compression_level))
-	if not name in nc.variables:
-		nc.createVariable(name, format, dims, compression = compression
-		, complevel = opts.compression_level
-		, chunksizes = chunksizes)
-
-def prepare_outfile(nc: Dataset, out_type: OutputType):
-	"""
-	Create the variables in the output NetCDF file. The variables created
-	will depend to some degree on the output type.
-	"""
-	# 0. Create dimensions in output file.
 	log_debug("Creating output dimensions")
-	if (out_type == OutputType.LSM):
-		# LSM mode needs a forcings dimension.
-		nc.createDimension(OUT_DIM_NAME_FORCINGS, LsmVariables.NFORCINGS)
+	if (version == LpjVersion.LSM):
+		ozflux_lsm.create_dimensions(nc)
 	else:
-		# Dailygrass mode needs lon/lat dimensions (as it's gridded).
-		# Chunk size for geographic (ie lat/lon) variables.
-		geo_chunk_size = (1,)
-		# todo: writing all data into single file? If so, will need to set
-		# dim_size to len(files).
-		dim_size = 0 if UNLIMITED_DIMS else 1 #len(opts.files)
-		create_dim_if_not_exists(nc, OUT_DIM_NAME_LON, dim_size)
-		create_dim_if_not_exists(nc, OUT_DIM_NAME_LAT, dim_size)
-		create_var_if_not_exists(nc, OUT_DIM_NAME_LON
-			, FORMAT_FLOAT, (OUT_DIM_NAME_LON), geo_chunk_size)
-		create_var_if_not_exists(nc, OUT_DIM_NAME_LAT
-			, FORMAT_FLOAT, (OUT_DIM_NAME_LAT), geo_chunk_size)
-		var_lon = nc.variables[OUT_DIM_NAME_LON]
-		var_lat = nc.variables[OUT_DIM_NAME_LAT]
-		var_lon.long_name = "longitude"
-		var_lat.long_name = "latitude"
-		var_lon.standard_name = "longitude"
-		var_lat.standard_name = "latitude"
-		var_lon.units = "degree_east"
-		var_lat.units = "degree_north"
+		ozflux_dave.create_dimensions(nc, ngridcell)
 
 	# Time dimension is needed in both LSM and daily_grass mode.
-	create_dim_if_not_exists(nc, OUT_DIM_NAME_TIME)
+	create_dim_if_not_exists(nc, DIM_TIME)
 
-	if out_type == OutputType.DAILY_GRASS:
-		create_var_if_not_exists(nc, OUT_DIM_NAME_TIME, FORMAT_FLOAT
-			, (OUT_DIM_NAME_TIME), (get_steps_per_year(opts.timestep),))
+def create_variables(nc: Dataset, version: LpjVersion, timestep: int
+	, clevel: int, ctype: str):
+	"""
+	Create the required variables in the output file.
 
-	# 1. Create variables in output file.
+	@param nc: The output .nc file.
+	@param version: The lpj-guses version selected by the user.
+	@param timestep: Output timestep in minutes.
+	@param clevel: Compression level [1-9], 9 = slowest/smallest.
+	@param ctype: Compression algorithm to be used (or None).
+	"""
 	log_debug("Creating output variables")
-	if (out_type == OutputType.LSM):
-		# LSM mode only requires a single variable.
-		nc.createVariable(OUT_VARIABLE_LSM \
-		, FORMAT_FLOAT \
-		, (OUT_DIM_NAME_TIME,OUT_DIM_NAME_FORCINGS), compression = 'zlib')
+	if (version == LpjVersion.LSM):
+		ozflux_lsm.create_variables(nc)
 	else:
 		# I've created a separate function for the dailygrass variables to
 		# improve readability in this function.
-		create_dailygrass_variables(nc)
+		ozflux_dave.create_dailygrass_variables(nc, timestep, clevel, ctype)
+
+def prepare_outfile(nc: Dataset, version: LpjVersion, ngridcell: int
+	, timestep: int, clevel: int, ctype: str):
+	"""
+	Create the variables in the output NetCDF file. The variables created
+	will depend to some degree on the output type.
+
+	@param nc: Output .nc file.
+	@param version: Output lpj-guess version selected by the user.
+	@param ngridcell: The number of gridcells to be stored in this output file.
+	@param timestep: Output timestep in minutes.
+	@param clevel: Compression level [1-9], 9 = slowest/smallest.
+	@param ctype: Compression algorithm to be used (or None).
+	"""
+	create_dimensions(nc, version, ngridcell)
+	create_variables(nc, version, timestep, clevel, ctype)
+
+def open_outfile(file: str) -> Dataset:
+	log_debug("Opening output file %s for writing" % file)
+	return Dataset(file, "r+", format = NC_FORMAT)
+
+def process_files(in_files: list[str], out_file: str, timestep: int, out_type: \
+	LpjVersion, pcb: Callable[[float], None]):
+	"""
+	Read the input files and write all data to the specified output file.
+
+	@param in_files: Input files.
+	@param out_file: Output file path.
+	@param timestep: Output timestep in minutes.
+	@param out_type: Target lpj-guess branch (LSM or daily-grass).
+	@param pcb: Progress reporting function.
+	"""
+	read_prop = 0.9
+	write_prop = 1 - read_prop
+	with open_outfile(out_file) as nc_out:
+		...
+
+def write_metadata(nc: Dataset, timestep: int, version: LpjVersion):
+	"""
+	Write version-specific metadata.
+
+	@param nc: Output .nc file.
+	@param timestep: Output timestep in minutes.
+	@param version: Output version selected by the user.
+	"""
+	ozflux_netcdf.write_common_metadata(nc, timestep)
+
+	if version == LpjVersion.DAILY_GRASS:
+		ozflux_dave.write_metadata(nc)
+	elif version == LpjVersion.LSM:
+		ozflux_lsm.write_metadata(nc)
+	else:
+		raise ValueError("Unknown output version %d" % version)
 
 def process_file(in_file: str, out_file: str, timestep: int \
-	, out_type: OutputType, progress_callback: Callable[[float], None]):
+	, version: LpjVersion, clevel: int, ctype: str
+	, pcb: Callable[[float], None]):
 	"""
 	Read the input file and generate an output file at the specified
 	path in LPJ-Guess (lsminput) format.
 
-	@param in_file: Input file path
-	@param out_file: Output file path
+	@param in_file: Input file path.
+	@param out_file: Output file path.
 	@param timestep: Output timestep length in minutes.
+	@param version: Output version selected by the user.
+	@param clevel: Compression level [1-9], 9 = slowest/smallest.
+	@param ctype: Compression algorithm to be used (or None).
+	@param pcb: Progress callback function.
 	"""
 	log_information("Processing %s..." % in_file)
-	log_debug("Opening output file %s for writing" % out_file)
-	with Dataset(out_file, "r+", format=ozflux_common.NC_FORMAT) as nc_out:
+	with open_outfile(out_file) as nc_out:
 		log_debug("Opening input file %s for reading" % in_file)
-		with Dataset(in_file, "r", format=ozflux_common.NC_FORMAT) as nc_in:
+		with Dataset(in_file, "r", format=NC_FORMAT) as nc_in:
 			# Quick sanity check of time step.
 			instep = int(nc_in.time_step)
 			if instep > timestep:
@@ -518,22 +362,17 @@ def process_file(in_file: str, out_file: str, timestep: int \
 				m = "Invalid input timestep: %d. Must be an integer multiple of output timestep (%d)"
 				raise ValueError(m % (instep, timestep))
 
-			prepare_outfile(nc_out, out_type)
+			prepare_outfile(nc_out, version, 1, timestep, clevel, ctype)
 
 			# 2. Copy data into this variable.
 			log_debug("Migrating data")
-			if out_type == OutputType.LSM:
-				copy_data_lsm(nc_in, nc_out.variables[OUT_VARIABLE_LSM]
-					, timestep, progress_callback)
-			else:
-				copy_data_dailygrass(nc_in, nc_out, timestep, progress_callback)
+			copy_data(nc_in, nc_out, timestep, version, pcb)
 
-			# 3. Metadata for output file.
-			nc_out.time_step = str(timestep) # in minutes.
+			# 3. Write site metadata.
 			start_date = get_next_year(
-				ozflux_common.parse_date(nc_in.time_coverage_start))
+				parse_date(nc_in.time_coverage_start))
 			nc_out.time_coverage_start = start_date.strftime(
-				ozflux_common.DATE_FORMAT)
+				DATE_FORMAT)
 			nc_out.time_coverage_end = nc_in.time_coverage_end
 			nc_out.latitude = nc_in.latitude
 			nc_out.longitude = nc_in.longitude
@@ -541,23 +380,8 @@ def process_file(in_file: str, out_file: str, timestep: int \
 			site_name = os.path.splitext(site_name)[0]
 			nc_out.site_name = site_name
 
-			# Write additional metadata.
-			ozflux_netcdf.write_metadata(nc_out)
-
-			if opts.out_type == OutputType.DAILY_GRASS:
-				var_time = nc_out.variables[OUT_DIM_NAME_TIME]
-				var_time.calendar = "gregorian"
-				var_time.long_name = OUT_DIM_NAME_TIME
-				var_time.standard_name = OUT_DIM_NAME_TIME
-				var_time.units = "hours since %s" % nc_out.time_coverage_start
-			else:
-				for forcing in LsmVariables:
-					if forcing == LsmVariables.NFORCINGS:
-						break
-					oname = lsm_var_names_out[forcing]
-					units = forcing_units[forcing]
-					attr_name = "col_%d_%s_units" % (forcing, oname)
-					setattr(nc_out, attr_name, units)
+			# Write additional global/common metadata.
+			write_metadata(nc_out, timestep, opts.out_type)
 
 def parse_args(argv: list[str]) -> Options:
 	"""
@@ -577,13 +401,14 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-c", "--output-compatibility", type = int, required = True, help = "Output compatibility type (0 = daily_grass, 1 = LSM)")
 	parser.add_argument("--compression-level", type = int, nargs = "?", default = 4, help = "Compression quality for output file [0, 9]. 0 = none, 1 = fastest compression, largest filesize, 9 = slowest compression, smallest filesize (default 4)")
 	parser.add_argument("--compression-type", default = "zlib", help = "Compression algorithm to be used (default 'zlib')")
-	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
+	parser.add_argument("-s", "--single-outfile", action = "store_true", help = "Combine all inputs into a single output file")
+	parser.add_argument("--version", action = "version", version = "%(prog)s " + VERSION)
 
 	parsed = parser.parse_args(argv[1:])
 	return Options(parsed.verbosity, parsed.files, parsed.out_dir
 	, parsed.show_progress, parsed.parallel, parsed.timestep
 	, parsed.output_compatibility, parsed.compression_level
-	, parsed.compression_type)
+	, parsed.compression_type, parsed.single_outfile)
 
 def main(opts: Options):
 	"""
@@ -640,7 +465,7 @@ def main(opts: Options):
 		Using multiple processes because the hdf5 library is not threadsafe.
 		"""
 		def __init__(self, infile: str, outfile: str, idx: int, timestep: int
-		, output_type: OutputType
+		, output_type: LpjVersion, clevel: int, ctype: int
 		, progress_writer: multiprocessing.connection.Connection):
 			multiprocessing.Process.__init__(self)
 			self.index = idx
@@ -649,10 +474,12 @@ def main(opts: Options):
 			self.timestep = timestep
 			self.output_type = output_type
 			self.progress_writer = progress_writer
+			self.compression_level = clevel
+			self.compression_type = ctype
 		def run(self):
 			# Do main processing.
 			process_file(self.infile, self.outfile, self.timestep
-			, self.output_type
+			, self.output_type, self.compression_level, self.compression_type
 			, lambda p: self.progress_writer.send((p, self.index)))
 
 			# Close progress reporter pipe.
@@ -663,7 +490,7 @@ def main(opts: Options):
 	for i in range(len(opts.files)):
 		infile = opts.files[i]
 		out_file_name = os.path.basename(infile)
-		if opts.out_type == OutputType.LSM:
+		if opts.out_type == LpjVersion.LSM:
 			out_file_name = get_output_filename(infile)
 
 		outfile = os.path.join(opts.out_dir, out_file_name)
@@ -680,7 +507,7 @@ def main(opts: Options):
 
 			# Start the process.
 			p = ProcessingTask(infile, outfile, i, opts.timestep, opts.out_type
-				, writer)
+				, opts.compression_level, opts.compression_type, writer)
 			p.start()
 
 			# Close the writable end of the pipe now, to be sure that p is the
@@ -694,6 +521,7 @@ def main(opts: Options):
 		else:
 			# Run task in the current thread.
 			process_file(infile, outfile, opts.timestep, opts.out_type
+			, opts.compression_level, opts.compression_type
 			, lambda p: progress_reporter(p, i))
 
 	if opts.parallel:

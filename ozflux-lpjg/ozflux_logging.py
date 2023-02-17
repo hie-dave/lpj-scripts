@@ -15,7 +15,7 @@ class LogLevel(enum.IntEnum):
 	DIAGNOSTIC = 4,
 	DEBUG = 5
 
-class OutputType(enum.IntEnum):
+class LpjVersion(enum.IntEnum):
 	DAILY_GRASS = 0,
 	LSM = 1
 

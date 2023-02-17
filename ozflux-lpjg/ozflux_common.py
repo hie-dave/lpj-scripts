@@ -16,25 +16,155 @@ NC_FORMAT = "NETCDF4"
 # Date format used in the ozflux .nc files.
 DATE_FORMAT = r"%Y-%m-%d %H:%M:%S"
 
-# Forcing variable IDs (and column IDs too - this defines the order of
-# the columns in the output file).
-class LsmVariables(IntEnum):
-	"""
-	Indices of variables in the output .nc file.
-	"""
-	SWDOWN = 0,
-	PARDF = 1,
-	PARDR = 2,
-	LWDOWN = 3,
-	PRECLS = 4,
-	PRECCO = 5,
-	TAIR = 6,
-	UAIR = 7,
-	VAIR = 8,
-	QAIR = 9,
-	PSURF = 10
-	# Insert new values here if required.
-	NFORCINGS = 11 # This must always be the last/highest enum value
+################################################################################
+# Upper and lower bounds for error checking of forcing data.
+################################################################################
+
+# Temperature lower bound (°C).
+MIN_TEMP = -100
+
+# Temperature upper bound (°C).
+MAX_TEMP = 100
+
+# Atmospheric pressure lower bound (Pa). todo: is this too conservative?
+MIN_PS = 50000
+
+# Atmospheric pressure upper bound (Pa). todo: is this too conservative?
+MAX_PS = 150000
+
+# SWDOWN lower bound (units).
+MIN_SWDOWN = 0
+
+# SWDOWN upper bound (units).
+MAX_SWDOWN = 1e5
+
+# PARDF lower bound (units).
+MIN_PARDF = 0
+
+# PARDF upper bound (units).
+MAX_PARDF = 1e5
+
+# PARDR lower bound (units).
+MIN_PARDR = 0
+
+# PARDR upper bound (units).
+MAX_PARDR = 1e5
+
+# LWDOWN lower bound (units).
+MIN_LWDOWN = 0
+
+# LWDOWN upper bound (units).
+MAX_LWDOWN = 1e5
+
+# PRECLS lower bound (units).
+MIN_PRECLS = 0
+
+# PRECLS upper bound (units).
+MAX_PRECLS = 1e4
+
+# PRECCO lower bound (units).
+MIN_PRECCO = 0
+
+# PRECCO upper bound (units).
+MAX_PRECCO = 1e3
+
+# TAIR lower bound (units).
+MIN_TAIR = 200
+
+# TAIR upper bound (units).
+MAX_TAIR = 373
+
+# UAIR lower bound (units).
+MIN_UAIR = 0
+
+# UAIR upper bound (units).
+MAX_UAIR = 100
+
+# VAIR lower bound (units).
+MIN_VAIR = 0
+
+# VAIR upper bound (units).
+MAX_VAIR = 1
+
+# QAIR lower bound (units).
+MIN_QAIR = 0
+
+# QAIR upper bound (units).
+MAX_QAIR = 0.2
+
+# PSURF lower bound (units).
+MIN_PSURF = 3e4
+
+# PSURF upper bound (units).
+MAX_PSURF = 1.5e5
+
+################################################################################
+# Variable names in the input files.
+################################################################################
+
+# Name of the temperature variable in the input file.
+IN_TEMP = "Ta"
+
+# Name of the shortwave radiation variable in the input file.
+IN_SWDOWN = "Fsd"
+
+# Name of the longwave radiation variable in the input file.
+IN_LWDOWN = "Fld"
+
+# Name of the precipitation variable in the input file.
+IN_PRECLS = "Precip"
+
+# Name of the co2 concentration variable in the input file.
+IN_CO2 = "CO2"
+
+# Name of the VPD variable in the input file.
+IN_VPD = "VPD"
+
+# Name of the atmospheric pressure variable in the input file.
+IN_PS = "ps"
+
+# Name of the UAIR variable in the input file.
+IN_UAIR = "Ws"
+
+# Name of the QAIR variable in the input file.
+IN_QAIR = "SH"
+
+################################################################################
+# Units conversions.
+################################################################################
+
+# g to kg. This is not really used except as an example.
+KG_PER_G = 1e-3
+
+# KPa to Pa
+PA_PER_KPA = 1e3
+
+# °C to K
+DEG_C_TO_K = 273.15
+
+# Number of seconds per minute.
+SECONDS_PER_MINUTE = 60
+
+# Number of minutes per hour.
+MINUTES_PER_HOUR = 60
+
+# Number of seconds per hour.
+SECONDS_PER_HOUR = SECONDS_PER_MINUTE * MINUTES_PER_HOUR
+
+# Number of hours per day.
+HOURS_PER_DAY = 24
+
+# Number of days per year.
+DAYS_PER_YEAR = 365 # ha
+
+# Moles per micromole.
+MOL_PER_UMOL = 1e-6
+
+# Atomic mass of carbon (g/mol).
+G_C_PER_MOL = 12.011
+
+# Number of seconds per day.
+SECONDS_PER_DAY = SECONDS_PER_MINUTE * MINUTES_PER_HOUR * HOURS_PER_DAY
 
 def _six_digit_string(x: float) -> str:
 	"""
