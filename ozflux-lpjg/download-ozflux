@@ -95,10 +95,12 @@ def get_available_files(site: str, version: str, level: str, annual: bool) -> li
 	download_page_url = "%s/%s/%s/%s/default/catalog.html" % (catalog_url_base, site, version, level)
 	download_page = request_string(download_page_url)
 
-	pattern = r"<a href='[^']+(%s_L\d+_\d+_\d+\.nc)" % site
-	if annual:
-		pattern = r"<a href='[^']+(%s_L\d+_\d+_\d+_Annual\.nc)" % site
+	pattern = r"<a href='[^']+(%s[A-Za-z0-9]*_L\d+_\d+_\d+%s\.nc)" % (site, "_Annual" if annual else "")
 	files = re.findall(pattern, download_page)
+	if len(files) == 0:
+		# Site name may not be in download name. E.g. site "CalperumChowilla" but filenames are "Calperum_L6_*"
+		pattern = r"<a href='[^']+([A-Za-z0-9]+_L\d+_\d+_\d+%s\.nc)" % "_Annual" if annual else ""
+		files = re.findall(pattern, download_page)
 	return ["%s/%s/%s/%s/default/%s" % \
 		(download_url_base, site, version, level, file) \
 		for file in files]
@@ -149,6 +151,7 @@ def download(site: str, out_dir: str, annual: bool, progress_report: typing.Call
 	"""
 	url = get_download_url(site, annual)
 	if url is None:
+		print("Skipping %s as there is no available download" % site)
 		return
 
 	file_name = url.split("/")[-1]
