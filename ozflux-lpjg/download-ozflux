@@ -63,7 +63,10 @@ def get_latest_processing_level(site: str, version: str) -> str:
 	elems = get_page_list_contents(url)
 	if len(elems) < 1:
 		raise ValueError("No processing levels defined for site %s version %s" % (site, version))
-	return elems[len(elems) - 1]
+	last = elems[len(elems) - 1]
+	if last.lower() == "plots" and len(elems) > 1:
+		last = elems[len(elems) - 2]
+	return last
 
 def get_latest_version_and_level(site: str) -> tuple[str, str]:
 	"""
