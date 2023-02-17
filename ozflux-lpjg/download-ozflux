@@ -5,13 +5,58 @@
 #######################################################################
 
 import requests, encodings, re, sys, os, typing
+from argparse import ArgumentParser
+from ozflux_logging import *
+from ozflux_common import VERSION
+from typing import Callable
 
 #######################################################################
 # Constants/Inputs
 #######################################################################
 
-catalog_url_base = "https://dap.tern.org.au/thredds/catalog/ecosystem_process/ozflux"
-download_url_base = "https://dap.tern.org.au/thredds/fileServer/ecosystem_process/ozflux"
+CATALOG_URL_BASE = "https://dap.tern.org.au/thredds/catalog/ecosystem_process/ozflux"
+DOWNLOAD_URL_BASE = "https://dap.tern.org.au/thredds/fileServer/ecosystem_process/ozflux"
+
+# Minimum number of chunks to use when downloading. Increasing this may reduce
+# throughput.
+MIN_NUM_CHUNKS = 2
+
+#######################################################################
+# CLI Options
+#######################################################################
+
+class Options:
+	def __init__(self, verbosity: LogLevel, prog: bool, op: str, annual: bool):
+		"""
+		Create a new Options instance.
+
+		@param verbosity: Logging verbosity.
+		@param prog: True to write progress messages, false otherwise.
+		@param op: Output path.
+		@param annual: True to download annual data, false otherwise.
+		"""
+		self.verbosity = verbosity
+		self.show_progress = prog
+		self.out_dir = op
+		self.annual = annual
+
+def parse_cli(argv: list[str]) -> Options:
+	"""
+	Parse CLI arguments, return a parsed options object.
+
+	@param argv: Raw CLI arguments.
+
+	@return Parsed Options object.
+	"""
+	parser = ArgumentParser(prog=argv[0], description = "Extract ozflux site metadata")
+	parser.add_argument("-v", "--verbosity", type = int, help = "Logging verbosity (1-5, default %d)" % LogLevel.INFORMATION, nargs = "?", const = LogLevel.INFORMATION, default = LogLevel.INFORMATION)
+	parser.add_argument("-o", "--out-path", required = True, help = "Output directory")
+	parser.add_argument("-a", "--annual", action = "store_true", help = "Download annual flux data (if not enabled will download smallest timestep available)")
+	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
+	parser.add_argument("--version", action = "version", version = "%(prog)s " + VERSION)
+
+	parsed = parser.parse_args(argv[1:])
+	return Options(parsed.verbosity, parsed.show_progress, parsed.out_path, parsed.annual)
 
 #######################################################################
 # Main Program
@@ -37,11 +82,11 @@ def get_sites() -> list[str]:
 	"""
 	Return names of all sites.
 	"""
-	url = "%s/catalog.html" % catalog_url_base
+	url = "%s/catalog.html" % CATALOG_URL_BASE
 	return get_page_list_contents(url)
 
 def get_versions(site: str) -> list[str]:
-	url = "%s/%s/catalog.html" % (catalog_url_base, site)
+	url = "%s/%s/catalog.html" % (CATALOG_URL_BASE, site)
 	return get_page_list_contents(url)
 
 def get_latest_version(site: str) -> str:
@@ -59,7 +104,7 @@ def get_latest_processing_level(site: str, version: str) -> str:
 	Return latest processing level for the specified version of a site.
 	Throw if none found.
 	"""
-	url = "%s/%s/%s/catalog.html" % (catalog_url_base, site, version)
+	url = "%s/%s/%s/catalog.html" % (CATALOG_URL_BASE, site, version)
 	elems = get_page_list_contents(url)
 	if len(elems) < 1:
 		raise ValueError("No processing levels defined for site %s version %s" % (site, version))
@@ -92,7 +137,7 @@ def get_available_files(site: str, version: str, level: str, annual: bool) -> li
 	Get a list of all files available for the specified site, version,
 	and processing level. Returns a list of URLs.
 	"""
-	download_page_url = "%s/%s/%s/%s/default/catalog.html" % (catalog_url_base, site, version, level)
+	download_page_url = "%s/%s/%s/%s/default/catalog.html" % (CATALOG_URL_BASE, site, version, level)
 	download_page = request_string(download_page_url)
 
 	pattern = r"<a href='[^']+(%s[A-Za-z0-9]*_L\d+_\d+_\d+%s\.nc)" % (site, "_Annual" if annual else "")
@@ -102,7 +147,7 @@ def get_available_files(site: str, version: str, level: str, annual: bool) -> li
 		pattern = r"<a href='[^']+([A-Za-z0-9]+_L\d+_\d+_\d+%s\.nc)" % "_Annual" if annual else ""
 		files = re.findall(pattern, download_page)
 	return ["%s/%s/%s/%s/default/%s" % \
-		(download_url_base, site, version, level, file) \
+		(DOWNLOAD_URL_BASE, site, version, level, file) \
 		for file in files]
 
 def get_download_url(site: str, annual: bool) -> str:
@@ -119,89 +164,77 @@ def get_download_url(site: str, annual: bool) -> str:
 
 	return files[-1]
 
-def get_latlon_code(site: str) -> str:
-	"""
-	Get the lat/lon code for the specified site.
-	"""
-	url = get_download_url(site, False)
-	body = request_string(url)
-	# regex_match
-	pattern = r"_L[0-9]+_([0-9]{8}_[0-9]{8})\.nc"
-	matches = re.findall(pattern, body)
-	if matches is None or len(matches) < 1:
-		return None # Debatable. But their data just isn't consistent...
-		# raise ValueError("Unable to determine latlon code for site %s: Site crawling failed" % site)
-	return matches[0].strip()
-
-def find_site(code: str) -> str:
-	"""
-	Given a site code, find the name of the corresponding site.
-	"""
-	code = code.strip()
-	for site in get_sites():
-		site_code = get_latlon_code(site)
-		if (site_code == code):
-			return site
-	raise ValueError("No site found for code '%s'" % code)
-
-def download(site: str, out_dir: str, annual: bool, progress_report: typing.Callable[[float],None]):
+def download(site: str, out_dir: str, annual: bool, pcb: Callable[[float],None]):
 	"""
 	Download latest version of the data for the specified site into the
 	specified directory.
+
+	@param site: The site to download.
+	@param out_dir: Output directory.
+	@param annual: True to download annual data. False to download smallest available timestep.
+	@param pcb: Progress callback function.
 	"""
+	# Get URL of the file to be downloaded for this site.
 	url = get_download_url(site, annual)
 	if url is None:
-		print("Skipping %s as there is no available download" % site)
+		log_warning("Skipping %s as there is no available download" % site)
 		return
 
+	# Determine output file name - use URL file name.
 	file_name = url.split("/")[-1]
 	out_file = "%s/%s" % (out_dir, file_name)
+
+	# Don't download it if it already exists.
+	# TODO: verify checksum? To replace partially-downloaded files.
 	if os.path.exists(out_file):
-		print("Skipping %s as it already exists" % site)
+		log_information("Skipping %s as it already exists" % site)
 		return
-	progress_report(0)
+
+	log_information("Downloading %s..." % site)
+	pcb(0)
+
 	resp = requests.get(url, stream = True)
+
+	# Get file size.
 	total = int(resp.headers.get("Content-Length"))
-	chunk_size = min(8192, total // 2)
+
+	# Determine chunk size to be used for the download.
+	chunk_size = min(8192, total // MIN_NUM_CHUNKS)
+
+	# Download the file.
 	with open(out_file, "wb") as file:
 		downloaded = 0
 		for data in resp.iter_content(chunk_size = chunk_size):
 				downloaded += len(data)
 				file.write(data)
 				progress = 1.0 * downloaded / total
-				progress_report(progress)
+				pcb(progress)
 
-def write_progress(i: int, n: int, p: float):
+def main(out_dir: str, annual: bool):
 	"""
-	Write progress report to the console.
-	@param i: Current download number.
-	@param n: Total number of downloads.
-	@param p: Progress of current download (0-1).
-	"""
-	# start = 1.0 * i / n
-	# step = 1.0 / n
-	# progress = start + p * step
-	# overall = 100.0 * progress
-	overall = 100.0 * (i + p) / n
-	print("Downloading: %.2f%%\r" % overall, end = "")
+	Main CLI entrypoint method. Discover and download all available sites.
 
-def main():
-	annual = True
+	@param out_dir: Output path to which files will be downloaded.
+	@param annual: True to download annual data, false to download smallest available timestep.
+	"""
+	# Discover all sites available on the DAP.
 	sites = get_sites()
-	if len(sys.argv) < 2:
-		print("Usage: %s: <out-dir>" % sys.argv[0])
-		exit(1)
 
-	out_dir = sys.argv[1]
+	# Create output directory if it doesn't already exist.
 	if not os.path.exists(out_dir):
 		os.makedirs(out_dir)
 
-	i = 0
-	for site in sites:
-		# code = get_latlon_code(site)
-		print("Downloading %s..." % site)
-		download(site, out_dir, annual, lambda p: write_progress(i, len(sites), p))
-		i += 1
+	# Download the files.
+	for i in range(len(sites)):
+		download(sites[i], out_dir, annual, lambda p: log_progress( (i + p) / len(sites)))
 
 if __name__ == "__main__":
-	main()
+	# Parse CLI arguments.
+	opts = parse_cli(sys.argv)
+
+	# Initialise logging environment.
+	set_log_level(opts.verbosity)
+	set_show_progress(opts.show_progress)
+
+	# Actual download logic.
+	main(opts.out_dir, opts.annual)
