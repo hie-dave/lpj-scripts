@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+#
+# Site to extract metadata from ozflux flux data files.
+#
+from ozflux_netcdf import *
+from ozflux_common import *
+from ozflux_logging import *
+from datetime import datetime
+from argparse import ArgumentParser
+from netCDF4 import Dataset
+
+class Options:
+	"""
+	Class for storing CLI arguments from the user.
+
+	@param log: Log level.
+	@param files: Input files.
+	@param of: Output filename.
+	@param prog: True to write progress messages, 0 otherwise.
+	"""
+	def __init__(self, log : LogLevel, files: list[str], of: str, prog: bool):
+		self.log_level = log
+		self.files = files
+		self.out_file = of
+		self.report_progress = prog
+
+def parse_args(argv: list[str]) -> Options:
+	"""
+	Parse CLI arguments, return a parsed options object.
+
+	@param argv: Raw CLI arguments.
+
+	@return Parsed Options object.
+	"""
+	parser = ArgumentParser(prog=argv[0], description = "Extract ozflux site metadata")
+	parser.add_argument("-v", "--verbosity", type = int, help = "Logging verbosity (1-5, default 3)", nargs = "?", const = LogLevel.INFORMATION, default = LogLevel.INFORMATION)
+	parser.add_argument("files", nargs = "+", help = "Input .nc files to be processed")
+	parser.add_argument("-o", "--out-file", required = True, help = "Output filename")
+	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
+	parser.add_argument("--version", action = "version", version = "%(prog)s " + VERSION)
+
+	parsed = parser.parse_args(argv[1:])
+	return Options(parsed.verbosity, parsed.files, parsed.out_file, parsed.show_progress)
+
+class Metadata:
+	"""
+	Class containing metadata for a single flux data file.
+	"""
+	def __init__(self, canopy_height: str, fluxnet_id: str, latitude: float
+	, longitude: float, site_name: str, tower_height: str, vegetation: str
+	, time_coverage_end: datetime, time_coverage_start: datetime):
+		self.canopy_height = canopy_height
+		self.fluxnet_id = fluxnet_id
+		self.latitude = latitude
+		self.longitude = longitude
+		self.site_name = site_name
+		self.tower_height = tower_height
+		self.vegetation = vegetation
+		self.time_coverage_end = time_coverage_end
+		self.time_coverage_start = time_coverage_start
+
+def get_metadata(filename: str) -> Metadata:
+	try:
+		log_information("Extracting metadata from %s..." % filename)
+		with Dataset(filename, "r", format=NC_FORMAT) as nc:
+			fluxnet_id = getattr(nc, "fluxnet_id", "")
+			site = getattr(nc, "site_name")
+			if fluxnet_id == "":
+				log_warning("Site %s does not have a fluxnet ID" % site)
+			return Metadata(
+				canopy_height = getattr(nc, "canopy_height"),
+				fluxnet_id = fluxnet_id,
+				latitude = float(getattr(nc, "latitude")),
+				longitude = float(getattr(nc, "longitude")),
+				site_name = site,
+				tower_height = getattr(nc, "tower_height"),
+				vegetation = getattr(nc, "vegetation"),
+				time_coverage_end = parse_date(getattr(nc, "time_coverage_end")),
+				time_coverage_start = parse_date(getattr(nc, "time_coverage_start"))
+			)
+	except BaseException as err:
+		raise ValueError("Failed to extract metadata from site %s" % filename)
+
+def write_outfile(out_file: str, metadata: list[Metadata], delim = ","):
+	"""
+	Write output .csv file.
+	"""
+	with open(out_file, "w") as file:
+		file.write("site%s" % delim)
+		file.write("start_date%s" % delim)
+		file.write("end_date%s" % delim)
+		file.write("latitude%s" % delim)
+		file.write("longitude%s" % delim)
+		file.write("canopy_height%s" % delim)
+		file.write("fluxnet_id%s" % delim)
+		file.write("tower_height%s" % delim)
+		file.write("vegetation\n")
+
+		for metadatum in metadata:
+			file.write("%s%s" % (metadatum.site_name, delim) )
+			file.write("%s%s" % (metadatum.time_coverage_start.strftime("%Y-%m-%d"), delim) )
+			file.write("%s%s" % (metadatum.time_coverage_end.strftime("%Y-%m-%d"), delim) )
+			file.write("%s%s" % (metadatum.latitude, delim) )
+			file.write("%s%s" % (metadatum.longitude, delim) )
+			file.write("%s%s" % (metadatum.canopy_height, delim) )
+			file.write("%s%s" % (metadatum.fluxnet_id, delim) )
+			file.write("%s%s" % (metadatum.tower_height, delim) )
+			file.write("%s\n" % metadatum.vegetation)
+
+def main(opts: Options):
+	"""
+	Main function. Extract metadata from files one by one.
+	"""
+	metadata = []
+	for file in opts.files:
+		metadata.append(get_metadata(file))
+	write_outfile(opts.out_file, metadata)
+
+if __name__ == "__main__":
+	# Parse CLI args
+	opts = parse_args(argv)
+
+	set_log_level(opts.log_level)
+	set_show_progress(opts.report_progress)
+
+	try:
+		# Actual logic is in main().
+		main(opts)
+	except BaseException as error:
+		# Basic error handling.
+		log_error(traceback.format_exc())
+		exit(1)
