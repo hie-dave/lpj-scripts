@@ -112,5 +112,7 @@ def log_progress(progress: float):
 	Write a progress message.
 	"""
 	global _show_progress
+	if progress > 1:
+		log_warning("Attempted to display progress > 1")
 	if _show_progress:
 		print("Working: %.2f%%\r" % (100 * progress), end = "")

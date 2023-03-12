@@ -1,4 +1,4 @@
-import datetime, math
+import datetime, math, re
 from enum import IntEnum
 from typing import Callable
 
@@ -163,8 +163,34 @@ MOL_PER_UMOL = 1e-6
 # Atomic mass of carbon (g/mol).
 G_C_PER_MOL = 12.011
 
+# Number of square metres in a hectare.
+M2_PER_HA = 10_000
+
+# Number of metres in a kilometre.
+M_PER_KM = 1_000
+
+# Number of metres in an astronomical unit (just in case :).
+M_PER_AU = 1.495979e+11
+
+# Number of centimetres in a metre.
+CM_PER_M = 100
+
+# Number of millimetres in a metre.
+MM_PER_M = 1_000
+
+# Conversion ratios from metres to various other units.
+_LENGTH_CONVERSIONS = {
+	"m": 1,
+	"km": M_PER_KM,
+	"au": M_PER_AU, # Just in case :)
+	"cm": 1 / CM_PER_M,
+	"mm": 1 / MM_PER_M,
+}
+
 # Number of seconds per day.
 SECONDS_PER_DAY = SECONDS_PER_MINUTE * MINUTES_PER_HOUR * HOURS_PER_DAY
+
+EPS = 1e-16
 
 def _six_digit_string(x: float) -> str:
 	"""
@@ -225,11 +251,9 @@ def neighbouring_indices(data: list[float], index: int, nindex
 		raise IndexError("Attempted to interpolate with more values than exist in list")
 
 	indices = [0] * nindex
+	attempt = 0
+	idx = index
 	for i in range(nindex):
-		sign = 1 if i % 2 == 0 else -1
-		dlt = 1 + i // 2 * sign # 1, -1, 2, -2, ...
-		idx = index + dlt
-
 		# Given the error check at start of function, we should
 		# eventualy find another neighbour. There is probably a
 		# more efficient search algorithm than this, but this will
@@ -242,11 +266,9 @@ def neighbouring_indices(data: list[float], index: int, nindex
 			return True
 
 		while (not can_use(idx)):
-			if idx < 0:
-				sign = 1
-			elif idx >= ndata:
-				sign = -1
-			idx += sign
+			sign = 1 if attempt % 2 == 0 else -1
+			attempt += 1
+			idx = (index + (attempt + 2) // 2 * sign) % ndata
 
 		indices[i] = idx
 	return indices
@@ -260,3 +282,96 @@ def neighbouring_mean(data: list[float], index: int, n: int) -> float:
 	for i in indices:
 		mean += data[i]
 	return mean / n
+
+def to_metres(length: float, units: str):
+	"""
+	Convert the value to metres.
+	@param length: The numeric value.
+	@param units: Units of length.
+	"""
+	units = units.lower().strip()
+	if units in _LENGTH_CONVERSIONS:
+		return length * _LENGTH_CONVERSIONS[units]
+
+	raise ValueError("Unknown units: '%s'" % units)
+
+def get_length(length: str) -> float:
+	"""
+	Read a string with a units suffix and attempt to return the length in
+	metres. E.g.
+
+	- 5m -> 5
+	- 1.024 km -> 1024
+
+	@param length: The length with a units suffix.
+	"""
+	return get_lengths(length)[0]
+
+def get_lengths(length: str) -> list[float]:
+	"""
+	Read a string with a units suffix and attempt to return the length in
+	metres. This will throw if no lengths are be parsed, so result length is
+	always >= 1. This will also only return the absolute value of the length.
+	E.g.
+
+	- 5m -> 5
+	- 1.024 km -> 1024
+	- -100 to -500 cm -> [1, 5]
+
+	@param length: The length with a units suffix.
+	"""
+	conversions = "|".join(["(?:%s)" % x for x in _LENGTH_CONVERSIONS.keys()])
+	pattern = r'[ \t]*-?([0-9]+\.?[0-9]*)[ \t]*'
+	pattern += "(%s)?" % conversions
+	matches = re.findall(pattern, length)
+	if matches == None:
+		raise ValueError("Cannot parse length from '%s'" % length)
+
+	if len(matches) == 0:
+		raise ValueError("Cannot parse any lengths from '%s'" % length)
+
+	results = []
+	units_prev = ""
+	matches.reverse()
+	for match in matches:
+		value = float(match[0])
+		suffix = match[1]
+
+		if suffix == "":
+			suffix = units_prev
+
+		length_metres = to_metres(value, suffix)
+
+		if math.isnan(length_metres):
+			raise ValueError("Unable to parse length from '%s'" % length)
+		results.insert(0, length_metres)
+		units_prev = suffix
+
+	return results
+
+def less_than(x: float, y: float) -> bool:
+	"""
+	Return true iff x is less than y.
+
+	@param x: Any real number.
+	@param y: Any real number.
+	"""
+	return y - x > EPS
+
+def greater_than(x: float, y: float) -> bool:
+	"""
+	Return true iff x is greater than y.
+
+	@param x: Any real number.
+	@param y: Any real number.
+	"""
+	return x - y > EPS
+
+def equal(x: float, y: float) -> bool:
+	"""
+	Return true iff x is equal to y.
+
+	@param x: Any real number.
+	@param y: Any real number.
+	"""
+	return abs(x - y) < EPS

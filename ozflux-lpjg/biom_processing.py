@@ -26,19 +26,6 @@ _proc_prop = 1 / 3
 _write_prop = 1 - _read_prop - _proc_prop
 
 ################################################################################
-# Units
-################################################################################
-
-# Number of square metres in a hectare.
-M2_PER_HA = 10_000
-
-# Number of metres in a kilometre.
-M_PER_KM = 1_000
-
-# Number of metres in an astronomical unit.
-M_PER_AU = 1.495979e+11
-
-################################################################################
 # Column names
 ################################################################################
 
@@ -121,44 +108,6 @@ def parse_args(argv: list[str]) -> Options:
 	p = parser.parse_args(argv[1:])
 	return Options(p.verbosity, p.files, p.out_dir, p.show_progress)
 
-def to_metres(length: float, units: str):
-	"""
-	Convert the value to metres.
-	@param length: The numeric value.
-	@param units: Units of length.
-	"""
-	units = units.lower().strip()
-	if units == "m":
-		return length
-	if units == "km":
-		return length * M_PER_KM
-	if units == "au": # Just for fun
-		return length * M_PER_AU
-	raise ValueError("Unknown units: '%s'" % units)
-
-def get_length(length: str) -> float:
-	"""
-	Read a string with a units suffix and attempt to return the length in
-	metres. E.g.
-
-	- 5m -> 5
-	- 1.024 km -> 1024
-
-	@param length: The length with a units suffix.
-	"""
-	pattern = r'[ \t]*([0-9]+\.?[0-9]*)[ \t]*([A-Za-z]*)'
-	match = re.match(pattern, length)
-	if match == None:
-		raise ValueError("Cannot parse length from '%s'" % length)
-	value = float(match.groups()[0])
-	suffix = match.groups()[1]
-	length_metres = to_metres(value, suffix)
-
-	if math.isnan(length_metres):
-		raise ValueError("Unable to parse length from '%s'" % length)
-
-	return length_metres
-
 def area_from_dim(dim: str) -> float:
 	"""
 	Read a string in dimension (e.g. 20m x 10m) format and return it as an area
@@ -197,8 +146,8 @@ def transect_area_from_length_width(data: pandas.DataFrame, row: int) -> float:
 	@param data: The data frame.
 	@param row: Row index.
 	"""
-	transect_width = get_length(data.iloc[row][COL_TRWIDTH])
-	transect_length = get_length(data.iloc[row][COL_TRLENGTH])
+	transect_width = ozflux_common.get_length(data.iloc[row][COL_TRWIDTH])
+	transect_length = ozflux_common.get_length(data.iloc[row][COL_TRLENGTH])
 	return transect_length * transect_width
 
 def transect_area_from_transect_dim(data: pandas.DataFrame, row: int) -> float:
@@ -219,8 +168,8 @@ def get_plot_area(data: pandas.DataFrame, row: int) -> float:
 	@param row: The row index.
 	"""
 	# This will throw if these column don't exist.
-	plot_length = get_length(data.iloc[row][COL_PLOT_LENGTH])
-	plot_width = get_length(data.iloc[row][COL_PLOT_WIDTH])
+	plot_length = ozflux_common.get_length(data.iloc[row][COL_PLOT_LENGTH])
+	plot_width = ozflux_common.get_length(data.iloc[row][COL_PLOT_WIDTH])
 	return plot_length * plot_width
 
 def get_transect_area(data: pandas.DataFrame, row: int) -> float:

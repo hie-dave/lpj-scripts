@@ -39,6 +39,9 @@ UNLIMITED_DIMS = False
 # Data format in output file.
 FORMAT_FLOAT = "f8"
 
+# Name of the time variable in the input files.
+VAR_TIME = "time"
+
 # Global estimates of how much time it takes to perform various tasks (as a
 # proportion of total time spent in get_data() function [0, 1]). These get
 # updated during program execution and are used for progress reporting.
@@ -74,7 +77,8 @@ _units_synonyms = [
 	["kg/kg", "", "mm/mm", "m/m"], # debatable
 	["ppm", "umol/mol"],
 	["degC", "°C", "degrees C"],
-	["umol/m2/s", "umol/m^2/s"]
+	["umol/m2/s", "umol/m^2/s"],
+	["m3/m3", "m^3/m^3"]
 ]
 
 #
@@ -167,7 +171,7 @@ def _get_data(in_file: Dataset \
 			log_diagnostic("Using zeroes for %s" % in_name)
 			input_timestep = int(in_file.time_step)
 			timestep_ratio = output_timestep // input_timestep
-			n = in_file.variables["time"].size // timestep_ratio
+			n = in_file.variables[VAR_TIME].size // timestep_ratio
 			data = zeroes(n)
 			return trim_to_start_year(in_file, output_timestep, data)
 		if not in_name in in_file.variables:
@@ -217,7 +221,7 @@ def _get_data(in_file: Dataset \
 		fixnan_tot = time.time() - fixnan_start
 
 		# Change timestep to something suitable for lpj-guess.
-		log_diagnostic("Aggregating %s to hourly timestep" % in_name)
+		log_diagnostic("Aggregating %s to output timestep" % in_name)
 		t_agg_start = time.time()
 		data = temporal_aggregation(in_file, data, output_timestep, aggregator
 		, lambda p: progress_cb(step_start + aggregation_time_proportion * p))
@@ -329,6 +333,10 @@ def trim_to_start_year(in_file: Dataset, timestep: int
 	, data: list[float]) -> list[float]:
 	"""
 	Trim the given data to the start of the next year.
+
+	@param in_file: Input file.
+	@param timestep: Output timestep in minutes.
+	@param data: The data to be trimmed.
 	"""
 	start_date = parse_date(in_file.time_coverage_start)
 	if (start_date.minute == 30):
@@ -665,6 +673,15 @@ def write_common_metadata(nc: Dataset, timestep: int):
 	"""
 	setattr(nc, "processor_script_version", VERSION)
 	setattr(nc, "time_step",str(timestep)) # in minutes.
+
+def get_site_name_from_filename(file: str) -> str:
+	"""
+	Get the abbreviated site name given an input file name, without opening the
+	.nc file.
+
+	@param file: input file name.
+	"""
+	return os.path.basename(file).split("_")[0]
 
 def get_site_name(nc_file: str) -> str:
 	"""
