@@ -317,11 +317,12 @@ def get_lengths(length: str) -> list[float]:
 	- 5m -> 5
 	- 1.024 km -> 1024
 	- -100 to -500 cm -> [1, 5]
+	- 30 - 50m -> [30, 50]
 
 	@param length: The length with a units suffix.
 	"""
 	conversions = "|".join(["(?:%s)" % x for x in _LENGTH_CONVERSIONS.keys()])
-	pattern = r'[ \t]*-?([0-9]+\.?[0-9]*)[ \t]*'
+	pattern = r'[ \t]*-?([0-9]*\.?[0-9]+)[ \t]*'
 	pattern += "(%s)?" % conversions
 	matches = re.findall(pattern, length)
 	if matches == None:
@@ -367,7 +368,7 @@ def greater_than(x: float, y: float) -> bool:
 	"""
 	return x - y > EPS
 
-def equal(x: float, y: float) -> bool:
+def floats_equal(x: float, y: float) -> bool:
 	"""
 	Return true iff x is equal to y.
 

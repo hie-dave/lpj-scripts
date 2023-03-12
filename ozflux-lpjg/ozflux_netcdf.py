@@ -619,16 +619,6 @@ def get_next_year(start_date: datetime.datetime) -> datetime.datetime:
 		return start_date
 	return datetime.datetime(start_date.year + 1, 1, 1, 0, 0, 0)
 
-def floats_equal(x: float, y: float) -> bool:
-	"""
-	Check if two floating point numbers are equal.
-
-	@param x: The first number.
-	@param y: The second number.
-	"""
-	EPSILON = 1e-10
-	return abs(x - y) < EPSILON
-
 def find_units_conversion(current_units: str, desired_units: str) \
 	-> Callable[[float], float]:
 	"""

@@ -49,17 +49,14 @@ _standard_variables = [
 ]
 
 # Map of site names to a list of names of soil water layer variables in the flux
-# data file.
+# data file. The site name should be the .nc file name before the first '_'.
 _layer_variable_map = {
-	# fixme - this is only 5cm!
 	"AdelaideRiver": ["Sws"],
-	# fixme - no data for 30-60cm or 80-100cm!
 	"AliceSpringsMulga": ["Sws_mulga", "Sws_10cm_mulga_2b", "Sws_60cm_mulga_2", "Sws_100cm_mulga_2"],
 	# todo: what is the difference between Sws_05cma_N, Sws_05cma_S, Sws_05cmb_N, Sws_05cmb_S???
 	"Boyagin": ["Sws_05cma_N", "Sws_08cm_main", "Sws_10cma_N", "Sws_15cm_main", "Sws_20cma_N", "Sws_40cm_N", "Sws_80cm_N", "Sws_110cm_N"],
-	# Note: Otway only has top 15cm.
+	"CumberlandPlain": ["Sws", "Sws_20cm"],
 	"Otway": ["Sws"],
-	# Note: Samford only has top 10cm.
 	"Samford": ["Sws"],
 	"SturtPlains": ["Sws", "Sws_50cm"],
 	"Yanco": ["Sws_3cm", "Sws", "Sws_15cm", "Sws_45cm", "Sws_75cm"],
@@ -290,6 +287,14 @@ def get_layer_height(nc: Dataset, layer: str, next_layer: str) -> tuple[float, f
 
 	layer_top = depths[0]
 
+	if len(depths) == 3:
+		# Some sites oh so helpfully have a height that looks like:
+		# "-0.08m vertically,0.08 - 0.38 m vertically"
+		if ozflux_common.floats_equal(depths[0], depths[1]):
+			depths = [depths[0], depths[2]]
+		else:
+			raise ValueError("Unable to interpret layer depths from height string '%s'" % height)
+
 	if len(depths) == 2:
 		# Height was of the form 0.1m - 0.2m.
 		layer_bottom = depths[1]
@@ -302,7 +307,7 @@ def get_layer_height(nc: Dataset, layer: str, next_layer: str) -> tuple[float, f
 			# are probably incorrect for this site.
 			m = "Bottom layer starts at %.2fm, which is below the hardcoded soil profile depth (%.2fm), and has unknown height"
 			raise ValueError(m % (layer_top, _SOIL_DEPTH))
-		
+
 		dlt = _SOIL_DEPTH - layer_top
 		m = "Site '%s': extending bottom soil layer by %.2fm"
 		log_warning(m % (nc.site_name, dlt) )
