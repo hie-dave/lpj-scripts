@@ -55,10 +55,38 @@ _layer_variable_map = {
 	"AliceSpringsMulga": ["Sws_mulga", "Sws_10cm_mulga_2b", "Sws_60cm_mulga_2", "Sws_100cm_mulga_2"],
 	# todo: what is the difference between Sws_05cma_N, Sws_05cma_S, Sws_05cmb_N, Sws_05cmb_S???
 	"Boyagin": ["Sws_05cma_N", "Sws_08cm_main", "Sws_10cma_N", "Sws_15cm_main", "Sws_20cma_N", "Sws_40cm_N", "Sws_80cm_N", "Sws_110cm_N"],
+	"Calperum": ["Sws", "Sws_25cm", "Sws_50cm", "Sws_100cm"],
+	"CapeTribulation": ["Sws", "Sws_75cma"],
+	"Collie": ["Sws", "Sws_10cm", "Sws_30cm"],
+	"CowBay": ["Sws", "Sws_75cma"],
 	"CumberlandPlain": ["Sws", "Sws_20cm"],
+	"DalyPasture": ["Sws", "Sws_50"],
+	"DalyUncleared": ["Sws", "Sws_50cm"],
+	"DryRiver": ["Sws", "Sws_50cm"],
+	# Note: Emerald does have Sws, but it has no height attribute!!!!
+	"Emerald": ["Sws_5cmd", "Sws_15cmd", "Sws_22p5cmd", "Sws_30cmd"],
+	# Note FoggDam does have Sws, but it has no height attribute!!!!
+	"FoggDam": ["Sws_10"],
+	"Gingin": ["Sws", "Sws_20cm", "Sws_40cm", "Sws_80cm"],
+	"GreatWesternWoodlands": ["Sws_5cmb", "Sws", "Sws_20cmb", "Sws_30cmd", "Sws_50cmb", "Sws_70cmb"],
+	"HowardSprings": ["Sws", "Sws40cm", "Sws100cm", "Sws120cm", "Sws140cm"],
+	"Litchfield": ["Sws", "Sws20cm", "Sws50cm", "Sws100cm", "Sws140cm"],
+	"Longreach": ["Sws"],
 	"Otway": ["Sws"],
+	# Note RedDirt does have Sws, but it has no height attribute!!!!
+	"RedDirtMelonFarm": ["Sws_5cm", "Sws_50cm"],
+	"Ridgefield": ["Sws", "Sws_10cm", "Sws_20cm", "Sws_40cm", "Sws_80cm"],
+	"RiggsCreek": ["Sws", "Sws_50cm"],
+	"RobsonCreek": ["Sws", "Sws_75cma"],
 	"Samford": ["Sws"],
+	"SilverPlains": ["Sws"],
 	"SturtPlains": ["Sws", "Sws_50cm"],
+	# Note: TiTreeEast has Sws_grass, Sws_mulga, and Sws_spinifex
+	"TiTreeEast": ["Sws"],
+	"Tumbarumba": ["Sws"],
+	"WallabyCreek": ["Sws", "Sws_15cma", "Sws_20cma", "Sws_40cma", "Sws_80cma"],
+	"Warra": ["Sws", "Sws_20cmd", "Sws_40cmd", "Sws_80cmd", "Sws_1p2m"],
+	"WombatStateForest": ["Sws", "Sws_35cma", "Sws_65cma", "Sws_95cma"],
 	"Yanco": ["Sws_3cm", "Sws", "Sws_15cm", "Sws_45cm", "Sws_75cm"],
 }
 
@@ -161,7 +189,7 @@ def write_csv(outfile: str, names: list[str], data: list[list[float]]
 	write_lai = len(lai_data) > 0
 
 	biomass_index = 0
-	lai_index = next(i for i in range(len(lai_data)) if lai_data[i].date >= start_date)
+	lai_index = -1 if not write_lai else next(i for i in range(len(lai_data)) if lai_data[i].date >= start_date)
 	with open(outfile, "w") as csv:
 		csv.write("year%sdoy%s" % (delim, delim))
 		if write_hours:
@@ -294,6 +322,14 @@ def get_layer_height(nc: Dataset, layer: str, next_layer: str) -> tuple[float, f
 			depths = [depths[0], depths[2]]
 		else:
 			raise ValueError("Unable to interpret layer depths from height string '%s'" % height)
+
+	if len(depths) == 2 and depths[0] > depths[1]:
+		tmp = depths[0]
+		depths[0] = depths[1]
+		depths[1] = tmp
+
+	if len(depths) == 2 and ozflux_common.floats_equal(depths[0], depths[1]):
+		depths = [depths[0]]
 
 	if len(depths) == 2:
 		# Height was of the form 0.1m - 0.2m.
