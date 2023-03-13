@@ -563,8 +563,6 @@ def main(opts: Options):
 
 	@param opts: Parsed CLI options provided by the user..
 	"""
-	step = 1 / len(opts.files)
-	start = 0
 
 	log_information("Reading LAI data...")
 	cols = [_LAI_COL_ID, _LAI_COL_DATE, _LAI_COL_LAI]
@@ -575,15 +573,13 @@ def main(opts: Options):
 	for file in opts.files:
 		p = lambda pcb: process_file(file, opts.out_dir, opts.timestep
 				, opts.biomass_file, opts.biomass_searchpath, lai_data, pcb)
-		if opts.parallel:
-			weight = os.path.getsize(file)
-			job_manager.add_parallel_job(weight, p)
-		else:
-			p(lambda p: log_progress(start + step * p))
-		start += step
+		weight = os.path.getsize(file)
+		job_manager.add_parallel_job(weight, p)
 
 	if opts.parallel:
-		job_manager.wait()
+		job_manager.run_parallel()
+	else:
+		job_manager.run_single_threaded()
 
 if __name__ == "__main__":
 	# Parse CLI args

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 from argparse import ArgumentParser
 import datetime, numpy, os, re, threading, time
-import ozflux_dave, ozflux_netcdf
+import ozflux_dave, ozflux_netcdf, ozflux_parallel
 import multiprocessing, multiprocessing.connection
 import traceback, sys
 from ozflux_logging import *
@@ -131,7 +131,7 @@ def copy_data_lsm(in_file: Dataset, out_file: Dataset, timestep: int, \
 	i = 0
 	vars = ozflux_lsm.get_lsm_vars()
 	nvar = len(vars)
-	n = LsmVariables.NFORCINGS
+	n = len(vars)
 	for var in vars:
 		log_diagnostic("----- %s -----" % var.out_name)
 		log_diagnostic("Reading %s data" % var.out_name)
@@ -420,75 +420,9 @@ def main(opts: Options):
 	if not os.path.exists(opts.out_dir):
 		os.makedirs(opts.out_dir)
 
-	# overall_progress holds the progress [0, 1] of processing each
-	# file.
-	global overall_progress
-	overall_progress = [0.0] * len(opts.files)
+	job_manager = ozflux_parallel.JobManager()
 
-	# Relative time spent in each file (based on file size).
-	file_weightings = [os.path.getsize(f) for f in opts.files]
-	total_weight = sum(file_weightings)
-	file_weightings = [x / total_weight for x in file_weightings]
-
-	# These are only required in parallel mode.
-	processes = []
-	mutex = multiprocessing.BoundedSemaphore(1)
-
-	def progress_reporter(progress: float, file_idx: int):
-		"""
-		Locally-scoped function which is called periodically by in order
-		to report the progress of processing a particular file.
-
-		@param progress: Progress of the file processing in range [0, 1].
-		@param file_idx: Index of the file being processed.
-		"""
-		# Shortcut to avoid unnecessary computations.
-		if not opts.report_progress:
-			return
-
-		global overall_progress
-
-		weighted_progress = file_weightings[file_idx] * progress
-
-		# No need to check if in parallel mode, as the mutex is easily
-		# obtained when running in serial mode.
-		with mutex:
-			overall_progress[file_idx] = weighted_progress
-			aggregate_progress = sum(overall_progress) / sum(file_weightings)
-			log_progress(aggregate_progress)
-
-	class ProcessingTask(multiprocessing.Process):
-		"""
-		A sub-process which will process a single file, with process reporting
-		via a pipe back to the main process.
-
-		Using multiple processes because the hdf5 library is not threadsafe.
-		"""
-		def __init__(self, infile: str, outfile: str, idx: int, timestep: int
-		, output_type: LpjVersion, clevel: int, ctype: int
-		, progress_writer: multiprocessing.connection.Connection):
-			multiprocessing.Process.__init__(self)
-			self.index = idx
-			self.infile = infile
-			self.outfile = outfile
-			self.timestep = timestep
-			self.output_type = output_type
-			self.progress_writer = progress_writer
-			self.compression_level = clevel
-			self.compression_type = ctype
-		def run(self):
-			# Do main processing.
-			process_file(self.infile, self.outfile, self.timestep
-			, self.output_type, self.compression_level, self.compression_type
-			, lambda p: self.progress_writer.send((p, self.index)))
-
-			# Close progress reporter pipe.
-			self.progress_writer.close()
-
-	readers: list[multiprocessing.connection.Connection] = []
-
-	for i in range(len(opts.files)):
-		infile = opts.files[i]
+	for infile in opts.files:
 		out_file_name = os.path.basename(infile)
 		if opts.out_type == LpjVersion.LSM:
 			out_file_name = get_output_filename(infile)
@@ -497,49 +431,15 @@ def main(opts: Options):
 		if os.path.exists(outfile):
 			os.remove(outfile)
 
-		if opts.parallel:
-			# Run task in a background process (hdf5/netcdf is not thread-safe).
+		job = lambda pcb: process_file(infile, outfile, opts.timestep
+		, opts.out_type, opts.compression_level, opts.compression_type, pcb)
 
-			# Create a pipe for 1-way communication (progress reporting).
-			reader, writer = multiprocessing.connection.Pipe(duplex = False)
-			# Put the read pipe handle into the readers list.
-			readers.append(reader)
-
-			# Start the process.
-			p = ProcessingTask(infile, outfile, i, opts.timestep, opts.out_type
-				, opts.compression_level, opts.compression_type, writer)
-			p.start()
-
-			# Close the writable end of the pipe now, to be sure that p is the
-			# only process which owns a handle for it. This ensures that when p
-			# closes its handle for the writable end, wait() will promptly
-			# report the readable end as being ready.
-			writer.close()
-
-			# Store the process handle for later use.
-			processes.append(p)
-		else:
-			# Run task in the current thread.
-			process_file(infile, outfile, opts.timestep, opts.out_type
-			, opts.compression_level, opts.compression_type
-			, lambda p: progress_reporter(p, i))
+		job_manager.add_job(job, os.path.getsize(infile))
 
 	if opts.parallel:
-		while readers:
-			for reader in readers:
-				try:
-					msg = None
-					if reader.poll():
-						msg = reader.recv()
-						(progress, process_index) = msg
-						progress_reporter(progress, process_index)
-				except EOFError:
-					readers.remove(reader)
-
-		# Wait for processes to exit (actually, they should have all finished by
-		# the time we get to here).
-		for p in processes:
-			p.join()
+		job_manager.run_parallel()
+	else:
+		job_manager.run_single_threaded()
 
 if __name__ == "__main__":
 	# Parse CLI args
