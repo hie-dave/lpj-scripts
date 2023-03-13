@@ -205,7 +205,7 @@ def get_biomass(data: pandas.DataFrame, row: int, biom_type: BiomassType
 	biomass = float(data.iloc[row][col_name])
 
 	if math.isnan(biomass):
-		log_warning("NaN %s recorded on row %d. Using 0 instead..." % \
+		log_debug("NaN %s recorded on row %d. Using 0 instead..." % \
 			(col_name, row))
 		return 0
 

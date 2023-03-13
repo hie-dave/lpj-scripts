@@ -16,6 +16,7 @@ from ozflux_netcdf import *
 from sys import argv
 from netCDF4 import Dataset
 from typing import Callable
+from ozflux_parallel import JobManager
 
 _ATTR_HEIGHT = "height"
 
@@ -569,11 +570,20 @@ def main(opts: Options):
 	cols = [_LAI_COL_ID, _LAI_COL_DATE, _LAI_COL_LAI]
 	lai_data = pandas.read_excel(opts.lai_file, _SHEET_LAI, usecols = cols, parse_dates = True)
 
+	job_manager = JobManager()	
+
 	for file in opts.files:
-		process_file(file, opts.out_dir, opts.timestep, opts.biomass_file
-		, opts.biomass_searchpath, lai_data
-		, lambda p: log_progress(start + step * p))
+		p = lambda pcb: process_file(file, opts.out_dir, opts.timestep
+				, opts.biomass_file, opts.biomass_searchpath, lai_data, pcb)
+		if opts.parallel:
+			weight = os.path.getsize(file)
+			job_manager.add_parallel_job(weight, p)
+		else:
+			p(lambda p: log_progress(start + step * p))
 		start += step
+
+	if opts.parallel:
+		job_manager.wait()
 
 if __name__ == "__main__":
 	# Parse CLI args
