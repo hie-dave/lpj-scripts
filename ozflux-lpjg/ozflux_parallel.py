@@ -2,12 +2,19 @@ from typing import Callable
 import multiprocessing
 import ozflux_logging
 
+class Task:
+	"""
+	Base class for runnable classes.
+	"""
+	def exec(self, pcb: Callable[[float], None]):
+		pass
+
 class _Job(multiprocessing.Process):
 	"""
 	Represents a parallel job.
 	"""
 	def __init__(self, id: int, weight: int
-	    	, func: Callable[[Callable[[float], None]], None]
+	    	, task: Task
 	      	, progress_reader: multiprocessing.connection.Connection
 	    	, progress_writer: multiprocessing.connection.Connection):
 		"""
@@ -15,14 +22,14 @@ class _Job(multiprocessing.Process):
 
 		@param id: Unique ID assigned to this job (used for progress reporting).
 		@param weight: Weighting of this job's progress relative to other jobs'.
-		@param func: The function to be called which performs work.
+		@param task: The function to be called which performs work.
 		@param progres_reader: Read connection to the subprocess' stdout pipe.
 		@param progres_writer: Write connection to the subprocess' stdout pipe.
 		"""
 		multiprocessing.Process.__init__(self)
 		self.id = id
 		self.weight = weight
-		self.func = func
+		self.task = task
 		self.progress_reader = progress_reader
 		self.progress_writer = progress_writer
 		self.progress = 0.0
@@ -41,7 +48,7 @@ class _Job(multiprocessing.Process):
 
 	def run(self):
 		# Do main processing.
-		self.func(lambda p: self.progress_writer.send( (p, self.id) ))
+		self.task.exec(lambda p: self.progress_writer.send( (p, self.id) ))
 
 		# Close progress reporter pipe.
 		self.progress_writer.close()
@@ -53,17 +60,15 @@ class _Job(multiprocessing.Process):
 		@param start: Total weight of all jobs already finished.
 		@param total_weight: Total weight of all jobs.
 		"""
-		self.func(lambda p: self._progress_local(p, start, total_weight))
+		self.task.exec(lambda p: self._progress_local(p, start, total_weight))
 
 class JobManager:
-	def __init__(self, allow_parallel: bool):
+	def __init__(self):
 		"""
 		Create a new JobManager.
-
-		@param allow_parallel: True iff jobs are allowed to run in parallel.
 		"""
-		# True iff jobs are allowed to run in parallel. False otherwise.
-		self.allow_parallel = allow_parallel
+		# # True iff jobs are allowed to run in parallel. False otherwise.
+		# self.allow_parallel = allow_parallel
 
 		# Total weight of all jobs. Access to this is controlled by _weights_lock.
 		self._total_weight: int = 0
@@ -93,15 +98,14 @@ class JobManager:
 		aggregate_progress = sum([j.progress for j in self._jobs])
 		ozflux_logging.log_progress(aggregate_progress)
 
-	def add_job(self, func: Callable[[Callable[[float], None]], None]
-		      , weight: int = 1):
+	def add_job(self, task: Task, weight: int = 1):
 		"""
 		Register a job with the job manager. A job can be any function which
 		reports its progress.
 
 		No progress reporting will occur until wait() is called.
 
-		@param func: The job's execution function. This is any function which
+		@param task: The job's execution function. This is any function which
 					 reports progress via a callable argument.
 		@param weight: Absolute weight for this job. Higher value means progress
 					in this job counts for proportionately more out of the
@@ -109,26 +113,19 @@ class JobManager:
 					calculated should be consistent over all jobs, and it must
 					be positive.
 		"""
-		with self._lock.acquire():
+		with self._lock:
 			# Get a job ID.
 			job_id = len(self._jobs)
 
 			# Update job weights. Note that the newly-added job weight should have
 			# index job_id.
-			self._job_weights.append(weight)
 			self._total_weight += weight
 
 			# Create a pipe for 1-way communication (progress reporting).
 			reader, writer = multiprocessing.connection.Pipe(duplex = False)
 
 			# Start the process.
-			job = _Job(job_id, func, reader, writer)
-
-			# Close the writable end of the pipe now, to be sure that p is the
-			# only process which owns a handle for it. This ensures that when p
-			# closes its handle for the writable end, wait() will promptly
-			# report the readable end as being ready.
-			writer.close()
+			job = _Job(job_id, weight, task, reader, writer)
 
 			# Store the process handle for later use.
 			self._jobs.append(job)
@@ -137,9 +134,15 @@ class JobManager:
 		"""
 		Run all jobs in parallel and wait for them to finish.
 		"""
-		with self._lock.acquire():
+		with self._lock:
 			for job in self._jobs:
 				job.start()
+
+				# Close the writable end of the pipe now, to be sure that p is
+				# the only process which owns a handle for it. This ensures that
+				# when p closes its handle for the writable end, wait() will
+				# promptly report the readable end as being ready.
+				job.progress_writer.close()
 			self._wait()
 
 	def run_single_threaded(self):
@@ -147,9 +150,13 @@ class JobManager:
 		Run all jobs one at a time, in the current thread, and wait for them to
 		finish.
 		"""
-		with self._lock.acquire():
+		with self._lock:
 			cum_weight = 0
 			for job in self._jobs:
+				# The pipe connection is not required.
+				job.progress_reader.close()
+				job.progress_writer.close()
+
 				job.run_local(cum_weight, self._total_weight)
 				cum_weight += job.weight
 
@@ -158,8 +165,9 @@ class JobManager:
 		Wait for all parallel jobs to finish running. Note that no progress
 		messages will be written until this is called.
 		"""
-		while self._readers:
-			for reader in self._readers:
+		readers = [j.progress_reader for j in self._jobs]
+		while readers:
+			for reader in readers:
 				try:
 					msg = None
 					if reader.poll():
@@ -167,7 +175,7 @@ class JobManager:
 						(progress, process_index) = msg
 						self._progress_reporter(progress, process_index)
 				except EOFError:
-					self._readers.remove(reader)
+					readers.remove(reader)
 
 		# Wait for processes to exit (actually, they should have all finished by
 		# the time we get to here).

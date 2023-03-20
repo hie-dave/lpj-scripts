@@ -26,6 +26,18 @@ _SOIL_DEPTH = 1.5
 # Name of the soil water column in the output file.
 _NAME_SW = "swmm"
 
+# Name of the LAI column in the output file.
+_NAME_LAI = "lai"
+
+# Name of the 90cm soil water column in the output file.
+_NAME_SMIPS = "swmm_90"
+
+# Name of the live biomass column in the output file.
+_NAME_LIVE = "live_biomass"
+
+# Name of the dead biomass column in the output file.
+_NAME_DEAD = "dead_biomass"
+
 # Name of the "site name" column in the LAI data file.
 _LAI_COL_ID = "ID"
 
@@ -37,6 +49,12 @@ _LAI_COL_LAI = "MYD15A2H_006_Lai_500m"
 
 # Name of the default sheet name in the LAI data file.
 _SHEET_LAI = "OzFlux-sites-LAI-MYD15A2H-006-r"
+
+# Name of the date column in smips input files.
+_SMIPS_COL_DATE = "date"
+
+# Name of the SW at 90cm column in smips input files.
+_SMIPS_COL_SW = "totalbucket"
 
 # Standard variables in the ozflux files which will be used for benchmarking.
 _standard_variables = [
@@ -99,6 +117,14 @@ class Observation:
 		self.date = date
 		self.value = value
 
+class Observations:
+	"""
+	A collection of observations for a particular variable.
+	"""
+	def __init__(self, name: str, observations: list[Observation]):
+		self.name = name
+		self.data = sorted(observations, key = lambda b: b.date)
+
 class Options:
 	"""
 	Class for storing CLI arguments from the user.
@@ -109,12 +135,13 @@ class Options:
 	@param prog: True to write progress messages, 0 otherwise.
 	@param parallel: True to process files in parallel.
 	@param timestep: Desired output timestep, in hours.
+	@param smips_path: Path to file containing SW content at 90cm as obtained from SMIPS.
 	@param biomass_file: Optional file containing biomass readings
 	@param biomass_searchpath: Search path for biomass readings. If provided, will search under here for a file containing biomass readings for the site
 	@param lai_file: Path to file containing LAI observations.
 	"""
 	def __init__(self, log : LogLevel, files: list[str], odir: str, prog: bool,
-		parallel: bool, timestep: int, biomass_file: str
+		parallel: bool, timestep: int, smips_path: str, biomass_file: str
 		, biomass_searchpath: str, lai_file: str):
 		self.log_level = log
 		self.files = files
@@ -125,6 +152,7 @@ class Options:
 		self.biomass_file = biomass_file
 		self.biomass_searchpath = biomass_searchpath
 		self.lai_file = lai_file
+		self.smips_path = smips_path
 
 def parse_args(argv: list[str]) -> Options:
 	"""
@@ -143,20 +171,38 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-t", "--timestep", type = int, required = True, help = "Output timestep in hours")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
 	parser.add_argument("-l", "--lai-file", required = True, help = "Path to a file containing lai observations")
+	parser.add_argument("-s", "--smips-path", required = True, help = "Path to directory containing site-level SW content at 90cm as obtained from SMIPS. Each file in this directory should be named site.csv")
 
 	biomass_group = parser.add_mutually_exclusive_group()
 	biomass_group.add_argument("-b", "--biomass-readings", required = False, help = "Optional file containing biomass readings")
-	biomass_group.add_argument("-s", "--biomass-searchpath", required = False, help = "Search path for biomass readings. If provided, will search under here for a file containing biomass readings for the site")
+	biomass_group.add_argument("--biomass-searchpath", required = False, help = "Search path for biomass readings. If provided, will search under here for a file containing biomass readings for the site")
 
 	p = parser.parse_args(argv[1:])
 
 	return Options(p.verbosity, p.files, p.out_dir, p.show_progress, p.parallel,
-		p.timestep, p.biomass_readings, p.biomass_searchpath, p.lai_file)
+		p.timestep, p.smips_path, p.biomass_readings, p.biomass_searchpath, p.lai_file)
 
-def write_csv(outfile: str, names: list[str], data: list[list[float]]
-	, biomass_data: list[biom_processing.BiomassReading]
-	, start_date: datetime.datetime, timestep: int \
-	, lai_data: list[Observation], pcb: Callable[[float], None], delim = ","):
+def multiply_timedelta(delta: datetime.timedelta, n: int) -> datetime.timedelta:
+	"""
+	Return a timedelta which represents N multiples of the original delta.
+
+	@param delta: A time delta.
+	@param n: Any real number.
+	"""
+	return datetime.timedelta(seconds = n * delta.total_seconds())
+
+def _create_observations(name: str, data: list[float], start: datetime.datetime
+		, timestep: datetime.timedelta):
+	
+	obs = [Observation(start + multiply_timedelta(timestep, i), data[i]) for (i, _) in enumerate(data)]
+	return Observations(name, obs)
+
+def write_csv(outfile: str, variables: list[Observations]
+	#names: list[str], data: list[list[float]]
+	#, biomass_data: list[biom_processing.BiomassReading]
+	, start_date: datetime.datetime, end_date: datetime.datetime, timestep: int
+	#, lai_data: list[Observation], sw90_data: list[Observation]
+	, pcb: Callable[[float], None], delim = ","):
 	"""
 	Write the data to a csv file.
 
@@ -167,39 +213,20 @@ def write_csv(outfile: str, names: list[str], data: list[list[float]]
 	@param timestep: Output timestep (in hours).
 	@param lai_data: LAI observations. May be empty list if none available.
 	"""
-	if len(names) != len(data):
-		raise ValueError("Number of column names (%d) doesn't match number of columns (%d)" % (len(names), len(data)))
-	if len(names) == 0:
-		log_warning("Writing 0 columns to output file")
-		return
-
-	nrow = len(data[0])
-	for i in range(1, len(data)):
-		if len(data[i]) != nrow:
-			raise ValueError("Incorrect number of rows in column '%s'. Expected %d but was %d" % (names[i], nrow, len(data[i])))
 
 	write_hours = timestep % 24 != 0
 
 	delta = datetime.timedelta(hours = timestep)
-	end_date = start_date + nrow * delta
+	nrow = int((end_date - start_date).total_seconds() // delta.total_seconds())
 
-	biomass_data = [b for b in biomass_data if b.date >= start_date and b.date <= end_date]
-	biomass_data = sorted(biomass_data, key = lambda b: b.date)
+	variables = [v for v in variables if len(v.data) > 0]
+	indices = [next(i for i in range(len(var.data)) if var.data[i].date >= start_date) for var in variables]
 
-	write_biomass = len(biomass_data) > 0
-	write_lai = len(lai_data) > 0
-
-	biomass_index = 0
-	lai_index = -1 if not write_lai else next(i for i in range(len(lai_data)) if lai_data[i].date >= start_date)
 	with open(outfile, "w") as csv:
 		csv.write("year%sdoy%s" % (delim, delim))
 		if write_hours:
 			csv.write("hour%s" % delim)
-		csv.write("%s" % str.join(delim, names))
-		if write_biomass:
-			csv.write(",live_biomass,dead_biomass")
-		if write_lai:
-			csv.write(",lai")
+		csv.write("%s" % str.join(delim, [v.name for v in variables]))
 		csv.write("\n")
 		date = start_date
 		for i in range(nrow):
@@ -214,34 +241,16 @@ def write_csv(outfile: str, names: list[str], data: list[list[float]]
 			if write_hours:
 				csv.write("%s%s" % (date.hour, delim))
 
-			# Write the data columns.
-			csv.write("%s" % str.join(delim, [str(column[i]) for column in data]))
-
-			# Write the biomass column.
-			if write_biomass:
-				live_str = ""
-				dead_str = ""
-				if biomass_index < len(biomass_data):
-					reading = biomass_data[biomass_index]
+			for i in range(len(variables)):
+				row = indices[i]
+				var = variables[i]
+				if row < len(var.data):
+					reading = var.data[row]
 					if reading.date == date:
-						biomass_index += 1
-						if not math.isnan(reading.live):
-							live_str = reading.live
-						if not math.isnan(reading.dead):
-							dead_str = reading.dead
-				csv.write("%s%s%s%s" % (delim, live_str, delim, dead_str))
-
-			if write_lai:
-				lai_str = ""
-				idx = [i for i in range(len(lai_data)) if lai_data[i].date == date]
-				if lai_index < len(lai_data):
-					reading = lai_data[lai_index]
-					if reading.date == date:
-						lai_index += 1
-						if not math.isnan(reading.value):
-							lai_str = reading.value
-				csv.write("%s%s" % (delim, lai_str))
-
+						csv.write("%s" % reading.value)
+						indices[i] += 1
+					if i < (len(variables) - 1):
+						csv.write(delim)
 			csv.write("\n")
 			date += delta
 	pcb(1)
@@ -362,7 +371,7 @@ def get_layer_height(nc: Dataset, layer: str, next_layer: str) -> tuple[float, f
 	return (layer_top, top_next_layer - layer_top)
 
 def get_sw_data(file: str, timestep: int, pcb: Callable[[float], None]) \
--> list[float]:
+-> list[Observation]:
 	"""
 	Read SW timeseries data from the given file name.
 
@@ -447,16 +456,14 @@ def get_sw_data(file: str, timestep: int, pcb: Callable[[float], None]) \
 
 	return total_mm
 
-def get_lai_data(data: pandas.DataFrame, site: str, timestep: int
-		 , pcb: Callable[[float], None]
-		 , sheet: str = _SHEET_LAI) -> list[Observation]:
+def get_lai_data(data: pandas.DataFrame, site: str, timestep: int, pcb: Callable[[float], None]) -> list[Observation]:
 	"""
 	Read LAI observations for the specified site from the given input file.
 
-	@param file: Path to the input (excel/.xlsx) file.
+	@param data: Pre-parsed LAI data. (This is parsed once because the input file contains data for all sites.)
+	@param site: Name of the site.
 	@param timestep: Desired output timestep in hours.
 	@param pcb: Progress reporting function.
-	@param sheet: Name of the sheet in the input file to read.
 	"""
 	data = data[data[_LAI_COL_ID] == site]
 	data = data.groupby([_LAI_COL_DATE]).mean(numeric_only = True)
@@ -464,8 +471,35 @@ def get_lai_data(data: pandas.DataFrame, site: str, timestep: int
 	lai = [Observation(datetime.datetime.combine(date.date(), datetime.datetime.min.time()), float(lai)) for (date, lai) in data.iterrows()]
 	return lai
 
+def get_smips_data_from_file(file: str, timestep: int, pcb: Callable[[float], None]) \
+		-> list[Observation]:
+	"""
+	Read smips SW content at 90cm from the site file in the specified path.
+
+	@param file: Input csv file.
+	@param timestep: Output timestep in hours.
+	@param pcb: Progress reporting function.
+	"""
+	data = pandas.read_csv(file, parse_dates = True)
+	data.iloc[:,0] = [datetime.datetime.strptime(x, "%Y-%m-%d") for x in data.iloc[:,0]]
+	parsed = [Observation(row[_SMIPS_COL_DATE], row[_SMIPS_COL_SW]) for row in data.iloc]
+	return parsed
+
+def get_smips_data(site: str, path: str, timestep: int, pcb: Callable[[float], None]) \
+		-> list[Observation]:
+	"""
+	Read smips SW content at 90cm from the site file in the specified path.
+
+	@param site: Name of the site.
+	@param path: Path to a directory containing site-level csv files containing timeseries of SW content at 90cm.
+	@param timestep: Output timestep in hours.
+	@param pcb: Progress reporting function.
+	"""
+	file = os.path.join(path, "%s.csv" % site)
+	return get_smips_data_from_file(file, timestep, pcb)
+
 def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
-	, biomass_searchpath: str, lai_data: pandas.DataFrame
+	, biomass_searchpath: str, lai_data: pandas.DataFrame, smips_path: str
 	, pcb: Callable[[float], None]):
 	"""
 	Extract the standard variables from the input file, write them to a .csv
@@ -474,6 +508,7 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 	@param file: Input file path.
 	@param out_dir: Output directory.
 	@param timestep: Output timestep in hours.
+	@param smips_path: Path to smips input files.
 	@param pcb: Progress callback function.
 	@param lai_file: Path to a file containing LAI observations.
 	"""
@@ -481,81 +516,121 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 
 	read_prop = 0.76
 	write_prop = 0.03
-	biom_prop = 0.0044
+	biom_prop = 0.0024
 	sw_prop = 0.2
-	lai_prop = 1 - write_prop - read_prop - biom_prop - sw_prop
+	smips_prop = 0.002
+	lai_prop = 1 - write_prop - read_prop - biom_prop - sw_prop - smips_prop
 	if lai_prop < 0:
 		raise ValueError("Invalid default time proportions")
 
-	variables = _standard_variables
+	flux_vars = _standard_variables
 
-	biom_start = time.time()
-	biomass_data = get_biomass_data(file, biomass_file, biomass_searchpath
-		, lambda p: pcb(biom_prop * p))
-	biom_time = time.time() - biom_start
+	out_variables: list[Observations] = []
 
-	step_start = biom_prop
-
-	sw_start = time.time()
-	sw_data = get_sw_data(file, timestep
-		    , lambda p: pcb(step_start + sw_prop * p) )
-	sw_time = time.time() - sw_start
-
-	step_start += sw_prop
+	step_start = 0
 
 	lai_start = time.time()
 	site = get_site_name(file)
-	lai_readings = get_lai_data(lai_data, site, timestep
+	lai_data = get_lai_data(lai_data, site, timestep
 			, lambda p: pcb(step_start + lai_prop * p))
+	out_variables.append(Observations(_NAME_LAI, lai_data))
 	lai_time = time.time() - lai_start
 
 	log_debug("Opening input file '%s' for reading..." % file)
 
 	step_start += lai_prop
 
-	data = []
 	read_start = time.time()
 	timestep_minutes = timestep * MINUTES_PER_HOUR
-	start_date: datetime
+	start_date: datetime.datetime
+	end_date: datetime.datetime
+	delta = datetime.timedelta(hours = timestep)
+	timeseries: list[datetime.datetime] = []
 	with Dataset(file, "r", format=ozflux_common.NC_FORMAT) as nc:
-		step_size = read_prop / len(variables)
-		for var in variables:
-			data.append(get_data(nc, var, timestep_minutes, lambda p: \
-				pcb(step_start + step_size * p)))
-			step_start += step_size
+		step_size = read_prop / len(flux_vars)
 		start_date = get_next_year(ozflux_common.parse_date(nc.time_coverage_start))
+		for var in flux_vars:
+			raw = get_data(nc, var, timestep_minutes, lambda p: \
+				pcb(step_start + step_size * p))
+			if len(timeseries) == 0:
+				timeseries = [start_date + multiply_timedelta(delta, i) for i in range(len(raw))]
+				end_date = start_date + multiply_timedelta(delta, len(raw))
+			parsed = [Observation(x, y) for (x, y) in zip(timeseries, raw)]
+			out_variables.append(Observations(var.out_name, parsed))
+			step_start += step_size
 	read_time = time.time() - read_start
+
+	sw_start = time.time()
+	sw_data = get_sw_data(file, timestep
+		    , lambda p: pcb(step_start + sw_prop * p) )
+	out_variables.append(_create_observations(_NAME_SW, sw_data, start_date, delta))
+	sw_time = time.time() - sw_start
+	step_start += sw_prop
+
+	smips_start = time.time()
+	sw90_data = get_smips_data(get_site_name_from_filename(file), smips_path
+			    		, timestep, lambda p: pcb(step_start + smips_prop * p))
+	out_variables.append(Observations(_NAME_SMIPS, sw90_data))
+	smips_time = time.time() - smips_start
+	step_start += smips_prop
+
+	biom_start = time.time()
+	biomass_data = get_biomass_data(file, biomass_file, biomass_searchpath
+		, lambda p: pcb(step_start + biom_prop * p))
+	biomass_data = [b for b in biomass_data if b.date >= start_date and b.date <= end_date]
+	biomass_data = sorted(biomass_data, key = lambda b: b.date)
+	if len(biomass_data) > 0:
+		live_data = Observations(_NAME_LIVE, [Observation(d.date, d.live) for d in biomass_data])
+		dead_data = Observations(_NAME_DEAD, [Observation(d.date, d.dead) for d in biomass_data])
+		out_variables.append(live_data)
+		out_variables.append(dead_data)
+
+	biom_time = time.time() - biom_start
+	step_start += biom_prop
 
 	# step_start += read_prop
 
-	data.append(sw_data)
-
 	file = os.path.basename(file)
-	filename = "%s.csv" % os.path.splitext(file)[0]
+	filename = "%s.csv" % get_site_name_from_filename(file)
 	outfile = os.path.join(out_dir, filename)
 
 	if not os.path.exists(out_dir):
 		os.makedirs(out_dir)
 
 	write_start = time.time()
-	names = ["%s" % v.out_name for v in variables]
+	names = ["%s" % v.out_name for v in flux_vars]
 	names.append(_NAME_SW)
 
 	timestep_hours = timestep
-	write_csv(outfile, names, data, biomass_data, start_date, timestep_hours
-	   , lai_readings, lambda p: pcb(step_start + write_prop * p))
+	write_csv(outfile, out_variables, start_date, end_date, timestep_hours
+	   , lambda p: pcb(step_start + write_prop * p))
 	write_time = time.time() - write_start
 
-	total_time = read_time + write_time + biom_time + sw_time + lai_time
+	total_time = read_time + write_time + biom_time + sw_time + lai_time + smips_time
 
 	read_prop = read_time / total_time
 	write_prop = write_time / total_time
 	biom_prop = biom_time / total_time
 	sw_prop = sw_time / total_time
 	lai_prop = lai_time / total_time
+	smips_prop = smips_time / total_time
 
-	log_diagnostic("Read time: %.2f%%; Write time: %.2f%%; Biomass time: %.2f%%; SW time: %.2f%%; lai time: %.2f%%"
-	% (100 * read_prop, 100 * write_prop, 100 * biom_prop, 100 * sw_prop, 100 * lai_prop))
+	log_diagnostic("Read time: %.2f%%; Write time: %.2f%%; Biomass time: %.2f%%; SW time: %.2f%%; lai time: %.2f%%; smips time: %.2f%%"
+	% (100 * read_prop, 100 * write_prop, 100 * biom_prop, 100 * sw_prop, 100 * lai_prop, 100 * smips_prop))
+
+class Processor:
+	def __init__(self, file: str, out_dir: str, timestep: int, biomass_file: str, biomass_searchpath: str
+	      , lai_data: pandas.DataFrame, smips_path: str):
+		self.file = file
+		self.out_dir = out_dir
+		self.timestep = timestep
+		self.biomass_file = biomass_file
+		self.biomass_searchpath = biomass_searchpath
+		self.lai_data = lai_data
+		self.smips_path = smips_path
+	def exec(self, pcb: Callable[[float], None]):
+		process_file(self.file, self.out_dir, self.timestep, self.biomass_file
+	       , self.biomass_searchpath, self.lai_data, self.smips_path, pcb)
 
 def main(opts: Options):
 	"""
@@ -568,13 +643,12 @@ def main(opts: Options):
 	cols = [_LAI_COL_ID, _LAI_COL_DATE, _LAI_COL_LAI]
 	lai_data = pandas.read_excel(opts.lai_file, _SHEET_LAI, usecols = cols, parse_dates = True)
 
-	job_manager = JobManager()	
+	job_manager = JobManager()
 
 	for file in opts.files:
-		p = lambda pcb: process_file(file, opts.out_dir, opts.timestep
-				, opts.biomass_file, opts.biomass_searchpath, lai_data, pcb)
-		weight = os.path.getsize(file)
-		job_manager.add_parallel_job(weight, p)
+		p = Processor(file, opts.out_dir, opts.timestep, opts.biomass_file
+				, opts.biomass_searchpath, lai_data, opts.smips_path)
+		job_manager.add_job(p, os.path.getsize(file))
 
 	if opts.parallel:
 		job_manager.run_parallel()
