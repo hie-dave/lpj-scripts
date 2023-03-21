@@ -32,6 +32,9 @@ _NAME_LAI = "lai"
 # Name of the 90cm soil water column in the output file.
 _NAME_SMIPS = "swmm_90"
 
+# Name of the 90cm soil moisture index in the output file.
+_NAME_SWINDEX = "swindex_90"
+
 # Name of the live biomass column in the output file.
 _NAME_LIVE = "live_biomass"
 
@@ -55,6 +58,9 @@ _SMIPS_COL_DATE = "date"
 
 # Name of the SW at 90cm column in smips input files.
 _SMIPS_COL_SW = "totalbucket"
+
+# Name of the soil moisture index column in smips input files.
+_SMIPS_COL_SWINDEX = "SMindex"
 
 # Standard variables in the ozflux files which will be used for benchmarking.
 _standard_variables = [
@@ -141,8 +147,8 @@ class Options:
 	@param lai_file: Path to file containing LAI observations.
 	"""
 	def __init__(self, log : LogLevel, files: list[str], odir: str, prog: bool,
-		parallel: bool, timestep: int, smips_path: str, biomass_file: str
-		, biomass_searchpath: str, lai_file: str):
+		parallel: bool, timestep: int, smips_path: str, smips_index_path: str
+		, biomass_file: str, biomass_searchpath: str, lai_file: str):
 		self.log_level = log
 		self.files = files
 		self.out_dir = odir
@@ -153,6 +159,7 @@ class Options:
 		self.biomass_searchpath = biomass_searchpath
 		self.lai_file = lai_file
 		self.smips_path = smips_path
+		self.smips_index_path = smips_index_path
 
 def parse_args(argv: list[str]) -> Options:
 	"""
@@ -172,6 +179,7 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
 	parser.add_argument("-l", "--lai-file", required = True, help = "Path to a file containing lai observations")
 	parser.add_argument("-s", "--smips-path", required = True, help = "Path to directory containing site-level SW content at 90cm as obtained from SMIPS. Each file in this directory should be named site.csv")
+	parser.add_argument("--smips-index-path", help = "Optional path to directory containing site-level soil moisture index as obtained from smips. Each file should be named site.csv")
 
 	biomass_group = parser.add_mutually_exclusive_group()
 	biomass_group.add_argument("-b", "--biomass-readings", required = False, help = "Optional file containing biomass readings")
@@ -180,7 +188,8 @@ def parse_args(argv: list[str]) -> Options:
 	p = parser.parse_args(argv[1:])
 
 	return Options(p.verbosity, p.files, p.out_dir, p.show_progress, p.parallel,
-		p.timestep, p.smips_path, p.biomass_readings, p.biomass_searchpath, p.lai_file)
+		p.timestep, p.smips_path, p.smips_index_path, p.biomass_readings,
+		p.biomass_searchpath, p.lai_file)
 
 def multiply_timedelta(delta: datetime.timedelta, n: int) -> datetime.timedelta:
 	"""
@@ -471,7 +480,7 @@ def get_lai_data(data: pandas.DataFrame, site: str, timestep: int, pcb: Callable
 	lai = [Observation(datetime.datetime.combine(date.date(), datetime.datetime.min.time()), float(lai)) for (date, lai) in data.iterrows()]
 	return lai
 
-def get_smips_data_from_file(file: str, timestep: int, pcb: Callable[[float], None]) \
+def get_smips_data_from_file(file: str, timestep: int, col: str, pcb: Callable[[float], None]) \
 		-> list[Observation]:
 	"""
 	Read smips SW content at 90cm from the site file in the specified path.
@@ -482,10 +491,10 @@ def get_smips_data_from_file(file: str, timestep: int, pcb: Callable[[float], No
 	"""
 	data = pandas.read_csv(file, parse_dates = True)
 	data.iloc[:,0] = [datetime.datetime.strptime(x, "%Y-%m-%d") for x in data.iloc[:,0]]
-	parsed = [Observation(row[_SMIPS_COL_DATE], row[_SMIPS_COL_SW]) for row in data.iloc]
+	parsed = [Observation(row[_SMIPS_COL_DATE], row[col]) for row in data.iloc]
 	return parsed
 
-def get_smips_data(site: str, path: str, timestep: int, pcb: Callable[[float], None]) \
+def get_smips_data(site: str, path: str, timestep: int, col: str, pcb: Callable[[float], None]) \
 		-> list[Observation]:
 	"""
 	Read smips SW content at 90cm from the site file in the specified path.
@@ -493,14 +502,15 @@ def get_smips_data(site: str, path: str, timestep: int, pcb: Callable[[float], N
 	@param site: Name of the site.
 	@param path: Path to a directory containing site-level csv files containing timeseries of SW content at 90cm.
 	@param timestep: Output timestep in hours.
+	@param col: Column name of data to be read.
 	@param pcb: Progress reporting function.
 	"""
 	file = os.path.join(path, "%s.csv" % site)
-	return get_smips_data_from_file(file, timestep, pcb)
+	return get_smips_data_from_file(file, timestep, col, pcb)
 
 def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 	, biomass_searchpath: str, lai_data: pandas.DataFrame, smips_path: str
-	, pcb: Callable[[float], None]):
+	, smips_index_path: str, pcb: Callable[[float], None]):
 	"""
 	Extract the standard variables from the input file, write them to a .csv
 	file in the specified output directory in the specified timestep.
@@ -509,6 +519,7 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 	@param out_dir: Output directory.
 	@param timestep: Output timestep in hours.
 	@param smips_path: Path to smips input files.
+	@param smips_path: Path to smips SW index files.
 	@param pcb: Progress callback function.
 	@param lai_file: Path to a file containing LAI observations.
 	"""
@@ -568,9 +579,15 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 	step_start += sw_prop
 
 	smips_start = time.time()
-	sw90_data = get_smips_data(get_site_name_from_filename(file), smips_path
-			    		, timestep, lambda p: pcb(step_start + smips_prop * p))
+	site_name = get_site_name_from_filename(file)
+	sw90_data = get_smips_data(site_name, smips_path, timestep, _SMIPS_COL_SW
+			    , lambda p: pcb(step_start + 0.5 * smips_prop * p))
 	out_variables.append(Observations(_NAME_SMIPS, sw90_data))
+	if os.path.exists(smips_index_path):
+		swindex_data = get_smips_data(site_name, smips_index_path, timestep
+				, _SMIPS_COL_SWINDEX
+				, lambda p: pcb(step_start + smips_prop * (0.5 * p + 0.5)))
+		out_variables.append(Observations(_NAME_SWINDEX, swindex_data))
 	smips_time = time.time() - smips_start
 	step_start += smips_prop
 
@@ -620,7 +637,7 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 
 class Processor:
 	def __init__(self, file: str, out_dir: str, timestep: int, biomass_file: str, biomass_searchpath: str
-	      , lai_data: pandas.DataFrame, smips_path: str):
+	      , lai_data: pandas.DataFrame, smips_path: str, smips_index_path: str):
 		self.file = file
 		self.out_dir = out_dir
 		self.timestep = timestep
@@ -628,9 +645,11 @@ class Processor:
 		self.biomass_searchpath = biomass_searchpath
 		self.lai_data = lai_data
 		self.smips_path = smips_path
+		self.smips_index_path = smips_index_path
 	def exec(self, pcb: Callable[[float], None]):
 		process_file(self.file, self.out_dir, self.timestep, self.biomass_file
-	       , self.biomass_searchpath, self.lai_data, self.smips_path, pcb)
+	       , self.biomass_searchpath, self.lai_data, self.smips_path
+		   , self.smips_index_path, pcb)
 
 def main(opts: Options):
 	"""
@@ -647,7 +666,8 @@ def main(opts: Options):
 
 	for file in opts.files:
 		p = Processor(file, opts.out_dir, opts.timestep, opts.biomass_file
-				, opts.biomass_searchpath, lai_data, opts.smips_path)
+				, opts.biomass_searchpath, lai_data, opts.smips_path
+				, opts.smips_index_path)
 		job_manager.add_job(p, os.path.getsize(file))
 
 	if opts.parallel:
