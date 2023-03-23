@@ -98,6 +98,9 @@ def write_data_dg(nc_out: Dataset, var_name: str, data: list[float], lon: float
 def change_start_minute(datetime: str, minute: int) -> str:
 	"""
 	Change the minute value of a date/time string.
+
+	@param datetime: Date/time string in format yyyy-MM-dd hh:mm:ss
+	@param minute: The new value of the minute field.
 	"""
 	if minute < 0 or minute > 59:
 		m = "Unable to set start minute: minute value %d must be in range [0, 59]"

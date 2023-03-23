@@ -65,12 +65,12 @@ _SMIPS_COL_SWINDEX = "SMindex"
 # Standard variables in the ozflux files which will be used for benchmarking.
 _standard_variables = [
 	# GPP shouldn't get this high, but this is mainly for error checking anyway.
-	ForcingVariable("GPP_LT", "gpp", "kgC/m2/day", numpy.mean, 0, 1e6),
+	ForcingVariable("GPP_LT", "gpp", "gC/m2/day", numpy.mean, -200, 200),
 
 	# todo: are these bounds sensible?
 	ForcingVariable("ET", "et", "kg/m2/s", numpy.mean, -10, 10),
-	ForcingVariable("ER_LT", "resp", "kgC/m2/day", numpy.mean, -10, 10),
-	ForcingVariable("NEE_LT", "nee", "kgC/m2/day", numpy.mean, -10, 10),
+	ForcingVariable("ER_LT", "resp", "gC/m2/day", numpy.mean, -10, 10),
+	ForcingVariable("NEE_LT", "nee", "gC/m2/day", numpy.mean, -10, 10),
 ]
 
 # Map of site names to a list of names of soil water layer variables in the flux

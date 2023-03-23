@@ -104,7 +104,8 @@ units_conversions = {
 	("degC", "K"): lambda x, _: x + DEG_C_TO_K,
 	("K", "degC"): lambda x, _: x - DEG_C_TO_K,
 	("kPa", "Pa"): lambda x, _: x * PA_PER_KPA,
-	("umol/m2/s", "kgC/m2/day"): lambda x, _: x * MOL_PER_UMOL * G_C_PER_MOL * KG_PER_G * SECONDS_PER_DAY
+	("umol/m2/s", "kgC/m2/day"): lambda x, _: x * MOL_PER_UMOL * G_C_PER_MOL * KG_PER_G * SECONDS_PER_DAY,
+	("umol/m2/s", "gC/m2/day"): lambda x, _: x * MOL_PER_UMOL * G_C_PER_MOL * SECONDS_PER_DAY
 }
 
 class ForcingVariable():
