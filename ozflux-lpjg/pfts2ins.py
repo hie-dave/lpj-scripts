@@ -59,7 +59,7 @@ def main(opts: _Options):
 	"""
 	# Create output directory if it doesn't exist.
 	out_dir = os.path.dirname(opts.outfile)
-	if not os.path.exists(out_dir):
+	if not out_dir == "" and not os.path.exists(out_dir):
 		os.makedirs(out_dir)
 
 	# Read input data.
