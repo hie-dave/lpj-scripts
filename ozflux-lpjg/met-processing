@@ -147,7 +147,7 @@ def copy_data_lsm(in_file: Dataset, out_file: Dataset, timestep: int, \
 		read_proportion = 0.66
 		write_proportion = 1 - read_proportion
 
-		data = get_data(in_file, var, timestep, lambda p: \
+		data = get_data(in_file, var, timestep, False, True, lambda p: \
 			pcb((i + p * read_proportion) / nvar))
 
 		# 3. Write data to out file.
@@ -214,7 +214,7 @@ def copy_data(nc_in: Dataset, nc_out: Dataset, timestep: int
 
 		reporter = lambda p: pcb( (i + p * read_prop) / nvar)
 		read_start = time.time()
-		data = get_data(nc_in, var, timestep, reporter)
+		data = get_data(nc_in, var, timestep, False, True, reporter)
 		read_time = time.time() - read_start
 
 		n = max(n, len(data))

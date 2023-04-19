@@ -24,7 +24,7 @@ _ATTR_HEIGHT = "height"
 _SOIL_DEPTH = 1.5
 
 # Name of the soil water column in the output file.
-_NAME_SW = "swmm"
+_NAME_SW = "swvol"
 
 # Name of the LAI column in the output file.
 _NAME_LAI = "lai"
@@ -50,6 +50,9 @@ _LAI_COL_DATE = "Date"
 # Name of the LAI column in the LAI data file.
 _LAI_COL_LAI = "MYD15A2H_006_Lai_500m"
 
+# Name of the quality control column in the LAI data file.
+_LAI_COL_QCFLAG = "MYD15A2H_006_FparLai_QC"
+
 # Name of the default sheet name in the LAI data file.
 _SHEET_LAI = "OzFlux-sites-LAI-MYD15A2H-006-r"
 
@@ -62,57 +65,72 @@ _SMIPS_COL_SW = "totalbucket"
 # Name of the soil moisture index column in smips input files.
 _SMIPS_COL_SWINDEX = "SMindex"
 
+# Minimum allowed LAI value (m2/m2).
+_LAI_MIN = 0
+
+# Maximum allowed LAI value (m2/m2).
+_LAI_MAX = 20
+
 # Standard variables in the ozflux files which will be used for benchmarking.
 _standard_variables = [
 	# GPP shouldn't get this high, but this is mainly for error checking anyway.
 	ForcingVariable("GPP_LT", "gpp", "gC/m2/day", numpy.mean, -200, 200),
-
-	# todo: are these bounds sensible?
-	ForcingVariable("ET", "et", "kg/m2/s", numpy.mean, -10, 10),
 	ForcingVariable("ER_LT", "resp", "gC/m2/day", numpy.mean, -10, 10),
 	ForcingVariable("NEE_LT", "nee", "gC/m2/day", numpy.mean, -10, 10),
+	# todo: are these bounds sensible?
+	ForcingVariable("ET", "et", "mm/day", numpy.mean, -10, 10),
 ]
+
+class Layer:
+	def __init__(self, name: str, depth: int):
+		"""
+		Create a new Layer object.
+		@param name: Name of the variable in the netcdf file.
+		@param depth: Depth of this layer in cm.
+		"""
+		self.name = name
+		self.depth = depth
 
 # Map of site names to a list of names of soil water layer variables in the flux
 # data file. The site name should be the .nc file name before the first '_'.
 _layer_variable_map = {
-	"AdelaideRiver": ["Sws"],
-	"AliceSpringsMulga": ["Sws_mulga", "Sws_10cm_mulga_2b", "Sws_60cm_mulga_2", "Sws_100cm_mulga_2"],
-	# todo: what is the difference between Sws_05cma_N, Sws_05cma_S, Sws_05cmb_N, Sws_05cmb_S???
-	"Boyagin": ["Sws_05cma_N", "Sws_08cm_main", "Sws_10cma_N", "Sws_15cm_main", "Sws_20cma_N", "Sws_40cm_N", "Sws_80cm_N", "Sws_110cm_N"],
-	"Calperum": ["Sws", "Sws_25cm", "Sws_50cm", "Sws_100cm"],
-	"CapeTribulation": ["Sws", "Sws_75cma"],
-	"Collie": ["Sws", "Sws_10cm", "Sws_30cm"],
-	"CowBay": ["Sws", "Sws_75cma"],
-	"CumberlandPlain": ["Sws", "Sws_20cm"],
-	"DalyPasture": ["Sws", "Sws_50"],
-	"DalyUncleared": ["Sws", "Sws_50cm"],
-	"DryRiver": ["Sws", "Sws_50cm"],
-	# Note: Emerald does have Sws, but it has no height attribute!!!!
-	"Emerald": ["Sws_5cmd", "Sws_15cmd", "Sws_22p5cmd", "Sws_30cmd"],
-	# Note FoggDam does have Sws, but it has no height attribute!!!!
-	"FoggDam": ["Sws_10"],
-	"Gingin": ["Sws", "Sws_20cm", "Sws_40cm", "Sws_80cm"],
-	"GreatWesternWoodlands": ["Sws_5cmb", "Sws", "Sws_20cmb", "Sws_30cmd", "Sws_50cmb", "Sws_70cmb"],
-	"HowardSprings": ["Sws", "Sws40cm", "Sws100cm", "Sws120cm", "Sws140cm"],
-	"Litchfield": ["Sws", "Sws20cm", "Sws50cm", "Sws100cm", "Sws140cm"],
-	"Longreach": ["Sws"],
-	"Otway": ["Sws"],
-	# Note RedDirt does have Sws, but it has no height attribute!!!!
-	"RedDirtMelonFarm": ["Sws_5cm", "Sws_50cm"],
-	"Ridgefield": ["Sws", "Sws_10cm", "Sws_20cm", "Sws_40cm", "Sws_80cm"],
-	"RiggsCreek": ["Sws", "Sws_50cm"],
-	"RobsonCreek": ["Sws", "Sws_75cma"],
-	"Samford": ["Sws"],
-	"SilverPlains": ["Sws"],
-	"SturtPlains": ["Sws", "Sws_50cm"],
-	# Note: TiTreeEast has Sws_grass, Sws_mulga, and Sws_spinifex
-	"TiTreeEast": ["Sws"],
-	"Tumbarumba": ["Sws"],
-	"WallabyCreek": ["Sws", "Sws_15cma", "Sws_20cma", "Sws_40cma", "Sws_80cma"],
-	"Warra": ["Sws", "Sws_20cmd", "Sws_40cmd", "Sws_80cmd", "Sws_1p2m"],
-	"WombatStateForest": ["Sws", "Sws_35cma", "Sws_65cma", "Sws_95cma"],
-	"Yanco": ["Sws_3cm", "Sws", "Sws_15cm", "Sws_45cm", "Sws_75cm"],
+	"AdelaideRiver": [Layer("Sws", 5)],
+	"AliceSpringsMulga": [Layer("Sws_mulga", 0), Layer("Sws_10cm_mulga_2b", 10), Layer("Sws_60cm_mulga_2", 60), Layer("Sws_100cm_mulga_2", 100)],
+	# # todo: what is the difference between Sws_05cma_N, Sws_05cma_S, Sws_05cmb_N, Sws_05cmb_S???
+	"Boyagin": [Layer("Sws_05cma_N", 5), Layer("Sws_08cm_main", 8), Layer("Sws_10cma_N", 10), Layer("Sws_15cm_main", 15), Layer("Sws_20cma_N", 20), Layer("Sws_40cm_N", 40), Layer("Sws_80cm_N", 80), Layer("Sws_110cm_N", 110)],
+	"Calperum": [Layer("Sws", 10), Layer("Sws_25cm", 25), Layer("Sws_50cm", 50), Layer("Sws_100cm", 100)],
+	"CapeTribulation": [Layer("Sws", 10), Layer("Sws_75cma", 75)],
+	"Collie": [Layer("Sws", 5), Layer("Sws_10cm", 10), Layer("Sws_30cm", 30)],
+	"CowBay": [Layer("Sws", 15), Layer("Sws_75cma", 75)],
+	"CumberlandPlain": [Layer("Sws", 8), Layer("Sws_20cm", 20)],
+	"DalyPasture": [Layer("Sws", 5), Layer("Sws_50", 50)],
+	"DalyUncleared": [Layer("Sws", 5), Layer("Sws_50cm", 50)],
+	"DryRiver": [Layer("Sws", 1.5), Layer("Sws_50cm", 50)],
+	# # Note: Emerald does have Sws, but it has no height attribute!!!!
+	"Emerald": [Layer("Sws_5cmd", 5), Layer("Sws_15cmd", 15), Layer("Sws_22p5cmd", 22.5), Layer("Sws_30cmd", 30)],
+	# # Note FoggDam does have Sws, but it has no height attribute!!!!
+	"FoggDam": [Layer("Sws_10", 10)],
+	"Gingin": [Layer("Sws", 6), Layer("Sws_20cm", 20), Layer("Sws_40cm", 40), Layer("Sws_80cm", 80)],
+	"GreatWesternWoodlands": [Layer("Sws_5cmb", 5), Layer("Sws", 10), Layer("Sws_20cmb", 20), Layer("Sws_30cmd", 30), Layer("Sws_50cmb", 50), Layer("Sws_70cmb", 70)],
+	"HowardSprings": [Layer("Sws", 10), Layer("Sws40cm", 40), Layer("Sws100cm", 100), Layer("Sws120cm", 120), Layer("Sws140cm", 140)],
+	"Litchfield": [Layer("Sws", 5), Layer("Sws20cm", 20), Layer("Sws50cm", 50), Layer("Sws100cm", 100), Layer("Sws140cm", 140)],
+	"Longreach": [Layer("Sws", 10)],
+	"Otway": [Layer("Sws", 0)],
+	# # Note RedDirt does have Sws, but it has no height attribute!!!!
+	"RedDirtMelonFarm": [Layer("Sws_5cm", 5), Layer("Sws_50cm", 50)],
+	"Ridgefield": [Layer("Sws", 5), Layer("Sws_10cm", 10), Layer("Sws_20cm", 20), Layer("Sws_40cm", 40), Layer("Sws_80cm", 80)],
+	"RiggsCreek": [Layer("Sws", 5), Layer("Sws_50cm", 50)],
+	"RobsonCreek": [Layer("Sws", 6), Layer("Sws_75cma", 75)],
+	"Samford": [Layer("Sws", 10)],
+	"SilverPlains": [Layer("Sws", 10)],
+	"SturtPlains": [Layer("Sws", 5), Layer("Sws_50cm", 50)],
+	# # Note: TiTreeEast has Sws_grass, Sws_mulga, and Sws_spinifex
+	"TiTreeEast": [Layer("Sws", 0)],
+	"Tumbarumba": [Layer("Sws", 0)],
+	"WallabyCreek": [Layer("Sws", 10), Layer("Sws_15cma", 15), Layer("Sws_20cma", 20), Layer("Sws_40cma", 40), Layer("Sws_80cma", 80)],
+	"Warra": [Layer("Sws", 8), Layer("Sws_20cmd", 20), Layer("Sws_40cmd", 40), Layer("Sws_80cmd", 80), Layer("Sws_1p2m", 120)],
+	"WombatStateForest": [Layer("Sws", 10), Layer("Sws_35cma", 35), Layer("Sws_65cma", 65), Layer("Sws_95cma", 95)],
+	"Yanco": [Layer("Sws_3cm", 3), Layer("Sws", 10), Layer("Sws_15cm", 15), Layer("Sws_45cm", 45), Layer("Sws_75cm", 75)],
 }
 
 class Observation:
@@ -305,7 +323,7 @@ def get_biomass_data(nc_file: str, biom_file: str, biom_searchpath: str,
 	# Cannot find a .csv file containing valid biomass readings.
 	return []
 
-def get_layer_variables(file: str) -> list[str]:
+def get_layer_variables(file: str) -> list[Layer]:
 	"""
 	Get the names of variables representing layers in this 
 
@@ -379,91 +397,108 @@ def get_layer_height(nc: Dataset, layer: str, next_layer: str) -> tuple[float, f
 
 	return (layer_top, top_next_layer - layer_top)
 
-def get_sw_data(file: str, timestep: int, pcb: Callable[[float], None]) \
--> list[Observation]:
+def get_sw_layer_name(depth: int):
 	"""
-	Read SW timeseries data from the given file name.
+	Get a name for a soil water layer at the specified depth, which will be used
+	as a column name in the output file.
+
+	@param depth: Depth in cm.
+	"""
+	return "%s_%d" % (_NAME_SW, depth)
+
+def get_sw_data(file: str, timestep: int, pcb: Callable[[float], None]) \
+-> list[Observations]:
+	"""
+	Read SW timeseries data from the given file name. Return a timeseries for
+	each available layer at the specified output timestep.
 
 	@param file: Path to the input .nc file.
 	@param timestep: Desired output timestep in hours.
 	@param pcb: Progress callback function used for progress reporting.
 	"""
 	# Get output timestep in minutes.
-	t_min = timestep * MINUTES_PER_HOUR
-
-	# Get site name.
-	site = get_site_name(file)
-
-	# Cumulative depth up to current layer, used for error checking.
-	cum_depth = 0
+	timestep_min = timestep * MINUTES_PER_HOUR
 
 	# Create an array containing running total of SW for each timestep.
-	total_mm = []
+	layers: list[Observations] = []
 
 	with Dataset(file, "r", format=ozflux_common.NC_FORMAT) as nc:
+		first_date = ozflux_common.parse_date(nc.time_coverage_start)
+		start_date = get_next_year(first_date)
+
 		# Determine which layer variables we should read for this site.
 		layer_variables = get_layer_variables(file)
 		step_start = 0
 		step_size = 1 / len(layer_variables)
 		for i in range(len(layer_variables)):
-			layer_name = layer_variables[i]
+			layer = layer_variables[i]
 
 			# Read volumetric SW content for this layer.
-			var = ForcingVariable(layer_name, layer_name, "m3/m3", numpy.mean
+			var = ForcingVariable(layer.name, layer.name, "m3/m3", numpy.mean
 			 	, 0, 1)
-			layer_vol = get_data(nc, var, t_min
+			layer_vol = get_data(nc, var, timestep_min, True, False
 				, lambda p: pcb(step_start + step_size * p))
 
-			# Now determine layer width.
-			nl = layer_variables[i + 1] if i + 1 < len(layer_variables)else None
-			(top, height) = get_layer_height(nc, layer_name, nl)
-			if less_than(top, cum_depth):
-				m = "Double counting of layer '%s' in site '%s'. Cumulative depth before this layer is %.2fm, but this layer apparently starts at %.2fm"
-				raise ValueError(m % (layer_name, site, cum_depth, top))
+			delta_t = datetime.timedelta(hours = timestep)
+			layer = _create_observations(get_sw_layer_name(layer.depth)
+				, layer_vol, start_date, delta_t)
+			layers.append(layer)
 
-			if greater_than(top, _SOIL_DEPTH):
-				m = "SW Layer '%s' in site '%s' starts at %.2fm, which is below max profile depth of %.2fm"
-				raise ValueError(m % (layer_name, site, top, _SOIL_DEPTH))
-
-			if greater_than(top, cum_depth):
-				# This should really only happen in the first layer. The other
-				# error checks should prevent this from occurring further down.
-				delta = top - cum_depth
-				top = cum_depth
-				height += delta
-
-			# If necessary, extend layer to either the next layer or the bottom
-			# of the profile.
-			if i + 1 < len(layer_variables):
-				nl_height = getattr(nc.variables[nl], _ATTR_HEIGHT)
-				nl_top = ozflux_common.get_length(nl_height)
-				if top + height != nl_top:
-					height = nl_top - top
-			elif top + height != _SOIL_DEPTH:
-				dlt = _SOIL_DEPTH - height - top
-				height = _SOIL_DEPTH - top
-				m = "Site '%s': extending bottom soil layer by %.2fm"
-				log_warning(m % (site, dlt) )
-
-			# Now we can convert to an actual amount for this layer.
-			height_mm = height * MM_PER_M
-			layer_mm = [x * height_mm for x in layer_vol]
-
-			if i == 0:
-				total_mm = layer_mm
-			else:
-				if len(layer_mm) != len(total_mm):
-					m = "Layer '%s' contains %d elements which does not match expected number (%d)"
-					raise ValueError(m % (layer_name, len(layer_mm), len(layer_mm)))
-
-				# Now add these values element-wise to the running total.
-				total_mm = [x + y for x, y in zip(total_mm, layer_mm)]
-
-			cum_depth += height
 			step_start += step_size
 	pcb(1)
 
-	return total_mm
+	return layers
+
+def bit_set(x: int, n: int) -> bool:
+	"""
+	Check if the N-th bit is set in x.
+
+	@param x
+	"""
+	y = 1 << n
+	return x & y == y
+
+def _lai_qc_filter(qc: int) -> bool:
+	"""
+	Check if a QC flag indicates usable data.
+
+	@param qc: A QC flag value.
+	"""
+	# See here for a complete technical guide to the product, which includes
+	# documentation of the QC flag:
+	# https://lpdaac.usgs.gov/documents/624/MOD15_User_Guide_V6.pdf
+
+	# If bit 2 is set, dead detectors caused >50% adjacent detector retrieval.
+	if bit_set(qc, 2):
+		return False
+
+	# Meaning of bit 3 depends on bit 4.
+	if bit_set(qc, 3):
+		# If bit 4 is also set, significant clouds were present. Otherwise,
+		# cloud state not defined (ie unknown). Either way, we don't trust this
+		# value.
+		return False
+
+	# If bit 4 set but bit 3 not set, mixed clouds were present. Treat this as
+	# acceptable for now.
+
+	# If bit 6 set, RT method failed.
+	if bit_set(qc, 6):
+		return False
+
+	# If bit 7 set, pixel not produced at all, value couldn't be retrieved.
+	if bit_set(qc, 7):
+		return False
+
+	return True
+
+def lai_qc_filter(qcflags: pandas.Series) -> list[bool]:
+	"""
+	Filter out invalid QC flags from the input data.
+
+	@param qcflags: Series of QC flags.
+	"""
+	return [_lai_qc_filter(int(qc)) for qc in qcflags]
 
 def get_lai_data(data: pandas.DataFrame, site: str, timestep: int, pcb: Callable[[float], None]) -> list[Observation]:
 	"""
@@ -476,8 +511,10 @@ def get_lai_data(data: pandas.DataFrame, site: str, timestep: int, pcb: Callable
 	"""
 	data = data[data[_LAI_COL_ID] == site]
 	data = data.groupby([_LAI_COL_DATE]).mean(numeric_only = True)
+	data = data.iloc[lai_qc_filter(data[_LAI_COL_QCFLAG])]
 
-	lai = [Observation(datetime.datetime.combine(date.date(), datetime.datetime.min.time()), float(lai)) for (date, lai) in data.iterrows()]
+	lai = [Observation(datetime.datetime.combine(date.date(), datetime.datetime.min.time()), float(row[_LAI_COL_LAI])) for (date, row) in data.iterrows()]
+	lai = [l for l in lai if l.value >= _LAI_MIN and l.value <= _LAI_MAX]
 	return lai
 
 def get_smips_data_from_file(file: str, timestep: int, col: str, pcb: Callable[[float], None]) \
@@ -561,7 +598,7 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 		step_size = read_prop / len(flux_vars)
 		start_date = get_next_year(ozflux_common.parse_date(nc.time_coverage_start))
 		for var in flux_vars:
-			raw = get_data(nc, var, timestep_minutes, lambda p: \
+			raw = get_data(nc, var, timestep_minutes, True, False, lambda p: \
 				pcb(step_start + step_size * p))
 			if len(timeseries) == 0:
 				timeseries = [start_date + multiply_timedelta(delta, i) for i in range(len(raw))]
@@ -572,9 +609,10 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 	read_time = time.time() - read_start
 
 	sw_start = time.time()
-	sw_data = get_sw_data(file, timestep
+	sw_layers = get_sw_data(file, timestep
 		    , lambda p: pcb(step_start + sw_prop * p) )
-	out_variables.append(_create_observations(_NAME_SW, sw_data, start_date, delta))
+	for sw_layer in sw_layers:
+		out_variables.append(sw_layer)
 	sw_time = time.time() - sw_start
 	step_start += sw_prop
 
@@ -615,8 +653,6 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 		os.makedirs(out_dir)
 
 	write_start = time.time()
-	names = ["%s" % v.out_name for v in flux_vars]
-	names.append(_NAME_SW)
 
 	timestep_hours = timestep
 	write_csv(outfile, out_variables, start_date, end_date, timestep_hours
@@ -659,7 +695,7 @@ def main(opts: Options):
 	"""
 
 	log_information("Reading LAI data...")
-	cols = [_LAI_COL_ID, _LAI_COL_DATE, _LAI_COL_LAI]
+	cols = [_LAI_COL_ID, _LAI_COL_DATE, _LAI_COL_LAI, _LAI_COL_QCFLAG]
 	lai_data = pandas.read_excel(opts.lai_file, _SHEET_LAI, usecols = cols, parse_dates = True)
 
 	job_manager = JobManager()
