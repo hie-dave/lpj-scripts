@@ -130,12 +130,25 @@ class JobManager:
 			# Store the process handle for later use.
 			self._jobs.append(job)
 
-	def run_parallel(self):
+	def _get_num_running_jobs(self):
+		"""
+		Get the number of currently running jobs.
+		"""
+		return len([j for j in self._jobs if j.is_alive()])
+
+	def run_parallel(self, max_para: int = multiprocessing.cpu_count()):
 		"""
 		Run all jobs in parallel and wait for them to finish.
+		@param max_para: Maximum number of jobs to run in parallel. Defaults to logical CPU count.
 		"""
 		with self._lock:
 			for job in self._jobs:
+				# If number of running jobs exceeds available number of CPUs,
+				# wait for one job to finish.
+				num_running = self._get_num_running_jobs()
+				if num_running >= max_para:
+					self._wait_until(lambda: self._get_num_running_jobs() < max_para)
+
 				job.start()
 
 				# Close the writable end of the pipe now, to be sure that p is
@@ -143,7 +156,14 @@ class JobManager:
 				# when p closes its handle for the writable end, wait() will
 				# promptly report the readable end as being ready.
 				job.progress_writer.close()
-			self._wait()
+
+				# Wait until job starts, to prevent race conditions.
+				self._wait_until(lambda: job.is_alive())
+
+			# Wait until all jobs are finished.
+			self._wait_until()
+			for process in self._jobs:
+				process.join()
 
 	def run_single_threaded(self):
 		"""
@@ -160,15 +180,22 @@ class JobManager:
 				job.run_local(cum_weight, self._total_weight)
 				cum_weight += job.weight
 
-	def _wait(self):
+	def _wait_until(self, condition: Callable[[], bool] = lambda: False):
 		"""
-		Wait for all parallel jobs to finish running. Note that no progress
-		messages will be written until this is called.
+		Wait for all parallel jobs to finish running, or the given condition
+		returns true. Note that no progress messages will be written until this
+		is called.
+
+		@param condition: Optional function which returns a bool. If this
+		function returns true, waiting will cease. If no condition is given,
+		this function will wait until all jobs have finished.
 		"""
-		readers = [j.progress_reader for j in self._jobs]
+		readers = [j.progress_reader for j in self._jobs if j.is_alive()]
 		while readers:
 			for reader in readers:
 				try:
+					if condition():
+						return
 					msg = None
 					if reader.poll():
 						msg = reader.recv()
@@ -177,7 +204,3 @@ class JobManager:
 				except EOFError:
 					readers.remove(reader)
 
-		# Wait for processes to exit (actually, they should have all finished by
-		# the time we get to here).
-		for process in self._jobs:
-			process.join()
