@@ -43,17 +43,21 @@ class Options:
 class MetProcessingTask(ozflux_parallel.Task):
 	def __init__(self, infile: str, outfile: str, timestep: int
 	      , out_type: LpjVersion, compression_level: int
-		  , compression_type: str):
+		  , compression_type: str, ngridcell: int
+		  , first_date: datetime.datetime):
 		self.infile = infile
 		self.outfile = outfile
 		self.timestep = timestep
 		self.out_type = out_type
 		self.compression_level = compression_level
 		self.compression_type = compression_type
+		self.ngridcell = ngridcell
+		self.first_date = first_date
 
 	def exec(self, pcb: Callable[[float], None]):
 		process_file(self.infile, self.outfile, self.timestep
-		, self.out_type, self.compression_level, self.compression_type, pcb)
+		, self.out_type, self.compression_level, self.compression_type
+		, self.ngridcell, self.first_date, pcb)
 
 def six_digit_string(x: float) -> str:
 	"""
@@ -76,7 +80,7 @@ def get_output_filename(infile: str) -> str:
 		return get_met_filename(lon, lat)
 
 def write_data_dg(nc_out: Dataset, var_name: str, data: list[float], lon: float
-	, lat: float, progress_cb: Callable[[float], None]):
+	, lat: float, toffset: int, progress_cb: Callable[[float], None]):
 	"""
 	Write data to the output file (dailygrass mode).
 
@@ -84,15 +88,20 @@ def write_data_dg(nc_out: Dataset, var_name: str, data: list[float], lon: float
 	@param data: A timeseries of data for a variable for a gridcell.
 	@param lon: Longitude of the data.
 	@param lat: Latitude of the data.
+	@param toffset: Offset of the data on the time dimension.
 	@param progress_cb: Called to report progress.
 	"""
 	n = len(data)
 	chunk_size = get_steps_per_year(opts.timestep)
+
+	(ilon, ilat) = get_coord_indices(nc_out, lon, lat)
+
 	for i in range(0, n, chunk_size):
 		upper = min(n, i + chunk_size)
-		(ilon, ilat) = get_coord_indices(nc_out, lon, lat)
-		# Dimension order is time,lat,lon
-		nc_out.variables[var_name][ilat, ilon, i:upper] = data[i:upper]
+		# Dimension order is lat,lon,time
+		tlow = i + toffset
+		thigh = upper + toffset
+		nc_out.variables[var_name][ilat, ilon, tlow:thigh] = data[i:upper]
 		progress_cb(upper / n)
 
 def change_start_minute(datetime: str, minute: int) -> str:
@@ -159,7 +168,8 @@ def copy_data_lsm(in_file: Dataset, out_file: Dataset, timestep: int, \
 		i += 1
 
 def write_data(nc_in: Dataset, nc_out: Dataset, data: list[float] \
-	, var: ForcingVariable, version: LpjVersion, pcb: Callable[[float], None]):
+	, var: ForcingVariable, version: LpjVersion, toffset: int
+	, pcb: Callable[[float], None]):
 	"""
 	Write the data to the output file.
 
@@ -167,6 +177,7 @@ def write_data(nc_in: Dataset, nc_out: Dataset, data: list[float] \
 	@param data: The data to be written.
 	@param var: The variable being copied.
 	@param version: The lpj-guess version selected by the user.
+	@param toffset: Offset of the data on the time dimension.
 	@param pcb: Progress callback function.
 	"""
 	if version == LpjVersion.LSM:
@@ -174,12 +185,13 @@ def write_data(nc_in: Dataset, nc_out: Dataset, data: list[float] \
 	elif version == LpjVersion.DAILY_GRASS:
 		lon = float(nc_in.longitude)
 		lat = float(nc_in.latitude)
-		write_data_dg(nc_out, var.out_name, data, lon, lat, pcb)
+		write_data_dg(nc_out, var.out_name, data, lon, lat, toffset, pcb)
 	else:
 		raise ValueError("Unknown lpj version %d" % version)
 
 def copy_data(nc_in: Dataset, nc_out: Dataset, timestep: int
-	, version: LpjVersion , pcb: Callable[[float], None]):
+	, version: LpjVersion, first_date: datetime.datetime
+	, pcb: Callable[[float], None]):
 	"""
 	Copy data to the output file in dailygrass format.
 
@@ -187,6 +199,7 @@ def copy_data(nc_in: Dataset, nc_out: Dataset, timestep: int
 	@param nc_out: Output NetCDF file.
 	@param timestep: Output timestep length in minutes.
 	@param version: Output lpj-guess version selected by the user.
+	@param first_date: Date of first datum in output file.
 	@param progress_cb: Progress callback function.
 	"""
 	i = 0
@@ -198,6 +211,10 @@ def copy_data(nc_in: Dataset, nc_out: Dataset, timestep: int
 	global global_read_prop, global_write_prop
 
 	nvar = len(variables)
+
+	# Determine offset along the time dimension in the output file.
+	tstart = get_first_date(nc_in)
+	toffset = (tstart - first_date).days * HOURS_PER_DAY
 
 	n = 0
 	for var in variables:
@@ -222,7 +239,7 @@ def copy_data(nc_in: Dataset, nc_out: Dataset, timestep: int
 		log_diagnostic("Writing %s data")
 		reporter = lambda p: pcb( (i + read_prop + write_prop * p) / nvar)
 		write_start = time.time()
-		write_data(nc_in, nc_out, data, var, version, reporter)
+		write_data(nc_in, nc_out, data, var, version, toffset, reporter)
 		write_time = time.time() - write_start
 
 		# Bookkeeping.
@@ -250,13 +267,30 @@ def copy_data(nc_in: Dataset, nc_out: Dataset, timestep: int
 		i += 1
 
 	# Copy data into time variable. This is # of hours since start date.
-	# So it starts at 0 and increments by timestep width (in hours).
-	# Write data in chunks to speed things up a bit.
+	# So it starts at the offset from the baseline date, and increments by
+	# timestep width (in hours). Data is written in chunks to improve speed.
+
+	# First we need to get the offset since the baseline date. For that, we need
+	# to know the start date of the output data.
+	start_date = parse_date(nc_in.time_coverage_start)
+	if (start_date.minute == 30):
+		# temporal_aggregation() trims the first value if it lies on the
+		# half-hour boundary. We need to do the same here.
+		log_debug("Data starts on 30m boundary: 1st value is ignored")
+		start_date = start_date + datetime.timedelta(minutes = 30)
+	start_date = get_next_year(start_date)
+
+	# Get total offset from DATE_BASELINE in hours.
+	# todo: make this flexible based on output time units.
+	offset = (start_date - DATE_BASELINE).days * HOURS_PER_DAY
+
 	step_width = opts.timestep / MINUTES_PER_HOUR
-	timesteps = [i * step_width for i in range(n)]
-	for i in range(0, n, CHUNK_SIZE):
+	timesteps = [offset + i * step_width for i in range(n)]
+	for i in range(toffset, n, CHUNK_SIZE):
 		up = min(n, i + CHUNK_SIZE)
-		nc_out.variables[DIM_TIME][i:up] = timesteps[i:up]
+		tlow = i + toffset
+		thigh = up + toffset
+		nc_out.variables[DIM_TIME][tlow:thigh] = timesteps[i:up]
 
 def create_dimensions(nc: Dataset, version: LpjVersion, ngridcell: int):
 	"""
@@ -344,7 +378,8 @@ def write_metadata(nc: Dataset, timestep: int, version: LpjVersion):
 		raise ValueError("Unknown output version %d" % version)
 
 def process_file(in_file: str, out_file: str, timestep: int \
-	, version: LpjVersion, clevel: int, ctype: str
+	, version: LpjVersion, clevel: int, ctype: str, ngridcell
+	, first_date: datetime.datetime
 	, pcb: Callable[[float], None]):
 	"""
 	Read the input file and generate an output file at the specified
@@ -356,6 +391,8 @@ def process_file(in_file: str, out_file: str, timestep: int \
 	@param version: Output version selected by the user.
 	@param clevel: Compression level [1-9], 9 = slowest/smallest.
 	@param ctype: Compression algorithm to be used (or None).
+	@param ngridcell: Total number of gridcells to be processed.
+	@param first_date: Date of first datum in output file.
 	@param pcb: Progress callback function.
 	"""
 	log_information("Processing %s..." % in_file)
@@ -371,26 +408,50 @@ def process_file(in_file: str, out_file: str, timestep: int \
 				m = "Invalid input timestep: %d. Must be an integer multiple of output timestep (%d)"
 				raise ValueError(m % (instep, timestep))
 
-			prepare_outfile(nc_out, version, 1, timestep, clevel, ctype)
+			prepare_outfile(nc_out, version, ngridcell, timestep, clevel, ctype)
 
-			# 2. Copy data into this variable.
+			# Copy data into this variable.
 			log_debug("Migrating data")
-			copy_data(nc_in, nc_out, timestep, version, pcb)
+			copy_data(nc_in, nc_out, timestep, version, first_date, pcb)
 
-			# 3. Write site metadata.
+			# Write site metadata.
 			start_date = get_next_year(
 				parse_date(nc_in.time_coverage_start))
-			nc_out.time_coverage_start = start_date.strftime(
-				DATE_FORMAT)
-			nc_out.time_coverage_end = nc_in.time_coverage_end
-			nc_out.latitude = nc_in.latitude
-			nc_out.longitude = nc_in.longitude
-			site_name = os.path.basename(in_file)
-			site_name = os.path.splitext(site_name)[0]
-			nc_out.site_name = site_name
+			attr_tstart = "time_coverage_start"
+			attr_tend = "time_coverage_end"
+			attr_lon = "longitude"
+			attr_lat = "latitude"
+			if opts.single_outfile:
+				site_short = get_site_name_from_filename(in_file)
+				attr_tstart = "%s_%s" % (attr_tstart, site_short)
+				attr_tend = "%s_%s" % (attr_tend, site_short)
+				attr_lon = "%s_%s" % (attr_lon, site_short)
+				attr_lat = "%s_%s" % (attr_lat, site_short)
+
+			setattr(nc_out, attr_tstart, start_date.strftime(DATE_FORMAT))
+			setattr(nc_out, attr_tend, nc_in.time_coverage_end)
+			setattr(nc_out, attr_lat, nc_in.latitude)
+			setattr(nc_out, attr_lon, nc_in.longitude)
+
+			if not opts.single_outfile:
+				site_name = os.path.basename(in_file)
+				site_name = os.path.splitext(site_name)[0]
+				nc_out.site_name = site_name
 
 			# Write additional global/common metadata.
 			write_metadata(nc_out, timestep, opts.out_type)
+
+def get_outfile_name(infile: str, opts: Options):
+	"""
+	Get the name of the output file corresponding to the given input file.
+	@param infile: Name of the input file for which we need an output filename.
+	@param opts: CLI options.
+	"""
+	if opts.single_outfile:
+		return "combined.nc"
+	if opts.out_type == LpjVersion.LSM:
+		return get_output_filename(infile)
+	return os.path.basename(infile)
 
 def parse_args(argv: list[str]) -> Options:
 	"""
@@ -419,6 +480,33 @@ def parse_args(argv: list[str]) -> Options:
 	, parsed.output_compatibility, parsed.compression_level
 	, parsed.compression_type, parsed.single_outfile)
 
+def get_first_date(nc: Dataset) -> datetime.datetime:
+	"""
+	Determine the first date of the output data which will be produced from
+	the given input file.
+
+	@param nc: Opened netcdf dataset.
+	"""
+	start_date = parse_date(nc.time_coverage_start)
+	if (start_date.minute == 30):
+		# temporal_aggregation() trims the first value if it lies on the
+		# half-hour boundary. We need to do the same here.
+		log_debug("Data starts on 30m boundary: 1st value is ignored")
+		start_date = start_date + datetime.timedelta(minutes = 30)
+	start_date = get_next_year(start_date)
+	return start_date
+
+def get_file_first_date(ncfile: str):
+	"""
+	Determine the first date of the output data which will be produced from
+	the given input file.
+
+	@param ncfile: Input netcdf file path.
+	"""
+	with Dataset(ncfile, "r", format=NC_FORMAT) as nc_in:
+		return get_first_date(nc_in)
+
+@profile
 def main(opts: Options):
 	"""
 	Main CLI entrypoint function.
@@ -431,17 +519,24 @@ def main(opts: Options):
 
 	job_manager = ozflux_parallel.JobManager()
 
+	first_date = datetime.datetime.max
+	if opts.single_outfile:
+		for infile in opts.files:
+			first_date = min(first_date, get_file_first_date(infile))
+
 	for infile in opts.files:
-		out_file_name = os.path.basename(infile)
-		if opts.out_type == LpjVersion.LSM:
-			out_file_name = get_output_filename(infile)
+		if not opts.single_outfile:
+			first_date = get_file_first_date(infile)
+
+		out_file_name = get_outfile_name(infile, opts)
 
 		outfile = os.path.join(opts.out_dir, out_file_name)
 		if os.path.exists(outfile):
 			os.remove(outfile)
 
 		job = MetProcessingTask(infile, outfile, opts.timestep, opts.out_type
-			  , opts.compression_level, opts.compression_type)
+			  , opts.compression_level, opts.compression_type, len(opts.files)
+			  , first_date)
 
 		job_manager.add_job(job, os.path.getsize(infile))
 

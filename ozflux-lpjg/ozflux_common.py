@@ -16,6 +16,9 @@ NC_FORMAT = "NETCDF4"
 # Date format used in the ozflux .nc files.
 DATE_FORMAT = r"%Y-%m-%d %H:%M:%S"
 
+# Times are represented in the .nc file as hours since this date.
+DATE_BASELINE = datetime.datetime(1800, 1, 1)
+
 ################################################################################
 # Upper and lower bounds for error checking of forcing data.
 ################################################################################

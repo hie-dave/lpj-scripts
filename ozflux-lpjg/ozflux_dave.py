@@ -135,4 +135,5 @@ def write_metadata(nc: Dataset):
 	var_time.calendar = "gregorian"
 	var_time.long_name = DIM_TIME
 	var_time.standard_name = DIM_TIME
-	var_time.units = "hours since %s" % nc.time_coverage_start
+	time_start = DATE_BASELINE.strftime(DATE_FORMAT)
+	var_time.units = "hours since %s" % time_start

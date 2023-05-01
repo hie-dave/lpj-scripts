@@ -441,14 +441,28 @@ def get_coord_indices(nc_out: Dataset, lon: float, lat: float) \
 		if nc_out.dimensions[DIM_LON].isunlimited():
 			index_lon = len(var_lon)
 		else:
-			index_lon = numpy.ma.flatnotmasked_edges(var_lon)[0]
+			edges = numpy.ma.notmasked_edges(var_lon)
+			if edges is None:
+				index_lon = 0
+			else:
+				index_lon = edges[1] + 1
+				if index_lon >= len(var_lon):
+					m = "Unable to insert coordinate (%.2f, %.2f): dimension is not long enough"
+					raise ValueError(m % (lon, lat))
 		var_lon[index_lon] = lon
 	index_lat = index_of(var_lat, lat)
 	if index_lat == -1:
 		if nc_out.dimensions[DIM_LAT].isunlimited():
 			index_lat = len(var_lat)
 		else:
-			index_lat = numpy.ma.flatnotmasked_edges(var_lat)[0]
+			edges = numpy.ma.notmasked_edges(var_lat)
+			if edges is None:
+				index_lat = 0
+			else:
+				index_lat = edges[1] + 1
+				if index_lon >= len(var_lon):
+					m = "Unable to insert coordinate (%.2f, %.2f): dimension is not long enough"
+					raise ValueError(m % (lon, lat))
 		var_lat[index_lat] = lat
 	return (index_lon, index_lat)
 
@@ -790,7 +804,9 @@ def write_common_metadata(nc: Dataset, timestep: int):
 def get_site_name_from_filename(file: str) -> str:
 	"""
 	Get the abbreviated site name given an input file name, without opening the
-	.nc file.
+	.nc file. E.g.
+
+	"AdelaideRiver_L6_20071017_20090524.nc" -> "AdelaideRiver".
 
 	@param file: input file name.
 	"""
@@ -798,7 +814,7 @@ def get_site_name_from_filename(file: str) -> str:
 
 def get_site_name(nc_file: str) -> str:
 	"""
-	Get the site name for the specified .nc file.
+	Get the site name attribute in the specified .nc file.
 
 	@param nc_file: netcdf file containing met forcing data for the site.
 	"""
