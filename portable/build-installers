@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# Usage: ${0} -l <linux x86_64 bin> -m <macos x86_64 bin> -M <macos arm64 bin>
+#             -w <windows x86-64 bin> [-h]
+#
+# -l  Path to directory containing Linux x86_64 binaries.
+# -m  Path to directory containing macOS x86_64 binaries.
+# -M  Path to directory containing macOS arm64 binaries.
+# -w  Path to directory containing windows x86_64 binaries.
+# -t  Path to a template archive (ie a previous output of this script).
+# -h  Display this help info.
+#
+
+# Exit immediately if:
+# - Any command fails
+# - Any part of a pipeline fails
+# - We reference any unbound variables
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+  echo "Running in debug mode. Set DEBUG to 0 to disable."
+  set -x
+fi
+
+# This function will print the specified message and abort script execution.
+die() {
+	echo "$*" >&2
+	exit 1
+}
+
+# Get directory containing this script.
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+
+# Base name of output file.
+OUT_BASE="lpj-guess-4.2"
+
+# Parse the command line arguments
+INST_LINUX_x86_64=
+INST_MACOS_x86_64=
+INST_MACOS_ARM64=
+INST_WIN_x86_64=
+TEMPLATE_PATH=
+OUTPUT_PATH="`pwd`"
+USAGE="Usage: ${0} -l <linux x86_64 bin> -m <macos x86_64 bin> -M <macos arm64 bin> -w <windows x86-64 bin> -t <template path> [-o <output path>] [-h]
+
+-l  Path to directory containing Linux x86_64 binaries.
+-m  Path to directory containing macOS x86_64 binaries.
+-M  Path to directory containing macOS arm64 binaries.
+-w  Path to directory containing windows x86_64 binaries.
+-t  Path to a template archive (ie a previous output of this script).
+-o  Optional output path in which new installers will be stored (default: current working directory).
+-h  Display this help info."
+
+while getopts ":l:m:M:w:t:o:h" opt; do
+    case $opt in
+      l ) INST_LINUX_x86_64="${OPTARG}" ;;
+      m ) INST_MACOS_x86_64="${OPTARG}" ;;
+      M ) INST_MACOS_ARM64="${OPTARG}" ;;
+	  w ) INST_WIN_x86_64="${OPTARG}" ;;
+	  t ) TEMPLATE_PATH="${OPTARG}" ;;
+	  o ) OUTPUT_PATH="${OPTARG}"; mkdir -p "${OUTPUT_PATH}" ;;
+      h ) echo "${USAGE}"; exit 0 ;;
+    esac
+done
+
+OUTPUT_PATH="$(readlink -f "${OUTPUT_PATH}")"
+
+# This function will abort script execution if the specified check fails.
+# $1 - A `test` operator
+# $2 - A `test` operand
+# $3 - An error message
+validate() {
+	if [ ! ${1} "${2}" ]
+	then
+		echo "Error: ${3}"
+		die "${USAGE}"
+	fi
+}
+
+# Validate inputs.
+validate -n "${INST_LINUX_x86_64}" "No Linux x86_64 binaries supplied."
+validate -n "${INST_MACOS_x86_64}" "No macOS x86_64 binaries supplied."
+validate -n "${INST_MACOS_ARM64}" "No macOS arm64 binaries supplied."
+validate -n "${INST_WIN_x86_64}" "No windows x86_64 binaries supplied."
+validate -n "${TEMPLATE_PATH}" "No template file supplied."
+
+validate -d "${INST_LINUX_x86_64}" "Linux x86_64 binaries (${INST_LINUX_x86_64}) do not exist or are not a directory."
+validate -d "${INST_MACOS_x86_64}" "macOS x86_64 binaries (${INST_MACOS_x86_64}) do not exist or are not a directory."
+validate -d "${INST_MACOS_ARM64}" "macOS arm64 binaries (${INST_MACOS_ARM64}) do not exist or are not a directory."
+validate -d "${INST_WIN_x86_64}" "windows x86_64 binaries (${INST_WIN_x86_64}) do not exist or are not a directory."
+validate -f "${TEMPLATE_PATH}" "Template file (${TEMPLATE_PATH}) does not exist or is not a file."
+
+TMP_TEMPLATE="$(mktemp -d)"
+
+# Invoke the cleanup function when script exits (due to error or completion).
+cleanup() {
+	rm -rf "${TMP_TEMPLATE}"
+}
+trap cleanup EXIT
+
+echo "Preparing staging area..."
+unzip -qd "${TMP_TEMPLATE}" "${TEMPLATE_PATH}"
+
+TEMPLATE="${TMP_TEMPLATE}"
+if [ ! -d "${TEMPLATE}/bin" ]
+then
+	TEMPLATE="$(echo "${TEMPLATE}"/lpj*)"
+fi
+rm -rf "${TEMPLATE}/bin"
+
+find "${TEMPLATE}/examples" -name '*.bat' -exec rm {} \;
+find "${TEMPLATE}/examples" -name '*.sh' -exec rm {} \;
+
+OUT_LINUX_x86_64="${OUTPUT_PATH}/${OUT_BASE}_linux_x86_64.zip"
+OUT_MACOS_x86_64="${OUTPUT_PATH}/${OUT_BASE}_macos_x86_64.zip"
+OUT_MACOS_ARM64="${OUTPUT_PATH}/${OUT_BASE}_macos_arm64.zip"
+OUT_WINDOWS_x86_64="${OUTPUT_PATH}/${OUT_BASE}_win10_x86_64.zip"
+
+create_installer() {
+	echo "Creating $3 installer..."
+	ARCHIVE="${1}"
+	BIN="${2}"
+	STAGING="${TMP_TEMPLATE}/$(basename "${ARCHIVE/.zip/}")"
+
+	# Ensure correct directory name in archive.
+	if [ "${TEMPLATE}" != "${STAGING}" ]
+	then
+		mv "${TEMPLATE}" "${STAGING}"
+	fi
+
+	STAGING_BIN="${STAGING}/bin"
+
+	# Copy binaries into staging directory.
+	rm -rf "${STAGING_BIN}"
+	mkdir -p "${STAGING_BIN}"
+	cp -r "${BIN}"/* "${STAGING_BIN}/"
+
+	# Generate site-level runner scripts.
+	for F in "${STAGING}/examples"/*
+	do
+		SITE="$(basename "${F}")"
+		if [ -f "${F}/${SITE}.ins" ]
+		then
+			SCRIPT_FILE="${F}/${SITE}.sh"
+			if [ -f "${STAGING_BIN}/guess.exe" ]
+			then
+				# Windows
+				SCRIPT_FILE="${SCRIPT_FILE/.sh/.bat}"
+				cat <<EOF >"${SCRIPT_FILE}"
+@echo off
+pushd "%~dp0" >nul
+..\\..\\bin\\guess.exe -input nc "%cd%\\${SITE}.ins"
+pause
+EOF
+			elif `file "${STAGING_BIN}/guess" | grep Mach-O >/dev/null 2>&1`
+			then
+				SCRIPT_FILE="${SCRIPT_FILE/.sh/.command}"
+				# MacOS
+				cat <<EOF >"${SCRIPT_FILE}"
+#!/usr/bin/env sh
+
+DIR="\$( cd "\$( dirname "\${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+BIN="\$(cd "\${DIR}/../../bin" >/dev/null 2>&1 && pwd -P)"
+
+xattr -d com.apple.quarantine "\${BIN}"/* 2>/dev/null
+
+export DYLD_LIBRARY_PATH="\${BIN}"
+cd "\${DIR}"
+"\${BIN}/guess" -input nc "\${DIR}/${SITE}.ins"
+EOF
+				chmod ug+x "${SCRIPT_FILE}"
+			else
+				# Linux
+				cat <<EOF >"${SCRIPT_FILE}"
+#!/usr/bin/env sh
+
+DIR="\$( cd "\$( dirname "\${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+BIN="\$(cd "\${DIR}/../../bin" >/dev/null 2>&1 && pwd -P)"
+
+export LD_LIBRARY_PATH="\${BIN}"
+cd "\${DIR}"
+"\${BIN}/guess" -input nc "\${DIR}/${SITE}.ins"
+EOF
+				chmod ug+x "${SCRIPT_FILE}"
+			fi
+		fi
+	done
+
+	# cd into staging directory to avoid absolute path pollution in the archive.
+	pushd "${TMP_TEMPLATE}" >/dev/null 2>&1
+	zip -qr -FS "${ARCHIVE}" *
+	popd >/dev/null 2>&1
+
+	# Move the template directory back to its original location.
+	if [ "${TEMPLATE}" != "${STAGING}" ]
+	then
+		mv "${STAGING}" "${TEMPLATE}"
+	fi
+
+	# Remove runner scripts.
+	find "${TEMPLATE}/examples" -name '*.bat' -exec rm {} \;
+	find "${TEMPLATE}/examples" -name '*.sh' -exec rm {} \;
+}
+
+create_installer "${OUT_LINUX_x86_64}" "${INST_LINUX_x86_64}" "linux x86_64"
+create_installer "${OUT_MACOS_x86_64}" "${INST_MACOS_x86_64}" "macos x86_64"
+create_installer "${OUT_MACOS_ARM64}" "${INST_MACOS_ARM64}" "macos arm64"
+create_installer "${OUT_WINDOWS_x86_64}" "${INST_WIN_x86_64}" "windows x86_64"
