@@ -162,12 +162,22 @@ EOF
 
 DIR="\$( cd "\$( dirname "\${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
 BIN="\$(cd "\${DIR}/../../bin" >/dev/null 2>&1 && pwd -P)"
+EXAMPLES="\$(cd "\${DIR}/.." >/dev/null 2>&1 && pwd -P)"
+INS="\${DIR}/${SITE}.ins"
+
+printf "Enter output directory name: "
+read OUT_DIR
+OUT_INS="\${EXAMPLES}/outputs.ins"
+sed -i'' -r -e "s/([ \\t]*outputdirectory[ \\t]+)\\"[^\\"]+\\"(.*)/\\1\\"\${OUT_DIR}\\/\\"\\2/g" "\${OUT_INS}"
+mkdir -p "\${OUT_DIR}"
+cp "\${EXAMPLES}"/*.ins "\${OUT_DIR}/"
+cp "\${INS}" "\${OUT_DIR}/"
 
 xattr -d com.apple.quarantine "\${BIN}"/* 2>/dev/null
 
 export DYLD_LIBRARY_PATH="\${BIN}"
 cd "\${DIR}"
-"\${BIN}/guess" -input nc "\${DIR}/${SITE}.ins"
+"\${BIN}/guess" -input nc "\${INS}"
 EOF
 				chmod ug+x "${SCRIPT_FILE}"
 			else
@@ -177,10 +187,20 @@ EOF
 
 DIR="\$( cd "\$( dirname "\${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
 BIN="\$(cd "\${DIR}/../../bin" >/dev/null 2>&1 && pwd -P)"
+EXAMPLES="\$(cd "\${DIR}/.." >/dev/null 2>&1 && pwd -P)"
+INS="\${DIR}/${SITE}.ins"
+
+printf "Enter output directory name: "
+read OUT_DIR
+OUT_INS="\${EXAMPLES}/outputs.ins"
+sed -i'' -r -e "s/([ \\t]*outputdirectory[ \\t]+)\\"[^\\"]+\\"(.*)/\\1\\"\${OUT_DIR}\\/\\"\\2/g" "\${OUT_INS}"
+mkdir -p "\${OUT_DIR}"
+cp "\${EXAMPLES}"/*.ins "\${OUT_DIR}/"
+cp "\${INS}" "\${OUT_DIR}/"
 
 export LD_LIBRARY_PATH="\${BIN}"
 cd "\${DIR}"
-"\${BIN}/guess" -input nc "\${DIR}/${SITE}.ins"
+"\${BIN}/guess" -input nc "\${INS}"
 EOF
 				chmod ug+x "${SCRIPT_FILE}"
 			fi
