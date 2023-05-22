@@ -111,6 +111,7 @@ rm -rf "${TEMPLATE}/bin"
 
 find "${TEMPLATE}/examples" -name '*.bat' -exec rm {} \;
 find "${TEMPLATE}/examples" -name '*.sh' -exec rm {} \;
+	find "${TEMPLATE}/examples" -name '*.command' -exec rm {} \;
 
 OUT_LINUX_x86_64="${OUTPUT_PATH}/${OUT_BASE}_linux_x86_64.zip"
 OUT_MACOS_x86_64="${OUTPUT_PATH}/${OUT_BASE}_macos_x86_64.zip"
@@ -146,10 +147,18 @@ create_installer() {
 			if [ -f "${STAGING_BIN}/guess.exe" ]
 			then
 				# Windows
+				# Using sed obtained rom gnuwin32:
+				# https://gnuwin32.sourceforge.net/packages/sed.htm
 				SCRIPT_FILE="${SCRIPT_FILE/.sh/.bat}"
 				cat <<EOF >"${SCRIPT_FILE}"
 @echo off
 pushd "%~dp0" >nul
+set /p OUT_DIR=Enter output directory name: 
+..\\..\\bin\\sed.exe -i -r -e "s/([ \\t]*outputdirectory[ \\t]+)\\"[^^\\"]+\\"(.*)/\\1\\".\\/%OUT_DIR%\\/\\"\\2/g" "%cd%\\..\\outputs.ins"
+del sed*
+if not exist "%OUT_DIR%" mkdir "%OUT_DIR%"
+copy /y "%cd%\\..\\*.ins" "%OUT_DIR%\\" >nul
+copy /y "%cd%\\*.ins" "%OUT_DIR%\\" >nul
 ..\\..\\bin\\guess.exe -input nc "%cd%\\${SITE}.ins"
 pause
 EOF
@@ -221,6 +230,7 @@ EOF
 	# Remove runner scripts.
 	find "${TEMPLATE}/examples" -name '*.bat' -exec rm {} \;
 	find "${TEMPLATE}/examples" -name '*.sh' -exec rm {} \;
+	find "${TEMPLATE}/examples" -name '*.command' -exec rm {} \;
 }
 
 create_installer "${OUT_LINUX_x86_64}" "${INST_LINUX_x86_64}" "linux x86_64"
