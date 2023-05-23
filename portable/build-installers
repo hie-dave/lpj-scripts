@@ -111,7 +111,7 @@ rm -rf "${TEMPLATE}/bin"
 
 find "${TEMPLATE}/examples" -name '*.bat' -exec rm {} \;
 find "${TEMPLATE}/examples" -name '*.sh' -exec rm {} \;
-	find "${TEMPLATE}/examples" -name '*.command' -exec rm {} \;
+find "${TEMPLATE}" -name '*.command' -exec rm {} \;
 
 OUT_LINUX_x86_64="${OUTPUT_PATH}/${OUT_BASE}_linux_x86_64.zip"
 OUT_MACOS_x86_64="${OUTPUT_PATH}/${OUT_BASE}_macos_x86_64.zip"
@@ -177,7 +177,8 @@ INS="\${DIR}/${SITE}.ins"
 printf "Enter output directory name: "
 read OUT_DIR
 OUT_INS="\${EXAMPLES}/outputs.ins"
-sed -i'' -r -e "s/([ \\t]*outputdirectory[ \\t]+)\\"[^\\"]+\\"(.*)/\\1\\"\${OUT_DIR}\\/\\"\\2/g" "\${OUT_INS}"
+sed -i '' -r -e "s/([ \\t]*outputdirectory[ \\t]+)\\"[^\\"]+\\"(.*)/\\1\\"\${OUT_DIR}\\/\\"\\2/g" "\${OUT_INS}"
+cd "\${DIR}"
 mkdir -p "\${OUT_DIR}"
 cp "\${EXAMPLES}"/*.ins "\${OUT_DIR}/"
 cp "\${INS}" "\${OUT_DIR}/"
@@ -189,6 +190,15 @@ cd "\${DIR}"
 "\${BIN}/guess" -input nc "\${INS}"
 EOF
 				chmod ug+x "${SCRIPT_FILE}"
+				INIT_SCRIPT="${STAGING}/init.command"
+				# Create init.command at toplevel
+				cat <<EOF >"${INIT_SCRIPT}"
+#!/usr/bin/env sh
+DIR="\$( cd "\$( dirname "\${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+BIN="\$(cd "\${DIR}/bin" >/dev/null 2>&1 && pwd -P)"
+sudo xattr -d com.apple.quarantine "\${BIN}"/*
+EOF
+			chmod u+x "${INIT_SCRIPT}"
 			else
 				# Linux
 				cat <<EOF >"${SCRIPT_FILE}"
