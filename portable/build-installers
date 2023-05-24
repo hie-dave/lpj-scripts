@@ -177,7 +177,7 @@ INS="\${DIR}/${SITE}.ins"
 printf "Enter output directory name: "
 read OUT_DIR
 OUT_INS="\${EXAMPLES}/outputs.ins"
-sed -i '' -r -e "s/([ \\t]*outputdirectory[ \\t]+)\\"[^\\"]+\\"(.*)/\\1\\"\${OUT_DIR}\\/\\"\\2/g" "\${OUT_INS}"
+sed -i '' -E -e "s/([ \\t]*outputdirectory[ \\t]+)\\"[^\\"]+\\"(.*)/\\1\\"\${OUT_DIR}\\/\\"\\2/g" "\${OUT_INS}"
 cd "\${DIR}"
 mkdir -p "\${OUT_DIR}"
 cp "\${EXAMPLES}"/*.ins "\${OUT_DIR}/"
