@@ -311,6 +311,9 @@ def _get_data(in_file: Dataset \
 
 		qcvar_name = _get_qc_var_name(in_name)
 		if not qcvar_name in in_file.variables:
+			if qc_filter:
+				msg = "Unable to QC filter variable '%s': QC variable '%s' does not exist in file"
+				log_warning(msg % (in_name, qcvar_name))
 			qc_filter = False
 
 		if qc_filter:
