@@ -1,14 +1,16 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # ncmc: Modify NetCDF coordinates.
 #
 # This script modifies the latitude/longitude in a netcdf file. It only works on
 # files which contain a single grid point.
 #
-from argparse import ArgumentParser
 from ozflux_logging import *
-from ozflux_netcdf import *
-from ozflux_common import *
+
+from argparse import ArgumentParser
+from ozflux_netcdf import NC_FORMAT
+from sys import traceback, argv
+from ozflux_common import VERSION
 from netCDF4 import Dataset
 
 class Options:
