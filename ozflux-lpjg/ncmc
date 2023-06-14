@@ -8,8 +8,8 @@
 from ozflux_logging import *
 
 from argparse import ArgumentParser
-from ozflux_netcdf import NC_FORMAT
-from sys import traceback, argv
+from sys import argv
+import traceback
 from ozflux_common import VERSION
 from netCDF4 import Dataset
 
@@ -69,7 +69,7 @@ def main(opts: Options):
 	"""
 	Main CLI entrypoint function.
 	"""
-	with Dataset(opts.file, "r+", format = NC_FORMAT) as nc:
+	with Dataset(opts.file, "r+", format = "NETCDF4") as nc:
 		set_dim(nc, ["lat", "latitude"], opts.lat)
 		set_dim(nc, ["lon", "longitude"], opts.lon)
 
