@@ -1,0 +1,86 @@
+#!/usr/bin/env python
+#
+# ncmc: Modify NetCDF coordinates.
+#
+# This script modifies the latitude/longitude in a netcdf file. It only works on
+# files which contain a single grid point.
+#
+from argparse import ArgumentParser
+from ozflux_logging import *
+from ozflux_netcdf import *
+from ozflux_common import *
+from netCDF4 import Dataset
+
+class Options:
+	"""
+	Class for storing CLI arguments from the user.
+
+	@param log: Log level.
+	@param file: Input .nc file.
+	@param lat: New latitude of the file.
+	@param lon: New longitude of the file.
+	"""
+	def __init__(self, log : LogLevel, file: str, lat: float, lon: float):
+		self.log_level = log
+		self.file = file
+		self.lat = lat
+		self.lon = lon
+
+def parse_args(argv: list[str]) -> Options:
+	"""
+	Parse CLI arguments, return a parsed options object.
+
+	@param argv: Raw CLI arguments.
+
+	@return Parsed Options object.
+	"""
+	parser = ArgumentParser(prog=argv[0], description = "Formatting ozflux data into a format suitable for consumption by LPJ-Guess")
+	parser.add_argument("-v", "--verbosity", type = int, help = "Logging verbosity (1-5, default 3)", nargs = "?", const = LogLevel.INFORMATION, default = LogLevel.INFORMATION)
+	parser.add_argument("--latitude", type = float, required = True, help = "New latitude of the file.")
+	parser.add_argument("--longitude", type = float, required = True, help = "New longitude of the file.")
+	parser.add_argument("-f", "--file", type = str, required = True, help = "Input .nc file to be modified")
+	parser.add_argument("--version", action = "version", version = "%(prog)s " + VERSION)
+
+	p = parser.parse_args(argv[1:])
+	return Options(p.verbosity, p.file, p.latitude, p.longitude)
+
+def set_dim(nc: Dataset, names: list[str], newval: float):
+	"""
+	Modify the value of a dimension of length 1. Throw if the variable behind
+	the dimension is not found, or if the dimension length is longer than 1.
+
+	@param nc: NetCDF file (must be opened with write permission).
+	@param names: possible names for the dimension.
+	@param newval: The new value of the dimension.
+	"""
+	for dim_name in names:
+		if dim_name in nc.variables:
+			values = nc.variables[dim_name]
+			if len(values) > 1:
+				raise ValueError("Dimension '%s' contains %d values (expected 1)" % (dim_name, len(values)))
+			log_diagnostic("Modifying %s from %.2f to %.2f" % dim_name, values[0], newval)
+			values[0] = newval
+			return
+	raise ValueError("Unable to find dimension (possible names: [%s])" % (str.join(", ", names)))
+
+def main(opts: Options):
+	"""
+	Main CLI entrypoint function.
+	"""
+	with Dataset(opts.file, "r+", format = NC_FORMAT) as nc:
+		set_dim(nc, ["lat", "latitude"], opts.lat)
+		set_dim(nc, ["lon", "longitude"], opts.lon)
+
+if __name__ == "__main__":
+	# Parse CLI args
+	opts = parse_args(argv)
+
+	set_log_level(opts.log_level)
+
+	try:
+		# Actual logic is in main().
+		main(opts)
+	except BaseException as error:
+		# Basic error handling.
+		log_error(traceback.format_exc())
+		exit(1)
