@@ -1,0 +1,377 @@
+#!/usr/bin/env python
+#
+# This script combines multiple NetCDF files with the same variables and time
+# points but different coordinates, and merges them into a single output file.
+#
+
+import math
+import traceback
+import ozflux_common
+
+from argparse import ArgumentParser
+from ozflux_logging import *
+from ozflux_netcdf import *
+from sys import argv
+from netCDF4 import Dataset, Dimension
+from typing import Callable
+from ozflux_parallel import JobManager
+from os import path
+
+# Standard name for the latitude dimension (from the CF spec).
+_STD_LAT = "latitude"
+
+# Standard name for the longitude dimension (from the CF spec).
+_STD_LON = "longitude"
+# Standard name for the time dimension (from the CF spec).
+_STD_TIME = "time"
+
+# Name of the 'standard name' attribute (from the CF spec).
+_ATTR_STD_NAME = "standard_name"
+
+class Options:
+	"""
+	Class for storing CLI arguments from the user.
+
+	@param log: Log level.
+	@param files: Input files.
+	@param out: Output file.
+	@param prog: True to write progress messages, 0 otherwise.
+	@param parallel: True to process files in parallel.
+	"""
+	def __init__(self, log : LogLevel, files: list[str], out: str, prog: bool,
+		parallel: bool):
+		self.log_level = log
+		self.files = files
+		self.out_file = out
+		self.report_progress = prog
+		self.parallel = parallel
+
+def parse_args(argv: list[str]) -> Options:
+	"""
+	Parse CLI arguments, return a parsed options object.
+
+	@param argv: Raw CLI arguments.
+
+	@return Parsed Options object.
+	"""
+	parser = ArgumentParser(prog=argv[0], description = "Formatting ozflux data into a format suitable for consumption by LPJ-Guess")
+	parser.add_argument("-v", "--verbosity", type = int, help = "Logging verbosity (1-5, default 3)", nargs = "?", const = LogLevel.INFORMATION, default = LogLevel.INFORMATION)
+	parser.add_argument("files", nargs = "+", help = "Input .nc files to be processed")
+	parser.add_argument("-o", "--out-file", required = True, help = "Path to the output file.")
+	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
+	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel")
+	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
+
+	p = parser.parse_args(argv[1:])
+
+	return Options(p.verbosity, p.files, p.out_file, p.show_progress, p.parallel)
+
+class Merger:
+	def __init__(self, filename: str, nc_out: Dataset):
+		self.filename = filename
+		self.nc_out = nc_out
+	def exec(self, pcb: Callable[[float], None]):
+		log_information("Processing '%s'..." % self.filename)
+		with open_netcdf(self.filename) as nc_in:
+			copy(nc_in, self.nc_out, pcb)
+
+def get_dimension_indices(nc_in: Dataset, nc_out: Dataset, name: str
+	, low: int, high: int) -> list[int]:
+	"""
+	Get the dimension indices in the output file which correspond to the
+	dimension indices in the input file within the specified range.
+
+	@param nc_in: Input .nc file.
+	@param nc_out: Output .nc file.
+	@param name: Dimension name.
+	@param low: Start of the desired dimension index range.
+	@param high: End of the desired dimension index range.
+	"""
+
+	##### fixme: hi drew: dimension can have different name to the variable (e.g. time_bnds has dimension bnds. glhf! :)
+	values = nc_in.variables[name][low:high]
+	return [get_dimension_index(nc_out, value, name) for value in values]
+
+def copy_3d(nc_in: Dataset, nc_out: Dataset, name: str
+		, pcb: Callable[[float], None]):
+	"""
+	Copy the contents of the specified variable in the input file into the
+	output file.
+
+	@param nc_in: The input .nc file.
+	@param nc_out: The output .nc file.
+	@param name: The name of the variable to be copied.
+	@param pcb: Progress callback function.
+	"""
+	var_in = nc_in.variables[name]
+	var_out = nc_out.variables[name]
+
+	dim_names_in = var_in.dimensions
+	dim_names_out = var_out.dimensions
+	nd = len(dim_names_in)
+
+	if nd != len(dim_names_out):
+		m = "Inconsistent dimensionality in variable '%s': input file has %d dimensions (%s), output file has %d dimensions (%s)"
+		raise ValueError(m % (name, nd, ", ".join(dim_names_in), len(dim_names_out), ", ".join(dim_names_out)))
+
+	for i in range(nd):
+		if dim_names_in[i] != dim_names_out[i]:
+			m = "Inconsistent dimension order in variable '%s': dim[%d] in input file is '%s' but in output file it is '%s'"
+			raise ValueError(m % (name, i, dim_names_in[i], dim_names_out[i]))
+
+	dims = [nc_in.dimensions[name] for name in dim_names_in]
+
+	chunk_sizes = var_in.chunking()
+	shape = var_in.shape
+	niter = [math.ceil(s / c) for (s, c) in zip(shape, chunk_sizes)]
+
+	it_max = niter[0] * niter[1] * niter[2]
+	it = 0
+	samei = False
+	samej = False
+	samek = False
+	for i in range(niter[0]):
+		ilow = i * chunk_sizes[0]
+		ihigh = min(shape[0], ilow + chunk_sizes[0])
+		ir = range(ilow, ihigh) if samei else get_dimension_indices(nc_in, nc_out, dims[0].name, ilow, ihigh)
+		if not samei and ir[0] == ilow and ir[len(ir) - 1] == ihigh - 1:
+			samei = True
+		for j in range(niter[1]):
+			jlow = j * chunk_sizes[1]
+			jhigh = min(shape[1], jlow + chunk_sizes[1])
+			jr = range(jlow, jhigh) if samej else get_dimension_indices(nc_in, nc_out, dims[1].name, jlow, jhigh)
+			if not samej and jr[0] == jlow and jr[len(jr) - 1] == jhigh - 1:
+				samej = True
+			for k in range(niter[2]):
+				klow = k * chunk_sizes[2]
+				khigh = min(shape[2], klow + chunk_sizes[2])
+				kr = range(klow, khigh) if samek else get_dimension_indices(nc_in, nc_out, dims[2].name, klow, khigh)
+				if not samek and kr[0] == klow and kr[len(kr) - 1] == khigh - 1:
+					samek = True
+				var_out[ir, jr, kr] = var_in[ilow:ihigh, jlow:jhigh, klow:khigh]
+				it += 1
+				pcb(it / it_max)
+
+def copy_2d(nc_in: Dataset, nc_out: Dataset, name: str
+		, pcb: Callable[[float], None]):
+	"""
+	Copy the contents of the specified variable in the input file into the
+	output file.
+
+	@param nc_in: The input .nc file.
+	@param nc_out: The output .nc file.
+	@param name: The name of the variable to be copied.
+	@param pcb: Progress callback function.
+	"""
+	var_in = nc_in.variables[name]
+	var_out = nc_out.variables[name]
+
+	dim_names_in = var_in.dimensions
+	dim_names_out = var_out.dimensions
+	nd = len(dim_names_in)
+
+	if nd != len(dim_names_out):
+		m = "Inconsistent dimensionality in variable '%s': input file has %d dimensions (%s), output file has %d dimensions (%s)"
+		raise ValueError(m % (name, nd, ", ".join(dim_names_in), len(dim_names_out), ", ".join(dim_names_out)))
+
+	for i in range(nd):
+		if dim_names_in[i] != dim_names_out[i]:
+			m = "Inconsistent dimension order in variable '%s': dim[%d] in input file is '%s' but in output file it is '%s'"
+			raise ValueError(m % (name, i, dim_names_in[i], dim_names_out[i]))
+
+	dims = [nc_in.dimensions[name] for name in dim_names_in]
+
+	chunk_sizes = var_in.chunking()
+	shape = var_in.shape
+	niter = [math.ceil(s / c) for (s, c) in zip(shape, chunk_sizes)]
+
+	it_max = niter[0] * niter[1]
+	it = 0
+	samei = False
+	samej = False
+	for i in range(niter[0]):
+		ilow = i * chunk_sizes[0]
+		ihigh = min(shape[0], ilow + chunk_sizes[0])
+		ir = range(ilow, ihigh) if samei else get_dimension_indices(nc_in, nc_out, dims[0].name, ilow, ihigh)
+		if not samei and ir[0] == ilow and ir[len(ir) - 1] == ihigh - 1:
+			samei = True
+		for j in range(niter[1]):
+			jlow = j * chunk_sizes[1]
+			jhigh = min(shape[1], jlow + chunk_sizes[1])
+			jr = range(jlow, jhigh) if samej or not dims[1].name in nc_in.variables else get_dimension_indices(nc_in, nc_out, dims[1].name, jlow, jhigh)
+			if not samej and jr[0] == jlow and jr[len(jr) - 1] == jhigh - 1:
+				samej = True
+			var_out[ir, jr] = var_in[ilow:ihigh, jlow:jhigh]
+			it += 1
+			pcb(it / it_max)
+
+
+def copy_1d(nc_in: Dataset, nc_out: Dataset, name: str
+		, pcb: Callable[[float], None]):
+	"""
+	Copy the contents of the specified variable in the input file into the
+	output file.
+
+	@param nc_in: The input .nc file.
+	@param nc_out: The output .nc file.
+	@param name: The name of the variable to be copied.
+	@param pcb: Progress callback function.
+	"""
+	var_in = nc_in.variables[name]
+	var_out = nc_out.variables[name]
+	chunk_size = var_in.chunking()[0]
+	n = len(var_in)
+	for i in range(0, n, chunk_size):
+		upper = min(n, i + chunk_size)
+		var_out[i:upper] = var_in[i:upper]
+		pcb(upper / n)
+
+def copy(nc_in: Dataset, nc_out: Dataset, pcb: Callable[[float], None]):
+	"""
+	Copy the contents of the input file into the output file.
+	"""
+	start = 0
+	step = 1.0 / len(nc_in.variables)
+	for name in nc_in.variables:
+		if name in nc_in.dimensions:
+			continue
+		var_in = nc_in.variables[name]
+		nd = len(var_in.dimensions)
+		prog = lambda p: pcb(start + step * p)
+
+		if nd > 3:
+			raise ValueError(">3 dimensions not supported yet")
+		elif nd == 3:
+			copy_3d(nc_in, nc_out, name, prog)
+		elif len(var_in.dimensions) == 2:
+			copy_2d(nc_in, nc_out, name, prog)
+		elif len(var_in.dimensions) == 1:
+			copy_1d(nc_in, nc_out, name, prog)
+
+		start += step
+		pcb(start)
+
+def get_compression_type(filters: dict) -> str:
+	"""
+	Determine the compression algorithm used for a variable, given that
+	variables filters.
+
+	@param filters: The variable filters, obtained by variable.filters().
+	"""
+	types = ["zlib", "szip", "zstd", "bzip2", "blosc", "fletcher32"]
+	for compression_type in types:
+		if filters[compression_type]:
+			return compression_type
+	return ""
+
+def get_dim_from_std_name(nc, standard_name) -> Dimension:
+	"""
+	Return the dimension with the specified standard name. Throw if not found.
+	"""
+	for name in nc.dimensions:
+		dim = nc.dimensions[name]
+		var = nc.variables[name]
+		actual = getattr(var, _ATTR_STD_NAME)
+		if actual == standard_name:
+			return dim
+	m = "Input file contains no dimension with standard name of '%s'"
+	raise ValueError(m % standard_name)
+
+def count_gridpoints(file: str) -> int:
+	"""
+	Count the number of gridpoints in the specified netcdf file.
+	"""
+	with open_netcdf(file) as nc:
+		lat = get_dim_from_std_name(nc, "latitude")
+		lon = get_dim_from_std_name(nc, "longitude")
+		return lat.size * lon.size
+
+def init_outfile(nc_out: Dataset, infiles: list[str]):
+	"""
+	Initialise the output file by creating dimensions and variables as required.
+
+	@param nc_out: The output file.
+	@param first_infile: The first input file. All other input files must have
+	identical variables and dimensionality to this file.
+	"""
+	if len(infiles) < 1:
+		raise ValueError("No input files")
+
+	# todo: this doesn't consider the possibility of input files containing
+	# duplicate grid points, in which case we will create a dimension with a
+	# fixed size larger than is strictly necessary.
+	num_gridpoints = sum([count_gridpoints(file) for file in infiles])
+
+	first_infile = infiles[0]
+	with open_netcdf(first_infile) as nc_in:
+		log_information("Creating dimensions in output file...")
+		for name in nc_in.dimensions:
+			dim = nc_in.dimensions[name]
+			size = dim.size
+			if name in nc_in.variables:
+				var = nc_in.variables[name]
+				std_name = getattr(var, _ATTR_STD_NAME)
+				# If this is a spatial dimension, the size should be total
+				# number of gridpoints in the input files.
+				if std_name == _STD_LAT or std_name == _STD_LON:
+					size = num_gridpoints
+			create_dim_if_not_exists(nc_out, name, size)
+		log_information("Creating variables in output file...")
+		for name in nc_in.variables:
+			var = nc_in.variables[name]
+			dims = var.dimensions
+			fmt = var.datatype
+			filters = var.filters()
+			# Compression level
+			cl = filters['complevel']
+			# Compression type
+			ct = get_compression_type(filters)
+			# Chunk size
+			cs = tuple(var.chunking())
+			create_var_if_not_exists(nc_out, name, fmt, dims, cl, ct, cs)
+			var_out = nc_out.variables[name]
+			for attr in var.ncattrs():
+				if not attr[0] == "_":
+					setattr(var_out, attr, getattr(var, attr))
+		log_information("Populating time dimension in output file...")
+		if DIM_TIME in nc_in.dimensions:
+			dim = nc_in.dimensions[DIM_TIME]
+			# No progress reporting here. This should be fast.
+			copy_1d(nc_in, nc_out, DIM_TIME, lambda p: ...)
+
+def main(opts: Options):
+	"""
+	Main function.
+
+	@param opts: Parsed CLI options provided by the user..
+	"""
+
+	if len(opts.files) < 1:
+		return
+
+	# Delete output file if it already exists.
+	if os.path.exists(opts.out_file):
+		os.remove(opts.out_file)
+
+	job_manager = JobManager()
+
+	with open_netcdf(opts.out_file, write = True) as nc_out:
+		init_outfile(nc_out, opts.files)
+		for file in opts.files:
+			job_manager.add_job(Merger(file, nc_out), path.getsize(file))
+		job_manager.run_single_threaded()
+
+if __name__ == "__main__":
+	# Parse CLI args
+	opts = parse_args(argv)
+
+	set_log_level(opts.log_level)
+	set_show_progress(opts.report_progress)
+
+	try:
+		# Actual logic is in main().
+		main(opts)
+	except BaseException as error:
+		# Basic error handling.
+		log_error(traceback.format_exc())
+		exit(1)
