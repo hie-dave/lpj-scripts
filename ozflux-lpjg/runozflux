@@ -4,8 +4,7 @@
 #
 
 import traceback
-import ozflux_common
-import ozflux_parallel
+import ozflux_common, ozflux_parallel
 import subprocess, shutil
 
 from argparse import ArgumentParser
@@ -24,6 +23,9 @@ _OUTDIR_REGEX = r"[ \t]*outputdirectory[ \t]+\"([^\"]+)\".*"
 
 # Regular expression matching an enabled output file.
 _OUTFILE_REGEX = r"[ \t]*file_[^\"]+\"([^\"]+)\".*"
+
+# Regular expression matching 
+_MET_FILE_PARAM = "file_met_forcing"
 
 # Name of the ozflux outputs instruction file.
 _OUTPUTS_INS = "outputs.ins"
@@ -75,9 +77,12 @@ class Options:
 	@param parallel: Number of simulations to run in parallel.
 	@param repos: Path to one or more lpj-guess repositories.
 	@param no_build: If true, the model will not be built before being run.
+	@param no_run: If true, the model will not be run (only outputs copied).
+	@param no_copy: If true, outputs will not be copied.
 	"""
 	def __init__(self, log : LogLevel, sites: list[str], out: str, prog: bool,
-		parallel: int, repos: list[str], no_build: bool):
+		parallel: int, repos: list[str], no_build: bool, no_run: bool,
+		no_copy: bool):
 		self.log_level = log
 		self.sites = sites
 		self.out_dir = out
@@ -85,6 +90,8 @@ class Options:
 		self.parallel = parallel
 		self.repos = repos
 		self.build = not no_build
+		self.run = not no_run
+		self.copy = not no_copy
 
 class SiteRunner(ozflux_parallel.Task):
 	def __init__(self, ins_file: str, guess: str):
@@ -92,6 +99,7 @@ class SiteRunner(ozflux_parallel.Task):
 		self.guess_path = guess
 
 	def exec(self, pcb: Callable[[float], None]):
+		log_diagnostic(f"Running {self.ins_file}...")
 		ins = self.ins_file
 		cmd = [self.guess_path, "-input", "nc", ins]
 		wd = os.path.dirname(self.ins_file)
@@ -156,12 +164,14 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-o", "--out-dir", help = "Path to desired output directory.")
 	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
 	parser.add_argument("-P", "--max-parallel", default = multiprocessing.cpu_count(), type = int, help = "Max number of simulations to run in parallel. Defaults to number of available processors.")
-	parser.add_argument("-r", "--repository", action = "append", help = "Path to one or more lpj-guess repositories")
+	parser.add_argument("-r", "--repository", action = "append", help = "Path to one or more lpj-guess repositories (use one -r/--repository option per repository)")
 	parser.add_argument("-b", "--no-build", action = "store_true", help = "Don't build the model before running")
+	parser.add_argument("--no-run", action = "store_true", help = "Don't run the model (ie only copy outputs)")
+	parser.add_argument("--no-copy", action = "store_true", help = "Don't copy model outputs")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
 
 	g = parser.add_mutually_exclusive_group()
-	g.add_argument("-s", "--site", action = "append", help = "Specify one or more sites to run (requires multiple -s/--site options)")
+	g.add_argument("-s", "--site", action = "append", help = "Specify one or more sites to run (use one -s/--site option per site)")
 	g.add_argument("-a", "--all-sites", action = "store_true", help = "Run all sites")
 
 	p = parser.parse_args(argv[1:])
@@ -169,7 +179,19 @@ def parse_args(argv: list[str]) -> Options:
 	sites = _ALL_SITES if p.all_sites else p.site
 
 	return Options(p.verbosity, sites, p.out_dir, p.show_progress
-			, p.max_parallel, p.repository, p.no_build)
+			, p.max_parallel, p.repository, p.no_build, p.no_run, p.no_copy)
+
+def string_parameter_regex(param: str) -> str:
+	"""
+	Return a regular expression which matches a global string parameter in an
+	LPJ-Guess instruction file. The regex contains 3 groups:
+
+	1. Everything before the parameter value
+	2. The parameter value
+	3. Everything after the parameter value.
+	"""
+	rx = fr"([ \t]*{param}[ \t]*\")([^\"]+)(\".*)"
+	return rx
 
 def get_guess(repo: str) -> str:
 	"""
@@ -180,6 +202,85 @@ def get_guess(repo: str) -> str:
 		guess += ".exe"
 	return guess
 
+def get_site_met(repo: str, site: str) -> str:
+	"""
+	Get the path to the met data file used for the specified site.
+
+	@param repo: Path to the lpj-guess repository.
+	@param site: Name of an ozflux site.
+	"""
+	site_path = get_site_path(repo, site)
+	ins = get_site_ins(repo, site)
+	pattern = re.compile(string_parameter_regex(_MET_FILE_PARAM))
+	with open(ins, "r") as file:
+		for line in file:
+			match = re.match(pattern, line)
+			if match is not None:
+				met_path = match.group(2)
+				if not os.path.isabs(met_path):
+					joined = os.path.join(site_path, met_path)
+					met_path = os.path.normpath(joined)
+				return met_path
+	raise ValueError(f"Unable to determine met input path for repo {repo} site {site}")
+
+def to_seconds(x: int, units: str) -> int:
+	"""
+	Convert the specified value to seconds.
+	"""
+	if units == "seconds":
+		return x
+	elif units == "minutes":
+		return x * SECONDS_PER_MINUTE
+	elif units == "hours":
+		return x * SECONDS_PER_HOUR
+	elif units == "days":
+		return x * SECONDS_PER_HOUR * HOURS_PER_DAY
+	raise ValueError(f"Unknown time units '{units}'")
+
+def get_date(x: int, units: str) -> datetime.datetime:
+	"""
+	Parse a datetime object from a netcdf date variable value.
+	"""
+	_UNITS_REGEX = r"([^ ]+) since (\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})"
+	pattern = re.compile(_UNITS_REGEX)
+	match = re.match(pattern, units)
+	if match is None:
+		raise ValueError(f"Unable to parse time units {units}")
+
+	increment = units.split(" ")[0].lower()
+	baseline = datetime.datetime(
+		year = int(match.group(2)),
+		month = int(match.group(3)),
+		day = int(match.group(4)),
+		hour = int(match.group(5)),
+		minute = int(match.group(6)),
+		second = int(match.group(7))
+	)
+
+	seconds = to_seconds(x, increment)
+	return baseline + datetime.timedelta(seconds = seconds)
+
+def get_site_weight(repo: str, site: str) -> int:
+	"""
+	Return the relative weighting of a site in a repository. This weighting
+	represents the amount of time required to run the site, relative to other
+	sites. This implementation of the function uses the simulation length (in
+	years), which may be determined by opening the input .nc file.
+
+	@param repo: Path to the lpj-guess repository.
+	@param site: Name of the site.
+	"""
+	met_path = get_site_met(repo, site)
+	with open_netcdf(met_path) as met:
+		if VAR_TIME in met.variables:
+			time = met.variables[VAR_TIME]
+			end = get_date(time[len(time) - 1], time.units)
+			start = get_date(time[0], time.units)
+			seconds = (end - start).total_seconds()
+			log_diagnostic(f"Site '{site}' in repo '{repo}' has weight of {seconds}")
+			return seconds
+	raise ValueError(f"Unable to determine weighting for site {site} in repo {repo}")
+
 def build_repos(repos: list[str]):
 	"""
 	Build the model in each specified repository.
@@ -188,7 +289,7 @@ def build_repos(repos: list[str]):
 	"""
 	log_information("Building...")
 	builder = JobManager()
-	for repo in opts.repos:
+	for repo in repos:
 		builder.add_job(GuessBuilder(repo))
 
 	set_show_progress(False)
@@ -204,12 +305,13 @@ def run_sites(repos: list[str], sites: list[str]):
 	"""
 	job_manager = JobManager()
 	log_information("Running...")
-	for repo in opts.repos:
+	for repo in repos:
 		repo = os.path.abspath(repo)
 		guess = get_guess(repo)
-		for site in opts.sites:
-			ins = os.path.join(get_site_path(repo, site), f"{site}.ins")
-			job_manager.add_job(SiteRunner(ins, guess))
+		for site in sites:
+			ins = get_site_ins(repo, site)
+			weight = get_site_weight(repo, site)
+			job_manager.add_job(SiteRunner(ins, guess), weight)
 	job_manager.run_parallel(opts.parallel)
 
 def ozflux_path(repo: str) -> str:
@@ -237,6 +339,15 @@ def get_outputs_ins(repo: str) -> str:
 	"""
 	return os.path.join(ozflux_path(repo), _OUTPUTS_INS)
 
+def get_site_ins(repo: str, site: str) -> str:
+	"""
+	Return the path to the site-level instruction file.
+
+	@param repo: Path to an lpj-guess repository.
+	@param site: Name of an ozflux site.
+	"""
+	return os.path.join(get_site_path(repo, site), f"{site}.ins")
+
 def get_enabled_outputs(repo: str) -> tuple[str, list[str]]:
 	"""
 	Get the list of outputs enabled for the specified repository.
@@ -262,7 +373,7 @@ def get_enabled_outputs(repo: str) -> tuple[str, list[str]]:
 		raise ValueError(f"Unknown output path for {repo}")
 	return (out_path, outputs)
 
-def concat_file(infile: str, outfile: str, header: bool):
+def concat_file(inpath: str, outpath: str, header: bool):
 	"""
 	Concatenate the contents of infile to outfile.
 
@@ -270,11 +381,12 @@ def concat_file(infile: str, outfile: str, header: bool):
 	@param outfile: Output file path.
 	@param header: True to copy file header. False otherwise.
 	"""
-	with open(infile, "rb") as fin:
+	log_debug(f"Concatenating '{inpath}' to '{outpath}'...")
+	with open(inpath, "rb") as infile:
 		if not header:
-			fin.readline()
-		with open(outfile, "ab") as fout:
-			shutil.copyfileobj(fin, fout)
+			infile.readline()
+		with open(outpath, "ab") as outfile:
+			shutil.copyfileobj(infile, outfile)
 
 def copy_outputs_repo(repo: str, sites: list[str], out: str):
 	"""
@@ -308,7 +420,7 @@ def copy_outputs(repos: list[str], sites: list[str], out_dir: str):
 	out_dir = os.path.abspath(out_dir)
 	log_information("Copying outputs...")
 	for repo in repos:
-		repo_name = os.path.basename(repo)
+		repo_name = os.path.basename(repo.strip(os.path.sep))
 		log_diagnostic(f"Copying outputs from repository '{repo_name}'")
 
 		# Delete output directory if it already exists, then create it anew.
@@ -327,8 +439,12 @@ def main(opts: Options):
 	"""
 	if opts.build:
 		build_repos(opts.repos)
-	run_sites(opts.repos, opts.sites)
-	copy_outputs(opts.repos, opts.sites, opts.out_dir)
+
+	if opts.run:
+		run_sites(opts.repos, opts.sites)
+
+	if opts.copy:
+		copy_outputs(opts.repos, opts.sites, opts.out_dir)
 
 if __name__ == "__main__":
 	# Parse CLI args
