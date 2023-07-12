@@ -8,17 +8,31 @@
 
 import math
 import biom_processing, datetime, glob, numpy, pandas, time, traceback
-import ozflux_common
+from multiprocessing import Lock
+import ozflux_common, ozflux_netcdf
 
 from argparse import ArgumentParser
 from ozflux_logging import *
 from ozflux_netcdf import *
 from sys import argv
-from netCDF4 import Dataset
+from netCDF4 import Dataset, date2index, num2date, date2num
 from typing import Callable
 from ozflux_parallel import JobManager
 
 _ATTR_HEIGHT = "height"
+
+# Name of the latitude variable in output file.
+_VAR_LAT = "latitude"
+
+# Name of the longitude variabe in the output file.
+_VAR_LON = "longitude"
+
+# Default chunk size of the time chunks in output .nc file. Note that the actual
+# chunk size will be less than this if the input data contains less than this
+# number of time points.
+_TIME_CHUNK_SIZE = 366 * 24
+
+_VAR_DIMS   = (DIM_LAT, DIM_LON, DIM_TIME)
 
 # Total soil profile depth in m.
 _SOIL_DEPTH = 1.5
@@ -144,9 +158,14 @@ class Observation:
 class Observations:
 	"""
 	A collection of observations for a particular variable.
+
+	@param name: Name of the data variable.
+	@param units: Units of the data.
+	@param observations: List of time/value pairs.
 	"""
-	def __init__(self, name: str, observations: list[Observation]):
+	def __init__(self, name: str, units: str, observations: list[Observation]):
 		self.name = name
+		self.units = units
 		self.data = sorted(observations, key = lambda b: b.date)
 
 class Options:
@@ -163,10 +182,14 @@ class Options:
 	@param biomass_file: Optional file containing biomass readings
 	@param biomass_searchpath: Search path for biomass readings. If provided, will search under here for a file containing biomass readings for the site
 	@param lai_file: Path to file containing LAI observations.
+	@param format: Output format (csv or netcdf).
+	@param compression_level: Compression quality for output file [0, 9]. 0 = none, 1 = fastest compression, largest filesize, 9 = slowest compression, smallest filesize.
+	@param compression_type: Compression algorithm to be used (default 'zlib').
 	"""
 	def __init__(self, log : LogLevel, files: list[str], odir: str, prog: bool,
 		parallel: bool, timestep: int, smips_path: str, smips_index_path: str
-		, biomass_file: str, biomass_searchpath: str, lai_file: str):
+		, biomass_file: str, biomass_searchpath: str, lai_file: str
+		, format: str, compression_level: int, compression_type: str):
 		self.log_level = log
 		self.files = files
 		self.out_dir = odir
@@ -178,6 +201,9 @@ class Options:
 		self.lai_file = lai_file
 		self.smips_path = smips_path
 		self.smips_index_path = smips_index_path
+		self.output_format = format
+		self.compression_level = compression_level
+		self.compression_type = compression_type
 
 def parse_args(argv: list[str]) -> Options:
 	"""
@@ -194,9 +220,12 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
 	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel")
 	parser.add_argument("-t", "--timestep", type = int, required = True, help = "Output timestep in hours")
+	parser.add_argument("-f", "--format", default = "netcdf", help = "Output format (allowed values are 'csv' or 'netcdf'). Defaults to netcdf if not specified.")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
 	parser.add_argument("-l", "--lai-file", required = True, help = "Path to a file containing lai observations")
 	parser.add_argument("-s", "--smips-path", required = True, help = "Path to directory containing site-level SW content at 90cm as obtained from SMIPS. Each file in this directory should be named site.csv")
+	parser.add_argument("--compression-level", type = int, nargs = "?", default = 5, help = "Compression quality for output file [0, 9]. 0 = none, 1 = fastest compression, largest filesize, 9 = slowest compression, smallest filesize (default 5)")
+	parser.add_argument("--compression-type", default = "zlib", help = "Compression algorithm to be used (default 'zlib')")
 	parser.add_argument("--smips-index-path", help = "Optional path to directory containing site-level soil moisture index as obtained from smips. Each file should be named site.csv")
 
 	biomass_group = parser.add_mutually_exclusive_group()
@@ -207,7 +236,8 @@ def parse_args(argv: list[str]) -> Options:
 
 	return Options(p.verbosity, p.files, p.out_dir, p.show_progress, p.parallel,
 		p.timestep, p.smips_path, p.smips_index_path, p.biomass_readings,
-		p.biomass_searchpath, p.lai_file)
+		p.biomass_searchpath, p.lai_file, p.format, p.compression_level
+		, p.compression_type)
 
 def multiply_timedelta(delta: datetime.timedelta, n: int) -> datetime.timedelta:
 	"""
@@ -218,11 +248,11 @@ def multiply_timedelta(delta: datetime.timedelta, n: int) -> datetime.timedelta:
 	"""
 	return datetime.timedelta(seconds = n * delta.total_seconds())
 
-def _create_observations(name: str, data: list[float], start: datetime.datetime
-		, timestep: datetime.timedelta):
+def _create_observations(name: str, units: str, data: list[float]
+		, start: datetime.datetime, timestep: datetime.timedelta):
 	
 	obs = [Observation(start + multiply_timedelta(timestep, i), data[i]) for (i, _) in enumerate(data)]
-	return Observations(name, obs)
+	return Observations(name, units, obs)
 
 def write_csv(outfile: str, variables: list[Observations]
 	#names: list[str], data: list[list[float]]
@@ -281,6 +311,173 @@ def write_csv(outfile: str, variables: list[Observations]
 			csv.write("\n")
 			date += delta
 	pcb(1)
+
+def write_netcdf(outfile: str, variables: list[Observations]
+	, lat: float, lon: float, compression_level: int, compression_alg: str
+	, lock: Lock, timestep: int, pcb: Callable[[float], None]):
+	"""
+	Write all observations to a netcdf file.
+
+	@param outfile: Output file path.
+	@param variables: List of columns of data.
+	@param start_date: First date in the data.
+	@param end_date: Last date in the data.
+	@param timestep: Output timestep (in hours).
+	@param lat: Latitude of this site.
+	@param lon: Longitude of this site.
+	@param lock: Mutex used to serialise access to the output .nc file.
+	@param timestep: Output timestep in hours.
+	@param pcb: Progress callback function.
+	"""
+	with lock:
+		with open_netcdf(outfile, write = True) as nc:
+			time = nc[VAR_TIME]
+			calendar = getattr(time, ATTR_CALENDAR)
+
+			ilat = get_dimension_index(nc, lat, DIM_LAT)
+			ilon = get_dimension_index(nc, lon, DIM_LON)
+
+			for obs_var in variables:
+				if len(obs_var.data) == 0:
+					continue
+				times = [x.date for x in obs_var.data]
+				if timestep % HOURS_PER_DAY == 0:
+					# If daily timestep, discard the time part of the times.
+					times = [datetime.datetime(x.year, x.month, x.day) for x in times]
+				dates = date2index(times, time, calendar)
+
+				name = obs_var.name
+				if not name in nc.variables:
+					create_var_if_not_exists(nc, name, FORMAT_FLOAT, _VAR_DIMS
+						, compression_level, compression_alg
+						, (1, 1, _TIME_CHUNK_SIZE))
+					nc.variables[name].units = obs_var.units
+				var = nc.variables[name]
+				values = [x.value for x in obs_var.data]
+				n = len(times)
+				if n == 1:
+					# date2index returns a scalar when n==1 for some reason.
+					# I love this language so much.
+					dates = [dates]
+				for i in range(0, n, _TIME_CHUNK_SIZE):
+					upper = min(n, i + _TIME_CHUNK_SIZE)
+					var[ilat, ilon, dates[i:upper]] = values[i:upper]
+					pcb(upper / n)
+
+def get_start_date(filename: str) -> datetime.datetime:
+	"""
+	Get the first date in the input file.
+
+	@param filename: Path to a .nc file.
+	"""
+	with open_netcdf(filename) as nc:
+		var = nc.variables[VAR_TIME]
+		toffset = var[0]
+		units = getattr(var, ATTR_UNITS)
+		calendar = getattr(var, ATTR_CALENDAR)
+		return num2date(toffset, units, calendar)
+
+def get_end_date(filename: str) -> datetime.datetime:
+	"""
+	Get the first date in the input file.
+
+	@param filename: Path to a .nc file.
+	"""
+	with open_netcdf(filename) as nc:
+		var = nc.variables[VAR_TIME]
+		toffset = var[len(var) - 1]
+		units = getattr(var, ATTR_UNITS)
+		calendar = getattr(var, ATTR_CALENDAR)
+		return num2date(toffset, units, calendar)
+
+def init_outfile(filename: str, infiles: list[str], timestep: int
+		, vars: list[str], compression_level: int, compression_type: str
+		, start_date: datetime.datetime, end_date: datetime.datetime):
+	"""
+	Initialise the output file by creating dimensions and variables as required.
+
+	@param nc_out: The output file.
+	@param first_infile: The first input file. All other input files must have
+	identical variables and dimensionality to this file.
+	@param compression_level: Level of compression (0-9).
+	@param compression_type: Compression algorithm.
+	"""
+	if len(infiles) < 1:
+		raise ValueError("No input files")
+
+	# todo: this doesn't consider the possibility of input files containing
+	# duplicate grid points, in which case we will create a dimension with a
+	# fixed size larger than is strictly necessary.
+	num_gridpoints = sum([count_gridpoints(file) for file in infiles])
+
+	flux_start = min([get_start_date(file) for file in infiles])
+	flux_end = max([get_end_date(file) for file in infiles])
+	start_date = min(start_date, flux_start)
+	end_date = max(end_date, flux_end)
+	timestep_seconds = timestep * SECONDS_PER_HOUR
+	ntime = math.ceil((end_date - start_date).total_seconds() / timestep_seconds) + 1
+
+	# Dimension length must be an even number.
+	ntime += ntime % 2
+	if ntime < _TIME_CHUNK_SIZE:
+		_time_chunk_size = ntime
+
+	with open_netcdf(filename, write = True) as nc:
+		create_dim_if_not_exists(nc, DIM_LAT, num_gridpoints)
+		create_dim_if_not_exists(nc, DIM_LON, num_gridpoints)
+		create_dim_if_not_exists(nc, DIM_TIME)
+		create_var_if_not_exists(nc, _VAR_LAT, FORMAT_FLOAT, (DIM_LAT,)
+			, compression_level, compression_type, (1,))
+		create_var_if_not_exists(nc, _VAR_LON, FORMAT_FLOAT, (DIM_LON,)
+			, compression_level, compression_type, (1,))
+		create_var_if_not_exists(nc, VAR_TIME, FORMAT_UINT, (DIM_TIME,)
+			, compression_level, compression_type, (_time_chunk_size,))
+		var_lat = nc.variables[_VAR_LAT]
+		var_lon = nc.variables[_VAR_LON]
+		var_time = nc.variables[VAR_TIME]
+
+		# Set attributes required by CF spec.
+
+		setattr(var_lat, ATTR_STD_NAME, STD_LAT)
+		setattr(var_lon, ATTR_STD_NAME, STD_LON)
+		setattr(var_time, ATTR_STD_NAME, STD_TIME)
+
+		setattr(var_lat, ATTR_LONG_NAME, STD_LAT)
+		setattr(var_lon, ATTR_LONG_NAME, STD_LON)
+		setattr(var_time, ATTR_LONG_NAME, STD_TIME)
+
+		setattr(var_lat, ATTR_UNITS, "degree_north")
+		setattr(var_lon, ATTR_UNITS, "degree_east")
+		time_unit = "days" if timestep % HOURS_PER_DAY == 0 else "hours"
+		setattr(var_time, ATTR_UNITS, f"{time_unit} since 1900-01-01 00:00:00")
+
+		setattr(var_time, ATTR_CALENDAR, CALENDAR_GREGORIAN)
+
+		# Create data variables.
+		dims =   (DIM_LAT, DIM_LON, DIM_TIME        )
+		chunks = (1      , 1      , _time_chunk_size)
+		for name in vars:
+			create_var_if_not_exists(nc, name, FORMAT_FLOAT, dims
+			    , compression_level, compression_type, chunks)
+
+			with open_netcdf(infiles[0]) as nc_in:
+				in_name = name
+				f = lambda x: name.lower() in x.in_name.lower()
+				in_names = [x.in_name for x in _standard_variables if f(x)]
+				if len(in_names) > 0:
+					in_name = in_names[0]
+				if name in nc_in.variables:
+					var_in = nc_in.variables[in_name]
+					var_out = nc.variables[name]
+					copy_attr(var_in, var_out, ATTR_STD_NAME)
+					copy_attr(var_in, var_out, ATTR_LONG_NAME)
+					copy_attr(var_in, var_out, ATTR_UNITS)
+
+		# Populate the time variable.
+		dlt = datetime.timedelta(seconds = timestep_seconds)
+		dates = [start_date + i * dlt for i in range(ntime)]
+		nums = date2num(dates, var_time.units, var_time.calendar)
+		var_time[0:ntime] = nums
 
 def get_biomass_data(nc_file: str, biom_file: str, biom_searchpath: str,
 	pcb: Callable[[float], None]) \
@@ -441,7 +638,7 @@ def get_sw_data(file: str, timestep: int, pcb: Callable[[float], None]) \
 
 			delta_t = datetime.timedelta(hours = timestep)
 			layer = _create_observations(get_sw_layer_name(layer.depth)
-				, layer_vol, start_date, delta_t)
+				, var.out_units, layer_vol, start_date, delta_t)
 			layers.append(layer)
 
 			step_start += step_size
@@ -547,7 +744,7 @@ def get_smips_data(site: str, path: str, timestep: int, col: str, pcb: Callable[
 
 def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 	, biomass_searchpath: str, lai_data: pandas.DataFrame, smips_path: str
-	, smips_index_path: str, pcb: Callable[[float], None]):
+	, smips_index_path: str, lock: Lock, pcb: Callable[[float], None]):
 	"""
 	Extract the standard variables from the input file, write them to a .csv
 	file in the specified output directory in the specified timestep.
@@ -559,6 +756,7 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 	@param smips_path: Path to smips SW index files.
 	@param pcb: Progress callback function.
 	@param lai_file: Path to a file containing LAI observations.
+	@param lock: Mutex used to serialise access to the output .nc file.
 	"""
 	log_information("Processing '%s'..." % file)
 
@@ -581,7 +779,7 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 	site = get_site_name(file)
 	lai_data = get_lai_data(lai_data, site, timestep
 			, lambda p: pcb(step_start + lai_prop * p))
-	out_variables.append(Observations(_NAME_LAI, lai_data))
+	out_variables.append(Observations(_NAME_LAI, "m2/m2", lai_data))
 	lai_time = time.time() - lai_start
 
 	log_debug("Opening input file '%s' for reading..." % file)
@@ -594,17 +792,25 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 	end_date: datetime.datetime
 	delta = datetime.timedelta(hours = timestep)
 	timeseries: list[datetime.datetime] = []
-	with Dataset(file, "r", format=ozflux_common.NC_FORMAT) as nc:
+	latitude: float = 0
+	longitude: float = 0
+	with ozflux_netcdf.open_netcdf(file) as nc:
+		latitude = nc.variables["latitude"][0]
+		longitude = nc.variables["longitude"][0]
 		step_size = read_prop / len(flux_vars)
 		start_date = get_next_year(ozflux_common.parse_date(nc.time_coverage_start))
 		for var in flux_vars:
+			variable = nc.variables[var.in_name]
+			if not hasattr(variable, ATTR_UNITS):
+				raise ValueError(f"Variable {var.in_name} in {file} has no units")
+			units = getattr(variable, ATTR_UNITS)
 			raw = get_data(nc, var, timestep_minutes, True, False, lambda p: \
 				pcb(step_start + step_size * p))
 			if len(timeseries) == 0:
 				timeseries = [start_date + multiply_timedelta(delta, i) for i in range(len(raw))]
 				end_date = start_date + multiply_timedelta(delta, len(raw))
 			parsed = [Observation(x, y) for (x, y) in zip(timeseries, raw)]
-			out_variables.append(Observations(var.out_name, parsed))
+			out_variables.append(Observations(var.out_name, units, parsed))
 			step_start += step_size
 	read_time = time.time() - read_start
 
@@ -620,12 +826,12 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 	site_name = get_site_name_from_filename(file)
 	sw90_data = get_smips_data(site_name, smips_path, timestep, _SMIPS_COL_SW
 			    , lambda p: pcb(step_start + 0.5 * smips_prop * p))
-	out_variables.append(Observations(_NAME_SMIPS, sw90_data))
+	out_variables.append(Observations(_NAME_SMIPS, "?mm?", sw90_data))
 	if os.path.exists(smips_index_path):
 		swindex_data = get_smips_data(site_name, smips_index_path, timestep
 				, _SMIPS_COL_SWINDEX
 				, lambda p: pcb(step_start + smips_prop * (0.5 * p + 0.5)))
-		out_variables.append(Observations(_NAME_SWINDEX, swindex_data))
+		out_variables.append(Observations(_NAME_SWINDEX, "0-1", swindex_data))
 	smips_time = time.time() - smips_start
 	step_start += smips_prop
 
@@ -635,8 +841,8 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 	biomass_data = [b for b in biomass_data if b.date >= start_date and b.date <= end_date]
 	biomass_data = sorted(biomass_data, key = lambda b: b.date)
 	if len(biomass_data) > 0:
-		live_data = Observations(_NAME_LIVE, [Observation(d.date, d.live) for d in biomass_data])
-		dead_data = Observations(_NAME_DEAD, [Observation(d.date, d.dead) for d in biomass_data])
+		live_data = Observations(_NAME_LIVE, "kg/ha", [Observation(d.date, d.live) for d in biomass_data])
+		dead_data = Observations(_NAME_DEAD, "kg/ha", [Observation(d.date, d.dead) for d in biomass_data])
 		out_variables.append(live_data)
 		out_variables.append(dead_data)
 
@@ -646,7 +852,9 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 	# step_start += read_prop
 
 	file = os.path.basename(file)
-	filename = "%s.csv" % get_site_name_from_filename(file)
+	ext = "csv" if opts.output_format.lower() == "csv" else "nc"
+	site = get_site_name_from_filename(file)
+	filename = f"{site}.{ext}"
 	outfile = os.path.join(out_dir, filename)
 
 	if not os.path.exists(out_dir):
@@ -655,8 +863,14 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 	write_start = time.time()
 
 	timestep_hours = timestep
-	write_csv(outfile, out_variables, start_date, end_date, timestep_hours
-	   , lambda p: pcb(step_start + write_prop * p))
+	if opts.output_format.lower() == "csv":
+		write_csv(outfile, out_variables, start_date, end_date, timestep_hours
+		   , lambda p: pcb(step_start + write_prop * p))
+	else:
+		outfile = get_netcdf_output_filename(out_dir)
+		write_netcdf(outfile, out_variables, latitude, longitude
+	       , opts.compression_level, opts.compression_type, lock, timestep
+		   , lambda p: pcb(step_start + write_prop * p))
 	write_time = time.time() - write_start
 
 	total_time = read_time + write_time + biom_time + sw_time + lai_time + smips_time
@@ -673,7 +887,8 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 
 class Processor:
 	def __init__(self, file: str, out_dir: str, timestep: int, biomass_file: str, biomass_searchpath: str
-	      , lai_data: pandas.DataFrame, smips_path: str, smips_index_path: str):
+	      , lai_data: pandas.DataFrame, smips_path: str, smips_index_path: str
+		  , lock: Lock):
 		self.file = file
 		self.out_dir = out_dir
 		self.timestep = timestep
@@ -682,10 +897,14 @@ class Processor:
 		self.lai_data = lai_data
 		self.smips_path = smips_path
 		self.smips_index_path = smips_index_path
+		self.lock = lock
 	def exec(self, pcb: Callable[[float], None]):
 		process_file(self.file, self.out_dir, self.timestep, self.biomass_file
 	       , self.biomass_searchpath, self.lai_data, self.smips_path
-		   , self.smips_index_path, pcb)
+		   , self.smips_index_path, self.lock, pcb)
+
+def get_netcdf_output_filename(outpath: str) -> str:
+	return os.path.join(outpath, "ozflux-obs.nc")
 
 def main(opts: Options):
 	"""
@@ -694,16 +913,32 @@ def main(opts: Options):
 	@param opts: Parsed CLI options provided by the user..
 	"""
 
+	if not os.path.exists(opts.out_dir):
+		os.makedirs(opts.out_dir)
+
 	log_information("Reading LAI data...")
 	cols = [_LAI_COL_ID, _LAI_COL_DATE, _LAI_COL_LAI, _LAI_COL_QCFLAG]
 	lai_data = pandas.read_excel(opts.lai_file, _SHEET_LAI, usecols = cols, parse_dates = True)
 
+	if opts.output_format.lower() == "netcdf":
+		outfile = get_netcdf_output_filename(opts.out_dir)
+		vars: list[str] = [
+			"lai", "gpp", "resp", "nee", "et"
+		]
+		if os.path.exists(outfile):
+			os.remove(outfile)
+		start_date = min(lai_data["Date"])
+		end_date = max(lai_data["Date"])
+		init_outfile(outfile, opts.files, opts.timestep, vars
+	      , opts.compression_level, opts.compression_type, start_date, end_date)
+
 	job_manager = JobManager()
 
+	lock = Lock()
 	for file in opts.files:
 		p = Processor(file, opts.out_dir, opts.timestep, opts.biomass_file
 				, opts.biomass_searchpath, lai_data, opts.smips_path
-				, opts.smips_index_path)
+				, opts.smips_index_path, lock)
 		job_manager.add_job(p, os.path.getsize(file))
 
 	if opts.parallel:
