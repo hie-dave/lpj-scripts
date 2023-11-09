@@ -3,7 +3,7 @@ import multiprocessing, multiprocessing.connection
 import traceback, sys
 from ozflux_common import *
 from ozflux_logging import *
-from netCDF4 import Dataset, Variable
+from netCDF4 import Dataset, Variable, Dimension
 from enum import IntEnum
 from sys import argv
 from typing import Callable
@@ -41,6 +41,15 @@ FORMAT_FLOAT = "f8"
 
 # Name of the time variable in the input files.
 VAR_TIME = "time"
+
+# Name of the 'standard name' attribute (from the CF spec).
+_ATTR_STD_NAME = "standard_name"
+
+# Name of the 'units' attribute (from the CF spec).
+ATTR_UNITS = "units"
+
+# Name of the 'calendar' attribute (from the CF spec).
+ATTR_CALENDAR = "calendar"
 
 # Global estimates of how much time it takes to perform various tasks (as a
 # proportion of total time spent in get_data() function [0, 1]). These get
@@ -426,6 +435,23 @@ def get_steps_per_year(timestep: int) -> int:
 	step_width_hour = timestep / MINUTES_PER_HOUR
 	return int(HOURS_PER_DAY / step_width_hour * DAYS_PER_YEAR)
 
+def get_coord_index(dim: Dimension, var: Variable, value: float) -> int:
+	index = index_of(var, value)
+	if index == -1:
+		if dim.isunlimited():
+			index = len(var)
+		else:
+			edges = numpy.ma.notmasked_edges(var)
+			if edges is None:
+				index = 0
+			else:
+				index = edges[1] + 1
+				if index >= len(var):
+					m = "Unable to insert coordinate %.2f: dimension %s is not long enough"
+					raise ValueError(m % (value, dim.name))
+		var[index] = value
+	return index
+
 def get_coord_indices(nc_out: Dataset, lon: float, lat: float) \
 	-> tuple[float, float]:
 	"""
@@ -438,35 +464,12 @@ def get_coord_indices(nc_out: Dataset, lon: float, lat: float) \
 	@param lat: Latitude.
 	"""
 	var_lon = nc_out.variables[DIM_LON]
+	dim_lon = get_dim_from_std_name(nc_out, DIM_LON)
+	index_lon = get_coord_index(dim_lon, var_lon, lon)
+
 	var_lat = nc_out.variables[DIM_LAT]
-	index_lon = index_of(var_lon, lon)
-	if index_lon == -1:
-		if nc_out.dimensions[DIM_LON].isunlimited():
-			index_lon = len(var_lon)
-		else:
-			edges = numpy.ma.notmasked_edges(var_lon)
-			if edges is None:
-				index_lon = 0
-			else:
-				index_lon = edges[1] + 1
-				if index_lon >= len(var_lon):
-					m = "Unable to insert coordinate (%.2f, %.2f): dimension is not long enough"
-					raise ValueError(m % (lon, lat))
-		var_lon[index_lon] = lon
-	index_lat = index_of(var_lat, lat)
-	if index_lat == -1:
-		if nc_out.dimensions[DIM_LAT].isunlimited():
-			index_lat = len(var_lat)
-		else:
-			edges = numpy.ma.notmasked_edges(var_lat)
-			if edges is None:
-				index_lat = 0
-			else:
-				index_lat = edges[1] + 1
-				if index_lon >= len(var_lon):
-					m = "Unable to insert coordinate (%.2f, %.2f): dimension is not long enough"
-					raise ValueError(m % (lon, lat))
-		var_lat[index_lat] = lat
+	dim_lat = get_dim_from_std_name(nc_out, DIM_LAT)
+	index_lat = get_coord_index(dim_lat, var_lat, lat)
 	return (index_lon, index_lat)
 
 def trim_to_start_year(in_file: Dataset, timestep: int
@@ -821,7 +824,7 @@ def get_site_name(nc_file: str) -> str:
 
 	@param nc_file: netcdf file containing met forcing data for the site.
 	"""
-	with Dataset(nc_file, "r", format=NC_FORMAT) as nc:
+	with open_netcdf(nc_file) as nc:
 		return nc.site_name
 
 def create_var_if_not_exists(nc: Dataset, name: str, format: str
@@ -853,3 +856,112 @@ def create_dim_if_not_exists(nc: Dataset, name: str, size: int = 0):
 	"""
 	if not name in nc.dimensions:
 		nc.createDimension(name, size)
+
+def open_netcdf(file: str, mode: str = "r", format: str = NC_FORMAT) -> Dataset:
+	"""
+	Open a netcdf file.
+
+	@param file: The file to be opened.
+	@param mode: The opening mode. 'r' for readonly (default) or 'w' for write.
+	"""
+	log_debug(f"Opening netcdf file '{file}' in mode '{mode}'...")
+	dataset = Dataset(file, mode, format = format)
+	log_diagnostic(f"Successfully opened netcdf file '{file}' in mode '{mode}'...")
+	return dataset
+
+def find_dimension(nc: Dataset, predicate: Callable[[Dimension], bool]
+	, err_txt: str = "Failed to find dimension") -> Dimension:
+	"""
+	Return the first dimension in the NetCDF file which satisfies the given
+	condition. If no matching dimension is found, an exception will be raised.
+
+	@param nc: The NetCDF file to be searched.
+	@param predicate: A function used to filter the dimension. Should return
+					  true if the dimension is a match.
+	"""
+	for name in nc.dimensions:
+		dim = nc.dimensions[name]
+		if predicate(dim):
+			return dim
+	raise ValueError(err_txt)
+
+def get_dim_with_attr(nc: Dataset, attr_name: str, attr_value: str
+					  , err_txt: str) -> Dimension:
+	"""
+	Return the first dimension in a NetCDF whose corresponding variable has an
+	attribute matching the specified value.
+
+	@param nc: The input NetCDF file.
+	@param attr_name: Name of the attribute to check in the variable.
+	@param attr_value: Desired value of the attribute.
+	@param err_txt: Text of the error message.s
+	"""
+	return find_dimension(nc, lambda dim: \
+		getattr(nc.variables[dim.name], attr_name) == attr_value, err_txt)
+
+
+def get_dim_from_std_name(nc, standard_name) -> Dimension:
+	"""
+	Return the dimension with the specified standard name. Throw if not found.
+
+	@param nc: The netcdf file.
+	"""
+	return get_dim_with_attr(nc, _ATTR_STD_NAME, standard_name,
+		f"Input file contains no dimension with standard name {standard_name}")
+
+def count_gridpoints(file: str) -> int:
+	"""
+	Count the number of gridpoints in the specified netcdf file.
+	"""
+	with open_netcdf(file) as nc:
+		lat = get_dim_from_std_name(nc, DIM_LAT)
+		lon = get_dim_from_std_name(nc, DIM_LON)
+		return lat.size * lon.size
+
+def find_dim(nc: Dataset, dim_name: str) -> Dimension:
+	"""
+	Find a dimension with the specified name or standard name.
+
+	@param nc: The opened input NetCDF file.
+	@param dim_name: The dimension name to search for. Will return any dimension
+	whose name or standard_name matches this value.
+	"""
+	if dim_name in nc.dimensions:
+		return nc.dimensions[dim_name]
+	return get_dim_from_std_name(nc, dim_name)
+
+def get_dimension_variable(nc: Dataset, dim: Dimension) -> Variable:
+	"""
+	Find the variable in a NetCDF file which holds the variable behind the
+	specified dimension.
+
+	@param nc: The input NetCDF file.
+	@param dim: The dimension.
+	"""
+	# is this correct? Can we have variable lat behind latitude??
+	return nc.variables[dim.name]
+
+def get_dimension_index(nc: Dataset, value: float, dim_name: str) -> int:
+	"""
+	Get the index of the specified value on the given dimension. If the
+	dimension does not contain this value but is an unlimited dimension, the
+	value will be appended to the dimension's corresponding variable and the
+	index of the newly-added value will be returned. If the dimension is finite
+	in length and does not contain the value, an exception will be raised.
+
+	@param nc: The opened NetCDF file.
+	@param value: The value for which we will search.
+	@param dim_name: Standard name of the dimension.
+	"""
+	dim = find_dim(dim_name)
+	var = get_dimension_variable(nc, dim)
+	data = read_data(var, lambda p: ...)
+	index = index_of(data, value)
+	if index < 0:
+		if dim.isunlimited():
+			# todo: append to dimension
+			index = var.size
+			var[index] = value
+		else:
+			raise ValueError(f"{value} does not exist in dimension {dim_name} and this is a finite dimension so it cannot be appended to the dimension")
+	return index

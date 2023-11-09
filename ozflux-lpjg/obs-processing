@@ -906,6 +906,18 @@ class Processor:
 def get_netcdf_output_filename(outpath: str) -> str:
 	return os.path.join(outpath, "ozflux-obs.nc")
 
+def read_lai_data(lai_file: str) -> pandas.DataFrame:
+
+	log_information("Reading LAI data...")
+	if not os.path.exists(lai_file):
+		log_error(f"LAI file does not exist: {lai_file}")
+
+	cols = [_LAI_COL_ID, _LAI_COL_DATE, _LAI_COL_LAI, _LAI_COL_QCFLAG]
+	ext = os.path.splitext(lai_file)[1]
+	if ext.lower() == ".csv":
+		return pandas.read_csv(lai_file, usecols = cols, parse_dates = True)
+	return pandas.read_excel(lai_file, _SHEET_LAI, usecols = cols, parse_dates = True)
+
 def main(opts: Options):
 	"""
 	Main function.
@@ -916,9 +928,7 @@ def main(opts: Options):
 	if not os.path.exists(opts.out_dir):
 		os.makedirs(opts.out_dir)
 
-	log_information("Reading LAI data...")
-	cols = [_LAI_COL_ID, _LAI_COL_DATE, _LAI_COL_LAI, _LAI_COL_QCFLAG]
-	lai_data = pandas.read_excel(opts.lai_file, _SHEET_LAI, usecols = cols, parse_dates = True)
+	lai_data = read_lai_data(opts.lai_file)
 
 	if opts.output_format.lower() == "netcdf":
 		outfile = get_netcdf_output_filename(opts.out_dir)

@@ -506,7 +506,7 @@ def get_file_first_date(ncfile: str):
 	with Dataset(ncfile, "r", format=NC_FORMAT) as nc_in:
 		return get_first_date(nc_in)
 
-@profile
+# @profile
 def main(opts: Options):
 	"""
 	Main CLI entrypoint function.
