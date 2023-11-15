@@ -914,9 +914,13 @@ def read_lai_data(lai_file: str) -> pandas.DataFrame:
 
 	cols = [_LAI_COL_ID, _LAI_COL_DATE, _LAI_COL_LAI, _LAI_COL_QCFLAG]
 	ext = os.path.splitext(lai_file)[1]
+	_DATE_FMT = "%m/%d/%Y"
 	if ext.lower() == ".csv":
-		return pandas.read_csv(lai_file, usecols = cols, parse_dates = True)
-	return pandas.read_excel(lai_file, _SHEET_LAI, usecols = cols, parse_dates = True)
+		data = pandas.read_csv(lai_file, usecols = cols, parse_dates = False)
+	else:
+		data = pandas.read_excel(lai_file, _SHEET_LAI, usecols = cols, parse_dates = False)
+	data[_LAI_COL_DATE] = pandas.to_datetime(data[_LAI_COL_DATE], format = _DATE_FMT)
+	return data
 
 def main(opts: Options):
 	"""
