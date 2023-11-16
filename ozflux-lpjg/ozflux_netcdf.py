@@ -39,17 +39,38 @@ UNLIMITED_DIMS = False
 # Data format in output file.
 FORMAT_FLOAT = "f8"
 
+# Data format of unsigned long (uint64_t) in the output file.
+FORMAT_UINT = "u8"
+
 # Name of the time variable in the input files.
 VAR_TIME = "time"
 
+# Standard names defined by the CF spec. See here for all defined values:
+# https://cfconventions.org/Data/cf-standard-names/current/build/cf-standard-name-table.html
+
 # Name of the 'standard name' attribute (from the CF spec).
-_ATTR_STD_NAME = "standard_name"
+ATTR_STD_NAME = "standard_name"
+
+# Name of the 'long name' attribute (from the CF spec).
+ATTR_LONG_NAME = "long_name"
 
 # Name of the 'units' attribute (from the CF spec).
 ATTR_UNITS = "units"
 
 # Name of the 'calendar' attribute (from the CF spec).
 ATTR_CALENDAR = "calendar"
+
+# Name of the gregorian value of the calendar attribute (from the CF spec).
+CALENDAR_GREGORIAN = "gregorian"
+
+# Standard name of the latitude variable (from the CF spec).
+STD_LAT = "latitude"
+
+# Standard name of the longitude variable (from the CF spec).
+STD_LON = "longitude"
+
+# Standard name of the time variable (from the CF spec).
+STD_TIME = "time"
 
 # Global estimates of how much time it takes to perform various tasks (as a
 # proportion of total time spent in get_data() function [0, 1]). These get
@@ -857,13 +878,14 @@ def create_dim_if_not_exists(nc: Dataset, name: str, size: int = 0):
 	if not name in nc.dimensions:
 		nc.createDimension(name, size)
 
-def open_netcdf(file: str, mode: str = "r", format: str = NC_FORMAT) -> Dataset:
+def open_netcdf(file: str, write: bool = False, format: str = NC_FORMAT) -> Dataset:
 	"""
 	Open a netcdf file.
 
 	@param file: The file to be opened.
 	@param mode: The opening mode. 'r' for readonly (default) or 'w' for write.
 	"""
+	mode = "r+" if write else "r"
 	log_debug(f"Opening netcdf file '{file}' in mode '{mode}'...")
 	dataset = Dataset(file, mode, format = format)
 	log_diagnostic(f"Successfully opened netcdf file '{file}' in mode '{mode}'...")
@@ -906,7 +928,7 @@ def get_dim_from_std_name(nc, standard_name) -> Dimension:
 
 	@param nc: The netcdf file.
 	"""
-	return get_dim_with_attr(nc, _ATTR_STD_NAME, standard_name,
+	return get_dim_with_attr(nc, ATTR_STD_NAME, standard_name,
 		f"Input file contains no dimension with standard name {standard_name}")
 
 def count_gridpoints(file: str) -> int:
@@ -941,27 +963,14 @@ def get_dimension_variable(nc: Dataset, dim: Dimension) -> Variable:
 	# is this correct? Can we have variable lat behind latitude??
 	return nc.variables[dim.name]
 
-def get_dimension_index(nc: Dataset, value: float, dim_name: str) -> int:
+def copy_attr(var_in: Variable, var_out: Variable, attr: str):
 	"""
-	Get the index of the specified value on the given dimension. If the
-	dimension does not contain this value but is an unlimited dimension, the
-	value will be appended to the dimension's corresponding variable and the
-	index of the newly-added value will be returned. If the dimension is finite
-	in length and does not contain the value, an exception will be raised.
+	Copy the specified attribute value from one variable to another.
 
-	@param nc: The opened NetCDF file.
-	@param value: The value for which we will search.
-	@param dim_name: Standard name of the dimension.
+	@param var_in: Input variable.
+	@param var_out: Output variable.
+	@param attr: Name of the attribute.
 	"""
-	dim = find_dim(dim_name)
-	var = get_dimension_variable(nc, dim)
-	data = read_data(var, lambda p: ...)
-	index = index_of(data, value)
-	if index < 0:
-		if dim.isunlimited():
-			# todo: append to dimension
-			index = var.size
-			var[index] = value
-		else:
-			raise ValueError(f"{value} does not exist in dimension {dim_name} and this is a finite dimension so it cannot be appended to the dimension")
-	return index
+	if hasattr(var_in, attr):
+		value = getattr(var_in, attr)
+		setattr(var_out, attr, value)

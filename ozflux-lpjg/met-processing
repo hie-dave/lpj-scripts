@@ -468,7 +468,7 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
 	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel")
 	parser.add_argument("-t", "--timestep", type = int, required = True, help = "Output timestep in minutes")
-	parser.add_argument("-c", "--output-compatibility", type = int, required = True, help = "Output compatibility type (0 = daily_grass, 1 = LSM)")
+	parser.add_argument("-c", "--output-compatibility", type = int, default = 0, help = "Output compatibility type; ie the LPJ-Guess input module to be used (0 = dave (ie NC input module), 1 = LSM) (default: 0)")
 	parser.add_argument("--compression-level", type = int, nargs = "?", default = 4, help = "Compression quality for output file [0, 9]. 0 = none, 1 = fastest compression, largest filesize, 9 = slowest compression, smallest filesize (default 4)")
 	parser.add_argument("--compression-type", default = "zlib", help = "Compression algorithm to be used (default 'zlib')")
 	parser.add_argument("-s", "--single-outfile", action = "store_true", help = "Combine all inputs into a single output file")

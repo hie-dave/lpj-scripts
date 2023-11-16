@@ -9,7 +9,7 @@
 import math
 import biom_processing, datetime, glob, numpy, pandas, time, traceback
 from multiprocessing import Lock
-import ozflux_common, ozflux_netcdf
+import ozflux_common
 
 from argparse import ArgumentParser
 from ozflux_logging import *
@@ -67,6 +67,27 @@ _LAI_COL_LAI = "MYD15A2H_006_Lai_500m"
 # Name of the quality control column in the LAI data file.
 _LAI_COL_QCFLAG = "MYD15A2H_006_FparLai_QC"
 
+# Name of the greenness column in the greenness input file.
+_GREENNESS_COL_GREENNESS = "NDVI_smoothed"
+
+# Name of the date column in the greenness input file.
+_GREENNESS_COL_DATE = "xlDateTime"
+
+# Name of the longitude column in the greenness input file.
+_GREENNESS_COL_LON = "Lon"
+
+# Name of the latitude column in the greenness input file.
+_GREENNESS_COL_LAT = "Lat"
+
+# Date format specifier for the greenness input file.
+_GREENNESS_DATE_FMT = "%d/%m/%Y %H:%M"
+
+# Name of the greenness variable in the output file.
+_VAR_GREENNESS = "greenness"
+
+# Units written to the greenness variable in the output file.
+_GREENNESS_UNITS = "0-1"
+
 # Name of the default sheet name in the LAI data file.
 _SHEET_LAI = "OzFlux-sites-LAI-MYD15A2H-006-r"
 
@@ -122,6 +143,8 @@ _layer_variable_map = {
 	"DryRiver": [Layer("Sws", 1.5), Layer("Sws_50cm", 50)],
 	# # Note: Emerald does have Sws, but it has no height attribute!!!!
 	"Emerald": [Layer("Sws_5cmd", 5), Layer("Sws_15cmd", 15), Layer("Sws_22p5cmd", 22.5), Layer("Sws_30cmd", 30)],
+	# Note: FletcherView has Sws, Sws_bare, Sws_grass, Sws_shrub, and Sws_tree
+	"Fletcherview": [Layer("Sws", 0)],
 	# # Note FoggDam does have Sws, but it has no height attribute!!!!
 	"FoggDam": [Layer("Sws_10", 10)],
 	"Gingin": [Layer("Sws", 6), Layer("Sws_20cm", 20), Layer("Sws_40cm", 40), Layer("Sws_80cm", 80)],
@@ -143,8 +166,10 @@ _layer_variable_map = {
 	"Tumbarumba": [Layer("Sws", 0)],
 	"WallabyCreek": [Layer("Sws", 10), Layer("Sws_15cma", 15), Layer("Sws_20cma", 20), Layer("Sws_40cma", 40), Layer("Sws_80cma", 80)],
 	"Warra": [Layer("Sws", 8), Layer("Sws_20cmd", 20), Layer("Sws_40cmd", 40), Layer("Sws_80cmd", 80), Layer("Sws_1p2m", 120)],
+	"Whroo": [Layer("Sws", 10)],
 	"WombatStateForest": [Layer("Sws", 10), Layer("Sws_35cma", 35), Layer("Sws_65cma", 65), Layer("Sws_95cma", 95)],
 	"Yanco": [Layer("Sws_3cm", 3), Layer("Sws", 10), Layer("Sws_15cm", 15), Layer("Sws_45cm", 45), Layer("Sws_75cm", 75)],
+	"YarCon": [Layer("Sws_5cm", 5), Layer("Sws", 10)]
 }
 
 class Observation:
@@ -182,6 +207,7 @@ class Options:
 	@param biomass_file: Optional file containing biomass readings
 	@param biomass_searchpath: Search path for biomass readings. If provided, will search under here for a file containing biomass readings for the site
 	@param lai_file: Path to file containing LAI observations.
+	@param greenness_file: Path to a .csv or .xlsx file containing greenness observations.
 	@param format: Output format (csv or netcdf).
 	@param compression_level: Compression quality for output file [0, 9]. 0 = none, 1 = fastest compression, largest filesize, 9 = slowest compression, smallest filesize.
 	@param compression_type: Compression algorithm to be used (default 'zlib').
@@ -189,7 +215,8 @@ class Options:
 	def __init__(self, log : LogLevel, files: list[str], odir: str, prog: bool,
 		parallel: bool, timestep: int, smips_path: str, smips_index_path: str
 		, biomass_file: str, biomass_searchpath: str, lai_file: str
-		, format: str, compression_level: int, compression_type: str):
+		, greenness_file: str, format: str, compression_level: int
+		, compression_type: str):
 		self.log_level = log
 		self.files = files
 		self.out_dir = odir
@@ -199,6 +226,7 @@ class Options:
 		self.biomass_file = biomass_file
 		self.biomass_searchpath = biomass_searchpath
 		self.lai_file = lai_file
+		self.greenness_file = greenness_file
 		self.smips_path = smips_path
 		self.smips_index_path = smips_index_path
 		self.output_format = format
@@ -223,6 +251,7 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-f", "--format", default = "netcdf", help = "Output format (allowed values are 'csv' or 'netcdf'). Defaults to netcdf if not specified.")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
 	parser.add_argument("-l", "--lai-file", required = True, help = "Path to a file containing lai observations")
+	parser.add_argument("-g", "--greenness-file", required = True, help = "Path to a .csv or .xlsx file containing greenness data")
 	parser.add_argument("-s", "--smips-path", required = True, help = "Path to directory containing site-level SW content at 90cm as obtained from SMIPS. Each file in this directory should be named site.csv")
 	parser.add_argument("--compression-level", type = int, nargs = "?", default = 5, help = "Compression quality for output file [0, 9]. 0 = none, 1 = fastest compression, largest filesize, 9 = slowest compression, smallest filesize (default 5)")
 	parser.add_argument("--compression-type", default = "zlib", help = "Compression algorithm to be used (default 'zlib')")
@@ -236,8 +265,8 @@ def parse_args(argv: list[str]) -> Options:
 
 	return Options(p.verbosity, p.files, p.out_dir, p.show_progress, p.parallel,
 		p.timestep, p.smips_path, p.smips_index_path, p.biomass_readings,
-		p.biomass_searchpath, p.lai_file, p.format, p.compression_level
-		, p.compression_type)
+		p.biomass_searchpath, p.lai_file, p.greenness_file, p.format
+		, p.compression_level, p.compression_type)
 
 def multiply_timedelta(delta: datetime.timedelta, n: int) -> datetime.timedelta:
 	"""
@@ -334,8 +363,7 @@ def write_netcdf(outfile: str, variables: list[Observations]
 			time = nc[VAR_TIME]
 			calendar = getattr(time, ATTR_CALENDAR)
 
-			ilat = get_dimension_index(nc, lat, DIM_LAT)
-			ilon = get_dimension_index(nc, lon, DIM_LON)
+			(ilon, ilat) = get_coord_indices(nc, lon, lat)
 
 			for obs_var in variables:
 				if len(obs_var.data) == 0:
@@ -714,6 +742,27 @@ def get_lai_data(data: pandas.DataFrame, site: str, timestep: int, pcb: Callable
 	lai = [l for l in lai if l.value >= _LAI_MIN and l.value <= _LAI_MAX]
 	return lai
 
+def get_greenness_data(data: pandas.DataFrame, lon: float, lat: float
+		, pcb: Callable[[float], None]) -> list[Observation]:
+	"""
+	Read greenness observations for the specified site from the given input file.
+
+	@param data: Pre-parsed greenness data. (This is parsed once because the input file contains data for all sites.)
+	@param lon: Longitude of the site.
+	@param lat: Latitude of the site.
+	@param pcb: Progress callback function.
+	"""
+	data = data[data[_GREENNESS_COL_LON].apply(lambda x: floats_equal(x, lon))]
+	data = data[data[_GREENNESS_COL_LAT].apply(lambda x: floats_equal(x, lat))]
+	if len(data) < 1:
+		return []
+	data = data.groupby([_GREENNESS_COL_DATE]).mean(numeric_only = True)
+	greenness = [
+		Observation(date, float(row[_GREENNESS_COL_GREENNESS]))
+		for (date, row) in data.iterrows()
+	]
+	return greenness
+
 def get_smips_data_from_file(file: str, timestep: int, col: str, pcb: Callable[[float], None]) \
 		-> list[Observation]:
 	"""
@@ -743,8 +792,9 @@ def get_smips_data(site: str, path: str, timestep: int, col: str, pcb: Callable[
 	return get_smips_data_from_file(file, timestep, col, pcb)
 
 def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
-	, biomass_searchpath: str, lai_data: pandas.DataFrame, smips_path: str
-	, smips_index_path: str, lock: Lock, pcb: Callable[[float], None]):
+	, biomass_searchpath: str, lai_data: pandas.DataFrame
+	, greenness_data: pandas.DataFrame, smips_path: str, smips_index_path: str
+	, lock: Lock, pcb: Callable[[float], None]):
 	"""
 	Extract the standard variables from the input file, write them to a .csv
 	file in the specified output directory in the specified timestep.
@@ -794,12 +844,14 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 	timeseries: list[datetime.datetime] = []
 	latitude: float = 0
 	longitude: float = 0
-	with ozflux_netcdf.open_netcdf(file) as nc:
+	with open_netcdf(file) as nc:
 		latitude = nc.variables["latitude"][0]
 		longitude = nc.variables["longitude"][0]
 		step_size = read_prop / len(flux_vars)
 		start_date = get_next_year(ozflux_common.parse_date(nc.time_coverage_start))
 		for var in flux_vars:
+			if not var.in_name in nc.variables:
+				raise ValueError(f"Varable {var.in_name} does not exist in file {file}")
 			variable = nc.variables[var.in_name]
 			if not hasattr(variable, ATTR_UNITS):
 				raise ValueError(f"Variable {var.in_name} in {file} has no units")
@@ -813,6 +865,11 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 			out_variables.append(Observations(var.out_name, units, parsed))
 			step_start += step_size
 	read_time = time.time() - read_start
+
+	greenness_data = get_greenness_data(greenness_data, longitude, latitude
+		, lambda _: ...)
+	greenness = Observations(_VAR_GREENNESS, _GREENNESS_UNITS, greenness_data)
+	out_variables.append(greenness)
 
 	sw_start = time.time()
 	sw_layers = get_sw_data(file, timestep
@@ -887,8 +944,8 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 
 class Processor:
 	def __init__(self, file: str, out_dir: str, timestep: int, biomass_file: str, biomass_searchpath: str
-	      , lai_data: pandas.DataFrame, smips_path: str, smips_index_path: str
-		  , lock: Lock):
+	      , lai_data: pandas.DataFrame, greenness_data: pandas.DataFrame
+		  , smips_path: str, smips_index_path: str, lock: Lock):
 		self.file = file
 		self.out_dir = out_dir
 		self.timestep = timestep
@@ -898,29 +955,49 @@ class Processor:
 		self.smips_path = smips_path
 		self.smips_index_path = smips_index_path
 		self.lock = lock
+		self.greenness_data = greenness_data
 	def exec(self, pcb: Callable[[float], None]):
 		process_file(self.file, self.out_dir, self.timestep, self.biomass_file
-	       , self.biomass_searchpath, self.lai_data, self.smips_path
-		   , self.smips_index_path, self.lock, pcb)
+	       , self.biomass_searchpath, self.lai_data, self.greenness_data
+		   , self.smips_path, self.smips_index_path, self.lock, pcb)
 
 def get_netcdf_output_filename(outpath: str) -> str:
 	return os.path.join(outpath, "ozflux-obs.nc")
 
+def read_csv_or_excel_data(file_path: str, cols: list[str], date_col: str
+						   , date_fmt: str) -> pandas.DataFrame:
+	"""
+	Read an excel (.xlsx) or .csv file.
+	"""
+	if not os.path.exists(file_path):
+		log_error(f"File does not exist: {file_path}")
+	ext = os.path.splitext(file_path)[1]
+	if ext.lower() == ".csv":
+		data = pandas.read_csv(file_path, usecols = cols, parse_dates = False)
+	else:
+		data = pandas.read_excel(file_path, _SHEET_LAI, usecols = cols
+								 , parse_dates = False)
+	data[date_col] = pandas.to_datetime(data[date_col], format = date_fmt)
+	return data
+
 def read_lai_data(lai_file: str) -> pandas.DataFrame:
 
 	log_information("Reading LAI data...")
-	if not os.path.exists(lai_file):
-		log_error(f"LAI file does not exist: {lai_file}")
-
 	cols = [_LAI_COL_ID, _LAI_COL_DATE, _LAI_COL_LAI, _LAI_COL_QCFLAG]
-	ext = os.path.splitext(lai_file)[1]
 	_DATE_FMT = "%m/%d/%Y"
-	if ext.lower() == ".csv":
-		data = pandas.read_csv(lai_file, usecols = cols, parse_dates = False)
-	else:
-		data = pandas.read_excel(lai_file, _SHEET_LAI, usecols = cols, parse_dates = False)
-	data[_LAI_COL_DATE] = pandas.to_datetime(data[_LAI_COL_DATE], format = _DATE_FMT)
-	return data
+	return read_csv_or_excel_data(lai_file, cols, _LAI_COL_DATE, _DATE_FMT)
+
+def read_greenness_data(greenness_file: str) -> pandas.DataFrame:
+	log_information("Reading greenness data...")
+	cols = [
+		_GREENNESS_COL_DATE,
+		_GREENNESS_COL_LON,
+		_GREENNESS_COL_LAT,
+		_GREENNESS_COL_GREENNESS
+	]
+	return read_csv_or_excel_data(greenness_file, cols, _GREENNESS_COL_DATE
+		, _GREENNESS_DATE_FMT)
+	
 
 def main(opts: Options):
 	"""
@@ -933,6 +1010,7 @@ def main(opts: Options):
 		os.makedirs(opts.out_dir)
 
 	lai_data = read_lai_data(opts.lai_file)
+	greenness_data = read_greenness_data(opts.greenness_file)
 
 	if opts.output_format.lower() == "netcdf":
 		outfile = get_netcdf_output_filename(opts.out_dir)
@@ -941,8 +1019,12 @@ def main(opts: Options):
 		]
 		if os.path.exists(outfile):
 			os.remove(outfile)
-		start_date = min(lai_data["Date"])
-		end_date = max(lai_data["Date"])
+		lai_start = min(lai_data[_LAI_COL_DATE])
+		lai_end = max(lai_data[_LAI_COL_DATE])
+		greenness_start = min(greenness_data[_GREENNESS_COL_DATE])
+		greenness_end = max(greenness_data[_GREENNESS_COL_DATE])
+		start_date = min(lai_start, greenness_start)
+		end_date = max(lai_end, greenness_end)
 		init_outfile(outfile, opts.files, opts.timestep, vars
 	      , opts.compression_level, opts.compression_type, start_date, end_date)
 
@@ -951,8 +1033,8 @@ def main(opts: Options):
 	lock = Lock()
 	for file in opts.files:
 		p = Processor(file, opts.out_dir, opts.timestep, opts.biomass_file
-				, opts.biomass_searchpath, lai_data, opts.smips_path
-				, opts.smips_index_path, lock)
+				, opts.biomass_searchpath, lai_data, greenness_data
+				, opts.smips_path, opts.smips_index_path, lock)
 		job_manager.add_job(p, os.path.getsize(file))
 
 	if opts.parallel:
