@@ -26,7 +26,7 @@ MIN_NUM_CHUNKS = 2
 #######################################################################
 
 class Options:
-	def __init__(self, verbosity: LogLevel, prog: bool, op: str, annual: bool):
+	def __init__(self, verbosity: LogLevel, prog: bool, op: str, annual: bool, daily: bool):
 		"""
 		Create a new Options instance.
 
@@ -34,11 +34,13 @@ class Options:
 		@param prog: True to write progress messages, false otherwise.
 		@param op: Output path.
 		@param annual: True to download annual data, false otherwise.
+		@param daily: True to download daily data, false otherwise.
 		"""
 		self.verbosity = verbosity
 		self.show_progress = prog
 		self.out_dir = op
 		self.annual = annual
+		self.daily = daily
 
 def parse_cli(argv: list[str]) -> Options:
 	"""
@@ -51,12 +53,17 @@ def parse_cli(argv: list[str]) -> Options:
 	parser = ArgumentParser(prog=argv[0], description = "Extract ozflux site metadata")
 	parser.add_argument("-v", "--verbosity", type = int, help = "Logging verbosity (1-5, default %d)" % LogLevel.INFORMATION, nargs = "?", const = LogLevel.INFORMATION, default = LogLevel.INFORMATION)
 	parser.add_argument("-o", "--out-path", required = True, help = "Output directory")
-	parser.add_argument("-a", "--annual", action = "store_true", help = "Download annual flux data (if not enabled will download smallest timestep available)")
 	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
+
+	g = parser.add_mutually_exclusive_group()
+	g.add_argument("-a", "--annual", action = "store_true", help = "Download annual flux data (if not enabled will download smallest timestep available)")
+	g.add_argument("-d", "--daily", action = "store_true", help = "Download daily flux data (if not set, will download smallest timestep available)")
+
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + VERSION)
 
 	parsed = parser.parse_args(argv[1:])
-	return Options(parsed.verbosity, parsed.show_progress, parsed.out_path, parsed.annual)
+	return Options(parsed.verbosity, parsed.show_progress, parsed.out_path
+		, parsed.annual, parsed.daily)
 
 #######################################################################
 # Main Program
@@ -132,7 +139,17 @@ def get_latest_version_and_level(site: str) -> tuple[str, str]:
 			# Otherwise, ignore error and try next version
 			pass
 
-def get_available_files(site: str, version: str, level: str, annual: bool) -> list[str]:
+def get_file_suffix(annual: bool, daily: bool):
+	if annual and daily:
+		raise ValueError(f"Cannot set annual and daily both to true")
+	if annual:
+		return "_Annual"
+	if daily:
+		return "_Daily"
+	return ""
+
+def get_available_files(site: str, version: str, level: str, annual: bool
+						, daily: bool) -> list[str]:
 	"""
 	Get a list of all files available for the specified site, version,
 	and processing level. Returns a list of URLs.
@@ -140,7 +157,8 @@ def get_available_files(site: str, version: str, level: str, annual: bool) -> li
 	download_page_url = "%s/%s/%s/%s/default/catalog.html" % (CATALOG_URL_BASE, site, version, level)
 	download_page = request_string(download_page_url)
 
-	pattern = r"<a href=['\"][^'\"]+(%s[A-Za-z0-9]*_L\d+_\d+_\d+%s\.nc)" % (site, "_Annual" if annual else "")
+	sfx = get_file_suffix(annual, daily)
+	pattern = r"<a href=['\"][^'\"]+(%s[A-Za-z0-9]*_L\d+_\d+_\d+%s\.nc)" % (site, sfx)
 	files = re.findall(pattern, download_page)
 	if len(files) == 0:
 		# Site name may not be in download name. E.g. site "CalperumChowilla" but filenames are "Calperum_L6_*"
@@ -150,13 +168,13 @@ def get_available_files(site: str, version: str, level: str, annual: bool) -> li
 		(DOWNLOAD_URL_BASE, site, version, level, file) \
 		for file in files]
 
-def get_download_url(site: str, annual: bool) -> str:
+def get_download_url(site: str, annual: bool, daily: bool) -> str:
 	"""
 	Get the download URL to the data file for the latest version of the
 	data available for the specified site.
 	"""
 	(version, level) = get_latest_version_and_level(site)
-	files = get_available_files(site, version, level, annual)
+	files = get_available_files(site, version, level, annual, daily)
 
 	# Length should be 1.
 	if len(files) < 1:
@@ -164,7 +182,8 @@ def get_download_url(site: str, annual: bool) -> str:
 
 	return files[-1]
 
-def download(site: str, out_dir: str, annual: bool, pcb: Callable[[float],None]):
+def download(site: str, out_dir: str, annual: bool, daily: bool
+			 , pcb: Callable[[float],None]):
 	"""
 	Download latest version of the data for the specified site into the
 	specified directory.
@@ -175,7 +194,7 @@ def download(site: str, out_dir: str, annual: bool, pcb: Callable[[float],None])
 	@param pcb: Progress callback function.
 	"""
 	# Get URL of the file to be downloaded for this site.
-	url = get_download_url(site, annual)
+	url = get_download_url(site, annual, daily)
 	if url is None:
 		log_warning("Skipping %s as there is no available download" % site)
 		return
@@ -212,7 +231,7 @@ def download(site: str, out_dir: str, annual: bool, pcb: Callable[[float],None])
 				progress = 1.0 * downloaded / total
 				pcb(progress)
 
-def main(out_dir: str, annual: bool):
+def main(out_dir: str, annual: bool, daily: bool):
 	"""
 	Main CLI entrypoint method. Discover and download all available sites.
 
@@ -232,7 +251,8 @@ def main(out_dir: str, annual: bool):
 
 	# Download the files.
 	for i in range(len(sites)):
-		download(sites[i], out_dir, annual, lambda p: log_progress( (i + p) / len(sites)))
+		download(sites[i], out_dir, annual, daily
+		   , lambda p: log_progress( (i + p) / len(sites)))
 
 if __name__ == "__main__":
 	# Parse CLI arguments.
@@ -243,4 +263,4 @@ if __name__ == "__main__":
 	set_show_progress(opts.show_progress)
 
 	# Actual download logic.
-	main(opts.out_dir, opts.annual)
+	main(opts.out_dir, opts.annual, opts.daily)
