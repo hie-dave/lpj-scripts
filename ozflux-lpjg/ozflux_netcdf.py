@@ -202,6 +202,8 @@ class ForcingVariable():
 		self.lbound = lbound
 		self.ubound = ubound
 		self.invert = invert
+	def __repr__(self):
+		return f"{self.in_name} -> {self.out_name} ({self.out_units})"
 
 def zeroes(n: int) -> list[float]:
 	"""
