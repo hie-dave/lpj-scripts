@@ -3,7 +3,7 @@ import multiprocessing, multiprocessing.connection
 import traceback, sys
 from ozflux_common import *
 from ozflux_logging import *
-from netCDF4 import Dataset, Variable, Dimension
+from netCDF4 import Dataset, Variable, Dimension, default_fillvals
 from enum import IntEnum
 from sys import argv
 from typing import Callable
@@ -59,6 +59,9 @@ ATTR_UNITS = "units"
 
 # Name of the 'calendar' attribute (from the CF spec).
 ATTR_CALENDAR = "calendar"
+
+# Name of the 'missing value' attribute (from the CF spec).
+_ATTR_MISSING_VAL = "missing_value"
 
 # Name of the gregorian value of the calendar attribute (from the CF spec).
 CALENDAR_GREGORIAN = "gregorian"
@@ -866,6 +869,8 @@ def create_var_if_not_exists(nc: Dataset, name: str, format: str
 	if not name in nc.variables:
 		nc.createVariable(name, format, dims, compression = compression
 		, complevel = compression_level, chunksizes = chunksizes)
+		var = nc.variables[name]
+		setattr(var, _ATTR_MISSING_VAL, default_fillvals[format])
 
 def create_dim_if_not_exists(nc: Dataset, name: str, size: int = 0):
 	"""
