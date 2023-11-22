@@ -419,7 +419,7 @@ def get_end_date(filename: str) -> datetime.datetime:
 		return num2date(toffset, units, calendar)
 
 def init_outfile(filename: str, infiles: list[str], timestep: int
-		, vars: list[str], compression_level: int, compression_type: str
+		, vars: list[ForcingVariable], compression_level: int, compression_type: str
 		, start_date: datetime.datetime, end_date: datetime.datetime):
 	"""
 	Initialise the output file by creating dimensions and variables as required.
@@ -489,17 +489,12 @@ def init_outfile(filename: str, infiles: list[str], timestep: int
 			    , compression_level, compression_type, chunks)
 
 			with open_netcdf(infiles[0]) as nc_in:
-				in_name = name
-				f = lambda x: name.lower() in x.in_name.lower()
-				in_names = [x.in_name for x in _standard_variables if f(x)]
-				if len(in_names) > 0:
-					in_name = in_names[0]
-				if name in nc_in.variables:
-					var_in = nc_in.variables[in_name]
-					var_out = nc.variables[name]
+				if var.in_name in nc_in.variables:
+					var_in = nc_in.variables[var.in_name]
+					var_out = nc.variables[var.out_name]
 					copy_attr(var_in, var_out, ATTR_STD_NAME)
 					copy_attr(var_in, var_out, ATTR_LONG_NAME)
-					copy_attr(var_in, var_out, ATTR_UNITS)
+					setattr(var_out, ATTR_UNITS, var.out_units)
 
 		# Populate the time variable.
 		dlt = datetime.timedelta(seconds = timestep_seconds)
@@ -1014,9 +1009,6 @@ def main(opts: Options):
 
 	if opts.output_format.lower() == "netcdf":
 		outfile = get_netcdf_output_filename(opts.out_dir)
-		vars: list[str] = [
-			"lai", "gpp", "resp", "nee", "et"
-		]
 		if os.path.exists(outfile):
 			os.remove(outfile)
 		lai_start = min(lai_data[_LAI_COL_DATE])
@@ -1025,6 +1017,8 @@ def main(opts: Options):
 		greenness_end = max(greenness_data[_GREENNESS_COL_DATE])
 		start_date = min(lai_start, greenness_start)
 		end_date = max(lai_end, greenness_end)
+		vars = [v for v in _standard_variables]
+		vars.append(ForcingVariable("lai", "lai", "m2/m2", lambda x: x, 0, 10))
 		init_outfile(outfile, opts.files, opts.timestep, vars
 	      , opts.compression_level, opts.compression_type, start_date, end_date)
 
