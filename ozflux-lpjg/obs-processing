@@ -32,7 +32,7 @@ _VAR_LON = "longitude"
 # number of time points.
 _TIME_CHUNK_SIZE = 366 * 24
 
-_VAR_DIMS   = (DIM_LAT, DIM_LON, DIM_TIME)
+_VAR_DIMS   = (DIM_TIME, DIM_LON, DIM_LAT)
 
 # Total soil profile depth in m.
 _SOIL_DEPTH = 1.5
@@ -378,7 +378,7 @@ def write_netcdf(outfile: str, variables: list[Observations]
 				if not name in nc.variables:
 					create_var_if_not_exists(nc, name, FORMAT_FLOAT, _VAR_DIMS
 						, compression_level, compression_alg
-						, (1, 1, _TIME_CHUNK_SIZE))
+						, (_TIME_CHUNK_SIZE, 1, 1))
 					nc.variables[name].units = obs_var.units
 				var = nc.variables[name]
 				values = [x.value for x in obs_var.data]
@@ -389,7 +389,7 @@ def write_netcdf(outfile: str, variables: list[Observations]
 					dates = [dates]
 				for i in range(0, n, _TIME_CHUNK_SIZE):
 					upper = min(n, i + _TIME_CHUNK_SIZE)
-					var[ilat, ilon, dates[i:upper]] = values[i:upper]
+					var[dates[i:upper], ilon, ilat] = values[i:upper]
 					pcb(upper / n)
 
 def get_start_date(filename: str) -> datetime.datetime:
@@ -451,15 +451,15 @@ def init_outfile(filename: str, infiles: list[str], timestep: int
 		_time_chunk_size = ntime
 
 	with open_netcdf(filename, write = True) as nc:
-		create_dim_if_not_exists(nc, DIM_LAT, num_gridpoints)
-		create_dim_if_not_exists(nc, DIM_LON, num_gridpoints)
 		create_dim_if_not_exists(nc, DIM_TIME)
-		create_var_if_not_exists(nc, _VAR_LAT, FORMAT_FLOAT, (DIM_LAT,)
-			, compression_level, compression_type, (1,))
-		create_var_if_not_exists(nc, _VAR_LON, FORMAT_FLOAT, (DIM_LON,)
-			, compression_level, compression_type, (1,))
+		create_dim_if_not_exists(nc, DIM_LON, num_gridpoints)
+		create_dim_if_not_exists(nc, DIM_LAT, num_gridpoints)
 		create_var_if_not_exists(nc, VAR_TIME, FORMAT_UINT, (DIM_TIME,)
 			, compression_level, compression_type, (_time_chunk_size,))
+		create_var_if_not_exists(nc, _VAR_LON, FORMAT_FLOAT, (DIM_LON,)
+			, compression_level, compression_type, (1,))
+		create_var_if_not_exists(nc, _VAR_LAT, FORMAT_FLOAT, (DIM_LAT,)
+			, compression_level, compression_type, (1,))
 		var_lat = nc.variables[_VAR_LAT]
 		var_lon = nc.variables[_VAR_LON]
 		var_time = nc.variables[VAR_TIME]
@@ -482,10 +482,10 @@ def init_outfile(filename: str, infiles: list[str], timestep: int
 		setattr(var_time, ATTR_CALENDAR, CALENDAR_GREGORIAN)
 
 		# Create data variables.
-		dims =   (DIM_LAT, DIM_LON, DIM_TIME        )
-		chunks = (1      , 1      , _time_chunk_size)
-		for name in vars:
-			create_var_if_not_exists(nc, name, FORMAT_FLOAT, dims
+		dims =   (DIM_TIME        , DIM_LON, DIM_LAT)
+		chunks = (_time_chunk_size, 1      , 1      )
+		for var in vars:
+			create_var_if_not_exists(nc, var.out_name, FORMAT_FLOAT, dims
 			    , compression_level, compression_type, chunks)
 
 			with open_netcdf(infiles[0]) as nc_in:
