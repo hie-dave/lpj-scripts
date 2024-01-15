@@ -1018,7 +1018,7 @@ def main(opts: Options):
 		start_date = min(lai_start, greenness_start)
 		end_date = max(lai_end, greenness_end)
 		vars = [v for v in _standard_variables]
-		vars.append(ForcingVariable("lai", "lai", "m2/m2", lambda x: x, 0, 10))
+		vars.append(ForcingVariable("lai", "lai", "m2/m2", lambda x: x, _LAI_MIN, _LAI_MAX))
 		init_outfile(outfile, opts.files, opts.timestep, vars
 	      , opts.compression_level, opts.compression_type, start_date, end_date)
 
