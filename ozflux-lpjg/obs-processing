@@ -494,7 +494,7 @@ def init_outfile(filename: str, infiles: list[str], timestep: int
 					var_out = nc.variables[var.out_name]
 					copy_attr(var_in, var_out, ATTR_STD_NAME)
 					copy_attr(var_in, var_out, ATTR_LONG_NAME)
-					setattr(var_out, ATTR_UNITS, var.out_units)
+			setattr(var_out, ATTR_UNITS, var.out_units)
 
 		# Populate the time variable.
 		dlt = datetime.timedelta(seconds = timestep_seconds)
