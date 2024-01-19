@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+#
+# This script extracts data for specific gridcells from the crujra-2022 dataset.
+# It also optimises their structure for lpj-guess performance.
+#
+set -euo pipefail
+
+# Get path to current directory.
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+
+# Get path to grid file.
+GRID="${DIR}/grid.csv"
+
+# Path to the crujra dataset.
+CRU_PATH="/scratch/hw83/dh7190/crujra-2022/processed"
+
+# Path to which outputs will be saved.
+OUT_DIR="/scratch/hw83/dh7190/sites"
+
+while read LINE
+do
+    LAT="$(echo "${LINE}" | cut -d, -f1)"
+    LON="$(echo "${LINE}" | cut -d, -f2)"
+    SITE="$(echo "${LINE}" | cut -d, -f3)"
+    echo "Extracing data for ${SITE} (${LON}, ${LAT})..."
+    SITE_OUT="${OUT_DIR}/${SITE}"
+    for NC_IN in "${CRU_PATH}"/*.nc
+    do
+        mkdir -p "${SITE_OUT}"
+        FILE_NAME="$(basename "${NC_IN}")"
+        NC_OUT="${SITE_OUT}/${FILE_NAME}"
+
+        echo "Extracting ${FILE_NAME} data for ${SITE}..."
+
+        # Extract data for this gridcell.
+        # ncks -d lon,${LON} -d lat,${LAT} "${NC_IN}" "${NC_OUT}"
+
+        # CDO likes time as first dimension.
+        echo "Reordering ${FILE_NAME} dimensions for cdo..."
+        ncpdq -O -a time,lat,lon "${NC_OUT}" "${NC_OUT}"
+    done
+
+    echo "Merging variables for ${SITE}..."
+    SITE_NC="${OUT_DIR}/${SITE}.nc"
+    cdo -O merge "${SITE_OUT}"/*.nc "${SITE_NC}"
+
+    # LPJ-Guess runs fastest with time as last dimension.
+    echo "Reordering dimensions for ${SITE}..."
+    ncpdq -O -a lat,lon,time "${SITE_NC}" "${SITE_NC}"
+
+    # LPJ-Guess runs fastest with each chunk holding 1 year of 1 gridcell.
+    # We can also enable compression here. Sadly, nccopy doesn't seem to support
+    # overwriting an existing file.
+    echo "Improving chunking for ${SITE}..."
+    FAST="${SITE_NC/.nc/}_rechunked.nc"
+    nccopy -w -d 5 -c lat/1,lon/1,time/365 "${SITE_NC}" "${FAST}"
+    mv "${FAST}" "${SITE_NC}"
+done <"${GRID}"
+
+echo "Done."
