@@ -439,7 +439,7 @@ cat <<EOF > "${guess_cmd}"
 #PBS -l wd
 #PBS -W umask=0022
 #PBS -S /bin/bash
-#PBS -l storage=gdata/${PROJECT}+scratch/${PROJECT}+scratch/hw83
+#PBS -l storage=gdata/${PROJECT}+scratch/${PROJECT}+scratch/hw83+gdata/pr09+scratch/pr09
 #PBS -l jobfs=40GB
 #PBS -o ${RUN_OUT_DIR}/${JOB_NAME}.log
 #PBS -N ${JOB_NAME}
