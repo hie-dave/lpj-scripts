@@ -16,7 +16,7 @@
 # process forcing data as provided by ClimGrass MIP.
 
 # paths and files
-forcing_path="/g/data/pr09/ClimGrass/forcing"
+forcing_path="/g/data/pr09/ClimGrass/forcing/met"
 files=$(ls ${forcing_path}/*_met.nc)
 
 cd $forcing_path
@@ -56,15 +56,23 @@ for file in ${files} ; do
   ncrename -O -d x,longitude tmp.nc
   ncrename -O -d y,latitude tmp.nc
 
-  # 4) reshuffle dimensions (better for LPJ-GUESS, but does not seem to work in this case)
+  # 4) add standard_name attribute
+  ncatted -O -a standard_name,Precip,c,c,"thickness_of_rainfall_amount" tmp.nc
+  ncatted -O -a standard_name,SWdown,c,c,"surface_downwelling_shortwave_flux_in_air" tmp.nc
+  ncatted -O -a standard_name,CO2air,c,c,"mole_fraction_of_carbon_dioxide_in_air" tmp.nc
+  ncatted -O -a standard_name,Psurf,c,c,"surface_air_pressure" tmp.nc	
+  ncatted -O -a standard_name,Tair,c,c,"air_temperature" tmp.nc	
+  ncatted -O -a standard_name,VPD,c,c,"water_vapor_saturation_deficit_in_air" tmp.nc
+
+  # 5) reshuffle dimensions (better for LPJ-GUESS)
   ncpdq -O -a latitude,longitude,time tmp.nc tmp1.nc
 
-  # 5) reset name
+  # 6) reset name
   mv tmp1.nc ${file}
 
 done
 
 
-# 6) cleanup
+# 7) cleanup
 rm tmp*.nc lat.nc lon.nc
 chmod 775 *.nc
