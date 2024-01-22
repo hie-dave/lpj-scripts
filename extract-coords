@@ -8,14 +8,34 @@ set -euo pipefail
 # Get path to current directory.
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
 
-# Get path to grid file.
+# Get path to grid file. This file must end with a newline character.
 GRID="${DIR}/grid.csv"
 
 # Path to the crujra dataset.
-CRU_PATH="/scratch/hw83/dh7190/crujra-2022/processed"
+CRU_PATH="/home/drew/code/lpj-guess/dave/benchmarks/ozflux/forcing/met/test"
 
 # Path to which outputs will be saved.
-OUT_DIR="/scratch/hw83/dh7190/sites"
+OUT_DIR="${CRU_PATH}"
+
+# Name of the air temperature variable in the dataset (K -> °C).
+VAR_TAV=tav
+
+# Name of the specific humidity variable in the dataset (1).
+VAR_SH=spfh
+
+# Name of the air pressure variable in the dataset (Pa).
+VAR_PA=pres
+
+# Name of the saturation vapour pressure which will be created and calculated
+# from air temperature.
+VAR_ESAT=esat
+
+# Name of the vapour pressure variable which will be created and calculated from
+# specific humidity, air temperature and air pressure.
+VAR_ES=es
+
+# Name of the VPD variable which will be created from es and esat.
+VAR_VPD=vpd
 
 while read LINE
 do
@@ -24,37 +44,78 @@ do
     SITE="$(echo "${LINE}" | cut -d, -f3)"
     echo "Extracing data for ${SITE} (${LON}, ${LAT})..."
     SITE_OUT="${OUT_DIR}/${SITE}"
+
     for NC_IN in "${CRU_PATH}"/*.nc
     do
+        # Temporary hack until we fix ugrd/vgrd files.
+        if echo "${NC_IN}" | grep _compressed >/dev/null 2>&1; then continue; fi
+
         mkdir -p "${SITE_OUT}"
         FILE_NAME="$(basename "${NC_IN}")"
         NC_OUT="${SITE_OUT}/${FILE_NAME}"
 
-        echo "Extracting ${FILE_NAME} data for ${SITE}..."
+        echo "[${SITE}] Extracting ${FILE_NAME}..."
 
         # Extract data for this gridcell.
-        # ncks -d lon,${LON} -d lat,${LAT} "${NC_IN}" "${NC_OUT}"
+        ncks -O -d lon,${LON} -d lat,${LAT} "${NC_IN}" "${NC_OUT}"
 
         # CDO likes time as first dimension.
-        echo "Reordering ${FILE_NAME} dimensions for cdo..."
+        echo "[${SITE}] Reordering ${FILE_NAME} dimensions for cdo..."
         ncpdq -O -a time,lat,lon "${NC_OUT}" "${NC_OUT}"
     done
 
-    echo "Merging variables for ${SITE}..."
+    # Convert air temperature from K to degC.
+    echo "[${SITE}] Fixing air temperature units..."
+    TEMPS="${VAR_TAV} tmax tmin"
+    for FILE in ${TEMPS}
+    do
+        TMP="${SITE_OUT}/${FILE}_fixed.nc"
+        cdo -O subc,273.15 "${SITE_OUT}/${FILE}.nc" "${TMP}"
+        mv "${TMP}" "${SITE_OUT}/${FILE}.nc"
+        ncatted -O -a units,${FILE},o,c,degC "${SITE_OUT}/${FILE}.nc"
+    done
+
+    echo "[${SITE}] Merging variables..."
     SITE_NC="${OUT_DIR}/${SITE}.nc"
     cdo -O merge "${SITE_OUT}"/*.nc "${SITE_NC}"
 
-    # LPJ-Guess runs fastest with time as last dimension.
-    echo "Reordering dimensions for ${SITE}..."
+    # Calculate VPD.
+    echo "[${SITE}] Calculating VPD..."
+    SITE_TMP="$(mktemp --suffix=.nc)"
+    cdo -s -O -L \
+        -aexpr,"${VAR_VPD}=${VAR_ESAT} - ${VAR_ES};" \
+        -aexpr,"${VAR_ES}=${VAR_SH} * (${VAR_PA} / 1000) / (0.378 * ${VAR_SH} + 0.622)" \
+        -aexpr,"${VAR_ESAT}=0.001*611.2*exp((17.62*${VAR_TAV})/(243.04+${VAR_TAV}));" \
+        "${SITE_NC}" "${SITE_TMP}"
+    mv "${SITE_TMP}" "${SITE_NC}"
+
+    # Store metadata for these variables.
+    # Note: esat has no standard name.
+    echo "[${SITE}] Writing metadata..."
+    ncatted -O \
+        -a "units,${VAR_ESAT},o,c,kPa" \
+        -a "long_name,${VAR_ESAT},o,c,Saturation vapour pressure" \
+        -a "units,${VAR_ES},o,c,kPa" \
+        -a "long_name,${VAR_ES},o,c,Vapour pressure" \
+        -a "standard_name,${VAR_ES},o,c,water_vapor_partial_pressure_in_air" \
+        -a "units,${VAR_VPD},o,c,kPa" \
+        -a "long_name,${VAR_VPD},o,c,Vapour pressure deficit" \
+        -a "standard_name,${VAR_VPD},o,c,water_vapor_saturation_deficit_in_air" \
+        "${SITE_NC}"
+
+    # # LPJ-Guess runs fastest with time as last dimension.
+    echo "[${SITE}] Reordering dimensions..."
     ncpdq -O -a lat,lon,time "${SITE_NC}" "${SITE_NC}"
 
     # LPJ-Guess runs fastest with each chunk holding 1 year of 1 gridcell.
     # We can also enable compression here. Sadly, nccopy doesn't seem to support
     # overwriting an existing file.
-    echo "Improving chunking for ${SITE}..."
+    echo "[${SITE}] Improving chunking..."
     FAST="${SITE_NC/.nc/}_rechunked.nc"
     nccopy -w -d 5 -c lat/1,lon/1,time/365 "${SITE_NC}" "${FAST}"
     mv "${FAST}" "${SITE_NC}"
+
+    echo "[${SITE}] Finished."
 done <"${GRID}"
 
 echo "Done."
