@@ -55,9 +55,12 @@ class MetProcessingTask(ozflux_parallel.Task):
 		self.first_date = first_date
 
 	def exec(self, pcb: Callable[[float], None]):
-		process_file(self.infile, self.outfile, self.timestep
-		, self.out_type, self.compression_level, self.compression_type
-		, self.ngridcell, self.first_date, pcb)
+		try:
+			process_file(self.infile, self.outfile, self.timestep
+			, self.out_type, self.compression_level, self.compression_type
+			, self.ngridcell, self.first_date, pcb)
+		except BaseException as err:
+			raise ValueError(f"Failed to process {self.infile}") from err
 
 def six_digit_string(x: float) -> str:
 	"""
@@ -96,13 +99,16 @@ def write_data_dg(nc_out: Dataset, var_name: str, data: list[float], lon: float
 
 	(ilon, ilat) = get_coord_indices(nc_out, lon, lat)
 
-	for i in range(0, n, chunk_size):
-		upper = min(n, i + chunk_size)
-		# Dimension order is lat,lon,time
-		tlow = i + toffset
-		thigh = upper + toffset
-		nc_out.variables[var_name][ilat, ilon, tlow:thigh] = data[i:upper]
-		progress_cb(upper / n)
+	try:
+		for i in range(0, n, chunk_size):
+			upper = min(n, i + chunk_size)
+			# Dimension order is lat,lon,time
+			tlow = i + toffset
+			thigh = upper + toffset
+			nc_out.variables[var_name][ilat, ilon, tlow:thigh] = data[i:upper]
+			progress_cb(upper / n)
+	except BaseException as err:
+		raise ValueError(f"Failed to proces {var_name}") from err
 
 def change_start_minute(datetime: str, minute: int) -> str:
 	"""
