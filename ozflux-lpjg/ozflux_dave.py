@@ -44,6 +44,15 @@ _VPD_UNITS = "kPa"
 # Output units for atmospheric pressure.
 _PS_UNITS = "Pa"
 
+# Name of the wind speed input variable.
+IN_WIND = "Ws"
+
+# Name of the wind speed output variable.
+_OUT_WIND = "wind"
+
+# Output units for wind speed.
+_WIND_UNITS = "m/s"
+
 def temp_var(i: str, o: str, aggregator: Callable[[list[float]], float]) \
 	-> ForcingVariable:
 	"""
@@ -66,8 +75,9 @@ def get_dailygrass_vars(timestep: int) -> list[ForcingVariable]:
 	vpd = ForcingVariable(IN_VPD, _OUT_VPD, _VPD_UNITS, numpy.mean, 0, 100)
 	pressure = ForcingVariable(IN_PS, _OUT_PS, _PS_UNITS, numpy.mean, MIN_PS \
 				, MAX_PS)
+	wind = ForcingVariable(IN_WIND, _OUT_WIND, _WIND_UNITS, numpy.mean, 0, 100)
 
-	vars = [tair, swdown, precip, co2, vpd, pressure]
+	vars = [tair, swdown, precip, co2, vpd, pressure, wind]
 
 	# If generating a daily file, need to include tmax/tmin variables in output.
 	if timestep / MINUTES_PER_HOUR == 24:
