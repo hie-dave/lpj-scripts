@@ -381,6 +381,9 @@ def _get_data(in_file: Dataset \
 			step_start += fixnan_time_proportion
 		fixnan_tot = time.time() - fixnan_start
 
+		# Convert to flat array.
+		data = numpy.array(data).flatten()
+
 		# Change timestep to something suitable for lpj-guess.
 		log_diagnostic("Aggregating %s to output timestep" % in_name)
 		t_agg_start = time.time()
