@@ -524,6 +524,7 @@ def main(opts: Options):
 		for infile in opts.files:
 			first_date = min(first_date, get_file_first_date(infile))
 
+	ngridcell = len(opts.files) if opts.single_outfile else 1
 	for infile in opts.files:
 		if not opts.single_outfile:
 			first_date = get_file_first_date(infile)
@@ -535,7 +536,7 @@ def main(opts: Options):
 			os.remove(outfile)
 
 		job = MetProcessingTask(infile, outfile, opts.timestep, opts.out_type
-			  , opts.compression_level, opts.compression_type, len(opts.files)
+			  , opts.compression_level, opts.compression_type, ngridcell
 			  , first_date)
 
 		job_manager.add_job(job, os.path.getsize(infile))
