@@ -1,0 +1,423 @@
+#!/usr/bin/env python3
+#
+# This script is a faster cdo mergetime command. It merges input files which
+# contain the same data over different time ranges.
+#
+import ozflux_common
+import math
+import traceback
+
+from ozflux_logging import *
+from ozflux_netcdf import *
+from argparse import ArgumentParser
+from sys import argv
+from netCDF4 import Dataset, Dimension
+from typing import Callable
+from ozflux_parallel import JobManager
+from os import path
+
+class Options:
+	"""
+	Class for storing CLI arguments from the user.
+
+	@param log: Log level.
+	@param files: Input files.
+	@param out: Output file.
+	@param prog: True to write progress messages, 0 otherwise.
+	@param parallel: True to process files in parallel.
+	@param chunk_size: Minimum chunk size to be used when copying data.
+	"""
+	def __init__(self, log : LogLevel, files: list[str], out: str, prog: bool,
+		parallel: bool, chunk_size: int):
+		self.log_level = log
+		self.files = files
+		self.out_file = out
+		self.report_progress = prog
+		self.parallel = parallel
+		self.chunk_size = chunk_size
+
+class MergeTime:
+	def __init__(self, filename: str, nc_out: Dataset, min_chunk_size: int):
+		self.filename = filename
+		self.nc_out = nc_out
+		self.min_chunk_size = min_chunk_size
+	def exec(self, pcb: Callable[[float], None]):
+		log_information("Processing '%s'..." % self.filename)
+		with open_netcdf(self.filename) as nc_in:
+			merge_time(nc_in, self.nc_out, self.min_chunk_size, pcb)
+
+def parse_args(argv: list[str]) -> Options:
+	"""
+	Parse CLI arguments, return a parsed options object.
+
+	@param argv: Raw CLI arguments.
+
+	@return Parsed Options object.
+	"""
+	parser = ArgumentParser(prog=argv[0], description = "Formatting ozflux data into a format suitable for consumption by LPJ-Guess")
+	parser.add_argument("-v", "--verbosity", type = int, help = "Logging verbosity (1-5, default 3)", nargs = "?", const = LogLevel.INFORMATION, default = LogLevel.INFORMATION)
+	parser.add_argument("files", nargs = "+", help = "Input .nc files to be processed")
+	parser.add_argument("-o", "--out-file", required = True, help = "Path to the output file.")
+	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
+	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel")
+	parser.add_argument("-c", "--chunk-size", type = int, help = "Minimum chunk size to be used when copying data. If 0, the chunk size of the input data will be used. This does not affect the chunking of the variables in the output file. (default: 0)", default = 0)
+	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
+
+	p = parser.parse_args(argv[1:])
+
+	return Options(p.verbosity, p.files, p.out_file, p.show_progress
+		, p.parallel, p.chunk_size)
+
+def get_nc_datatype(fmt: str) -> str:
+	if fmt == "float64":
+		return FORMAT_FLOAT
+	if fmt == "float32":
+		return FORMAT_SINGLE
+	return fmt
+
+def init_outfile(nc_out: Dataset, infiles: list[str]):
+	"""
+	Initialise the output file by creating dimensions and variables as required.
+
+	@param nc_out: The output file.
+	@param first_infile: The first input file. All other input files must have
+	identical variables and dimensionality to this file.
+	"""
+	if len(infiles) < 1:
+		raise ValueError("No input files")
+
+	first_infile = infiles[0]
+	with open_netcdf(first_infile) as nc_in:
+		log_information("Creating dimensions in output file...")
+		for name in nc_in.dimensions:
+			dim = nc_in.dimensions[name]
+			size = dim.size
+			if name == DIM_TIME:
+				# Make time an unlimited dimension
+				size = 0
+			create_dim_if_not_exists(nc_out, name, size)
+		log_information("Creating variables in output file...")
+		for name in nc_in.variables:
+			var = nc_in.variables[name]
+			dims = var.dimensions
+			fmt = get_nc_datatype(var.datatype)
+			filters = var.filters()
+			# Compression level
+			cl = filters['complevel']
+
+			# Compression type
+			ct = get_compression_type(filters)
+
+			# Chunk size
+			chunking = var.chunking()
+			cs = None if chunking == "contiguous" else tuple(chunking)
+			create_var_if_not_exists(nc_out, name, fmt, dims, cl, ct, cs)
+			var_out = nc_out.variables[name]
+			for attr in var.ncattrs():
+				if not attr[0] == "_":
+					setattr(var_out, attr, getattr(var, attr))
+
+def check_ndims(var, expected):
+	actual = len(var.dimensions)
+	if actual != expected:
+		raise ValueError(f"Unable to copy variable {var.name} as {expected}-dimensional variable: variable has {actual} dimensions")
+
+def append_1d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int, pcb: Callable[[float], None]):
+	"""
+	Append the contents of the specified 1-dimensional variable in the input
+	variable to the variable in the output file.
+
+	@param nc_in: Input netcdf file.
+	@param nc_out: Output netcdf file.
+	@param name: Name of the variable to be copied.
+	@param min_chunk_size: Minimum chunk size used when copying data.
+	@param pcb: Progress reporting function.
+	"""
+	var_in = nc_in.variables[name]
+	var_out = nc_out.variables[name]
+
+	check_ndims(var_in, 1)
+	check_ndims(var_out, 1)
+
+	chunk_size = var_in.chunking()[0]
+	chunk_size = max(chunk_size, min_chunk_size)
+
+	n = len(var_in)
+	nexist = len(var_out)
+	for i in range(0, n, chunk_size):
+		upper = min(n, i + chunk_size)
+		var_out[i + nexist:upper + nexist] = var_in[i:upper]
+		pcb(upper / n)
+
+def append_2d(nc_in: Dataset, nc_out: Dataset, name:str, min_chunk_size: int, pcb: Callable[[float], None]):
+	"""
+	Append the contents of the specified 2-dimensional variable in the input
+	file to the specified 2-dimensional variable in the output file.
+
+	@param nc_in: Input netcdf file.
+	@param nc_out: Output netcdf file.
+	@param name: Name of the variable to be copied.
+	@param min_chunk_size: Minimum chunk size used when copying data.
+	@param pcb: Progress reporting function.
+	"""
+	var_in = nc_in.variables[name]
+	var_out = nc_out.variables[name]
+
+	check_ndims(var_in, 2)
+	check_ndims(var_out, 2)
+
+	dim_names_in = var_in.dimensions
+	dim_names_out = var_out.dimensions
+	nd = len(dim_names_in)
+
+	if nd != len(dim_names_out):
+		m = "Inconsistent dimensionality in variable '%s': input file has %d dimensions (%s), output file has %d dimensions (%s)"
+		raise ValueError(m % (name, nd, ", ".join(dim_names_in), len(dim_names_out), ", ".join(dim_names_out)))
+
+	for i in range(nd):
+		if dim_names_in[i] != dim_names_out[i]:
+			m = "Inconsistent dimension order in variable '%s': dim[%d] in input file is '%s' but in output file it is '%s'"
+			raise ValueError(m % (name, i, dim_names_in[i], dim_names_out[i]))
+
+	dims = [nc_in.dimensions[name] for name in dim_names_in]
+
+	# The chunk size of each dimension in the input file.
+	chunk_sizes = var_in.chunking()
+	chunk_sizes = [max(min_chunk_size, cs) for cs in chunk_sizes]
+
+	# The length of each dimension in the input file.
+	shape = var_in.shape
+
+	# The number of iterations required for each dimension, given the above
+	# chunk sizes.
+	niter = [math.ceil(s / c) for (s, c) in zip(shape, chunk_sizes)]
+
+	# Total number of iterations required.
+	it_max = niter[0] * niter[1]
+
+	# The current iteration.
+	it = 0
+
+	# The offset into the output file's time dimension occupied by the data
+	# being copied from the current input file.
+	time_offset = nc_out.dimensions[DIM_TIME].size - nc_in.dimensions[DIM_TIME].size
+
+	# These tell us whether we can use the same indices in the input and output
+	# files for a particular dimension. This will be true for spatial dimensions
+	# (which are assumed to be identical between files) and it will be false for
+	# temporal dimensions (which is the dimension being appended).
+	offseti = time_offset if dims[0].name == DIM_TIME else 0
+	offsetj = time_offset if dims[1].name == DIM_TIME else 0
+
+	for i in range(niter[0]):
+		# ilow/ihigh are the indices used for reading data.
+		# ir are the indices used for writing data.
+
+		# Start index for this iteration on the i-th dimension.
+		ilow = i * chunk_sizes[0]
+
+		# End index for this iteration on the i-th dimension.
+		ihigh = min(shape[0], ilow + chunk_sizes[0])
+
+		# Index range for the i-th dimension.
+		ir = range(ilow + offseti, ihigh + offseti)
+
+		for j in range(niter[1]):
+			# jlow/jhigh are the indices used for reading data.
+			# jr are the indices used for writing data.
+
+			# Start index for this iteration of the j-th dimension.
+			jlow = j * chunk_sizes[1]
+
+			#  End index for this iteration on the j-th dimension.
+			jhigh = min(shape[1], jlow + chunk_sizes[1])
+
+			# Index range for the j-th dimension.
+			jr = range(jlow + offsetj, jhigh + offsetj)
+
+			# Copy the data.
+			var_out[ir, jr] = var_in[ilow:ihigh, jlow:jhigh]
+
+			# Progress tracking/reporting.
+			it += 1
+			pcb(it / it_max)
+
+def append_3d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int, pcb: Callable[[float], None]):
+	"""
+	Append the contents of the specified 3-dimensional variable in the input
+	file to the specified 3-dimensional variable in the output file.
+
+	@param nc_in: Input netcdf file.
+	@param nc_out: Output netcdf file.
+	@param name: Name of the variable to be copied.
+	@param min_chunk_size: Minimum chunk size used when copying data.
+	@param pcb: Progress reporting function.
+	"""
+	var_in = nc_in.variables[name]
+	var_out = nc_out.variables[name]
+
+	check_ndims(var_in, 3)
+	check_ndims(var_out, 3)
+
+	dim_names_in = var_in.dimensions
+	dim_names_out = var_out.dimensions
+	nd = len(dim_names_in)
+
+	if nd != len(dim_names_out):
+		m = "Inconsistent dimensionality in variable '%s': input file has %d dimensions (%s), output file has %d dimensions (%s)"
+		raise ValueError(m % (name, nd, ", ".join(dim_names_in), len(dim_names_out), ", ".join(dim_names_out)))
+
+	for i in range(nd):
+		if dim_names_in[i] != dim_names_out[i]:
+			m = "Inconsistent dimension order in variable '%s': dim[%d] in input file is '%s' but in output file it is '%s'"
+			raise ValueError(m % (name, i, dim_names_in[i], dim_names_out[i]))
+
+	dims = [nc_in.dimensions[name] for name in dim_names_in]
+
+	# The chunk size of each dimension in the input file.
+	chunk_sizes = var_in.chunking()
+	chunk_sizes = [max(min_chunk_size, cs) for cs in chunk_sizes]
+
+	# The length of each dimension in the input file.
+	shape = var_in.shape
+
+	# The number of iterations required for each dimension, given the above
+	# chunk sizes.
+	niter = [math.ceil(s / c) for (s, c) in zip(shape, chunk_sizes)]
+
+	# Total number of iterations required.
+	it_max = niter[0] * niter[1] * niter[2]
+
+	# The current iteration.
+	it = 0
+
+	time_offset = nc_out.dimensions[DIM_TIME].size - nc_in.dimensions[DIM_TIME].size
+
+	# These tell us whether we can use the same indices in the input and output
+	# files for a particular dimension. This will be true for spatial dimensions
+	# (which are assumed to be identical between files) and it will be false for
+	# temporal dimensions (which is the dimension being appended).
+	offseti = time_offset if dims[0].name == DIM_TIME else 0
+	offsetj = time_offset if dims[1].name == DIM_TIME else 0
+	offsetk = time_offset if dims[2].name == DIM_TIME else 0
+
+	for i in range(niter[0]):
+		# ilow/ihigh are the indices used for reading data.
+		# ir are the indices used for writing data.
+
+		# Start index for this iteration on the i-th dimension.
+		ilow = i * chunk_sizes[0]
+
+		# End index for this iteration on the i-th dimension.
+		ihigh = min(shape[0], ilow + chunk_sizes[0])
+
+		# Index range for the i-th dimension.
+		ir = range(ilow + offseti, ihigh + offseti)
+
+		for j in range(niter[1]):
+			# jlow/jhigh are the indices used for reading data.
+			# jr are the indices used for writing data.
+
+			# Start index for this iteration on the j-th dimension.
+			jlow = j * chunk_sizes[1]
+
+			# End index for this iteration on the j-th dimension.
+			jhigh = min(shape[1], jlow + chunk_sizes[1])
+
+			# Index range for the j-th dimension.
+			jr = range(jlow + offsetj, jhigh + offsetj)
+
+			for k in range(niter[2]):
+				# klow/khigh are the indices used for reading data.
+				# kr are the indices used for writing data.
+
+				# Start index for this iteration on the k-th dimension.
+				klow = k * chunk_sizes[2]
+
+				# End index for this iteration on the k-th dimension.
+				khigh = min(shape[2], klow + chunk_sizes[2])
+
+				# Index range for the k-th dimension.
+				kr = range(klow + offsetk, khigh + offsetk)
+
+				# Copy the data.
+				var_out[ir, jr, kr] = var_in[ilow:ihigh, jlow:jhigh, klow:khigh]
+
+				# Progress tracking/reporting.
+				it += 1
+				pcb(it / it_max)
+
+def merge_time(nc_in: Dataset, nc_out: Dataset, min_chunk_size: int, pcb: Callable[[float], None]):
+    # Copy time dimension.
+	time_units_in = getattr(nc_in.variables[VAR_TIME], ATTR_UNITS)
+	time_units_out = getattr(nc_out.variables[VAR_TIME], ATTR_UNITS)
+	if time_units_in != time_units_out:
+		raise ValueError(f"Time units in {nc_in} ({time_units_in}) do not match those in the output file ({time_units_out})")
+
+	append_1d(nc_in, nc_out, VAR_TIME, min_chunk_size, lambda p: ...)
+
+	nvar = len([name for name in nc_in.variables if not name in nc_in.dimensions])
+	start = 0
+	step = 1.0 / nvar
+	for name in nc_in.variables:
+		if name in nc_in.dimensions:
+			continue
+
+		var_in = nc_in.variables[name]
+		ndim = len(var_in.dimensions)
+		prog = lambda p: pcb(start + step * p)
+
+		if ndim > 3:
+			raise ValueError(f"{ndim}-dimensional variable encountered: {name}. >3 dimensions is not supported")
+		elif ndim == 3:
+			# Typical spatial variables.
+			append_3d(nc_in, nc_out, name, min_chunk_size, prog)
+		elif ndim == 2:
+			# Boundary variable (time_bnds)
+			append_2d(nc_in, nc_out, name, min_chunk_size, prog)
+		elif ndim == 1:
+			# This should never be hit
+			log_warning(f"Appending 1-dimensional variable {name}")
+			append_1d(nc_in, nc_out, name, min_chunk_size, prog)
+
+		start += step
+		pcb(start)
+
+def main(opts: Options):
+	"""
+	Main function.
+
+	@param opts: Parsed CLI options provided by the user..
+	"""
+
+	if len(opts.files) < 1:
+		return
+
+	# Delete output file if it already exists.
+	if os.path.exists(opts.out_file):
+		os.remove(opts.out_file)
+
+	job_manager = JobManager()
+
+	with open_netcdf(opts.out_file, write = True) as nc_out:
+		init_outfile(nc_out, opts.files)
+		# todo: order by start time ascending?
+		for file in opts.files:
+			job_manager.add_job(MergeTime(file, nc_out, opts.chunk_size), path.getsize(file))
+		job_manager.run_single_threaded()
+
+if __name__ == "__main__":
+	# Parse CLI args
+	opts = parse_args(argv)
+
+	set_log_level(opts.log_level)
+	set_show_progress(opts.report_progress)
+
+	try:
+		# Actual logic is in main().
+		main(opts)
+		print("\nFiles merged successfully!")
+	except BaseException as error:
+		# Basic error handling.
+		log_error(traceback.format_exc())
+		exit(1)
