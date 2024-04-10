@@ -34,6 +34,9 @@ _warnings_as_errors = False
 _start_time: datetime.datetime
 _start_time = datetime.datetime.now()
 
+_progress_end: str
+_progress_end = "\r" if sys.stdout.isatty() else "\n"
+
 def set_warnings_as_errors(warnings_as_errors: bool):
 	"""
 	Treat all warnings as errors (true to enable, false to disable).
@@ -117,6 +120,7 @@ def log_progress(progress: float):
 	"""
 	global _show_progress
 	global _start_time
+	global _progress_end
 	if progress > 1:
 		log_warning("Attempted to display progress > 1")
 
@@ -128,4 +132,4 @@ def log_progress(progress: float):
 	remaining = remaining - datetime.timedelta(microseconds = remaining.microseconds)
 
 	if _show_progress:
-		print("Working: %.2f%%; elapsed: %s; remaining: %s               \r" % (100 * progress, elapsed, remaining), end = "")
+		print("Working: %.2f%%; elapsed: %s; remaining: %s               " % (100 * progress, elapsed, remaining), end = _progress_end)
