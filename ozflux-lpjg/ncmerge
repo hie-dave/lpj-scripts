@@ -22,6 +22,7 @@ _STD_LAT = "latitude"
 
 # Standard name for the longitude dimension (from the CF spec).
 _STD_LON = "longitude"
+
 # Standard name for the time dimension (from the CF spec).
 _STD_TIME = "time"
 
@@ -75,157 +76,6 @@ class Merger:
 		with open_netcdf(self.filename) as nc_in:
 			copy(nc_in, self.nc_out, pcb)
 
-def get_dimension_indices(nc_in: Dataset, nc_out: Dataset, name: str
-	, low: int, high: int) -> list[int]:
-	"""
-	Get the dimension indices in the output file which correspond to the
-	dimension indices in the input file within the specified range.
-
-	@param nc_in: Input .nc file.
-	@param nc_out: Output .nc file.
-	@param name: Dimension name.
-	@param low: Start of the desired dimension index range.
-	@param high: End of the desired dimension index range.
-	"""
-
-	##### fixme: hi drew: dimension can have different name to the variable (e.g. time_bnds has dimension bnds. glhf! :)
-	values = nc_in.variables[name][low:high]
-	return [get_dimension_index(nc_out, value, name) for value in values]
-
-def copy_3d(nc_in: Dataset, nc_out: Dataset, name: str
-		, pcb: Callable[[float], None]):
-	"""
-	Copy the contents of the specified variable in the input file into the
-	output file.
-
-	@param nc_in: The input .nc file.
-	@param nc_out: The output .nc file.
-	@param name: The name of the variable to be copied.
-	@param pcb: Progress callback function.
-	"""
-	var_in = nc_in.variables[name]
-	var_out = nc_out.variables[name]
-
-	dim_names_in = var_in.dimensions
-	dim_names_out = var_out.dimensions
-	nd = len(dim_names_in)
-
-	if nd != len(dim_names_out):
-		m = "Inconsistent dimensionality in variable '%s': input file has %d dimensions (%s), output file has %d dimensions (%s)"
-		raise ValueError(m % (name, nd, ", ".join(dim_names_in), len(dim_names_out), ", ".join(dim_names_out)))
-
-	for i in range(nd):
-		if dim_names_in[i] != dim_names_out[i]:
-			m = "Inconsistent dimension order in variable '%s': dim[%d] in input file is '%s' but in output file it is '%s'"
-			raise ValueError(m % (name, i, dim_names_in[i], dim_names_out[i]))
-
-	dims = [nc_in.dimensions[name] for name in dim_names_in]
-
-	chunk_sizes = var_in.chunking()
-	shape = var_in.shape
-	niter = [math.ceil(s / c) for (s, c) in zip(shape, chunk_sizes)]
-
-	it_max = niter[0] * niter[1] * niter[2]
-	it = 0
-	samei = False
-	samej = False
-	samek = False
-	for i in range(niter[0]):
-		ilow = i * chunk_sizes[0]
-		ihigh = min(shape[0], ilow + chunk_sizes[0])
-		ir = range(ilow, ihigh) if samei else get_dimension_indices(nc_in, nc_out, dims[0].name, ilow, ihigh)
-		if not samei and ir[0] == ilow and ir[len(ir) - 1] == ihigh - 1:
-			samei = True
-		for j in range(niter[1]):
-			jlow = j * chunk_sizes[1]
-			jhigh = min(shape[1], jlow + chunk_sizes[1])
-			jr = range(jlow, jhigh) if samej else get_dimension_indices(nc_in, nc_out, dims[1].name, jlow, jhigh)
-			if not samej and jr[0] == jlow and jr[len(jr) - 1] == jhigh - 1:
-				samej = True
-			for k in range(niter[2]):
-				klow = k * chunk_sizes[2]
-				khigh = min(shape[2], klow + chunk_sizes[2])
-				kr = range(klow, khigh) if samek else get_dimension_indices(nc_in, nc_out, dims[2].name, klow, khigh)
-				if not samek and kr[0] == klow and kr[len(kr) - 1] == khigh - 1:
-					samek = True
-				var_out[ir, jr, kr] = var_in[ilow:ihigh, jlow:jhigh, klow:khigh]
-				it += 1
-				pcb(it / it_max)
-
-def copy_2d(nc_in: Dataset, nc_out: Dataset, name: str
-		, pcb: Callable[[float], None]):
-	"""
-	Copy the contents of the specified variable in the input file into the
-	output file.
-
-	@param nc_in: The input .nc file.
-	@param nc_out: The output .nc file.
-	@param name: The name of the variable to be copied.
-	@param pcb: Progress callback function.
-	"""
-	var_in = nc_in.variables[name]
-	var_out = nc_out.variables[name]
-
-	dim_names_in = var_in.dimensions
-	dim_names_out = var_out.dimensions
-	nd = len(dim_names_in)
-
-	if nd != len(dim_names_out):
-		m = "Inconsistent dimensionality in variable '%s': input file has %d dimensions (%s), output file has %d dimensions (%s)"
-		raise ValueError(m % (name, nd, ", ".join(dim_names_in), len(dim_names_out), ", ".join(dim_names_out)))
-
-	for i in range(nd):
-		if dim_names_in[i] != dim_names_out[i]:
-			m = "Inconsistent dimension order in variable '%s': dim[%d] in input file is '%s' but in output file it is '%s'"
-			raise ValueError(m % (name, i, dim_names_in[i], dim_names_out[i]))
-
-	dims = [nc_in.dimensions[name] for name in dim_names_in]
-
-	chunk_sizes = var_in.chunking()
-	shape = var_in.shape
-	niter = [math.ceil(s / c) for (s, c) in zip(shape, chunk_sizes)]
-
-	it_max = niter[0] * niter[1]
-	it = 0
-	samei = False
-	samej = False
-	for i in range(niter[0]):
-		ilow = i * chunk_sizes[0]
-		ihigh = min(shape[0], ilow + chunk_sizes[0])
-		ir = range(ilow, ihigh) if samei else get_dimension_indices(nc_in, nc_out, dims[0].name, ilow, ihigh)
-		if not samei and ir[0] == ilow and ir[len(ir) - 1] == ihigh - 1:
-			samei = True
-		for j in range(niter[1]):
-			jlow = j * chunk_sizes[1]
-			jhigh = min(shape[1], jlow + chunk_sizes[1])
-			jr = range(jlow, jhigh) if samej or not dims[1].name in nc_in.variables else get_dimension_indices(nc_in, nc_out, dims[1].name, jlow, jhigh)
-			if not samej and jr[0] == jlow and jr[len(jr) - 1] == jhigh - 1:
-				samej = True
-			var_out[ir, jr] = var_in[ilow:ihigh, jlow:jhigh]
-			it += 1
-			pcb(it / it_max)
-
-
-def copy_1d(nc_in: Dataset, nc_out: Dataset, name: str
-		, pcb: Callable[[float], None]):
-	"""
-	Copy the contents of the specified variable in the input file into the
-	output file.
-
-	@param nc_in: The input .nc file.
-	@param nc_out: The output .nc file.
-	@param name: The name of the variable to be copied.
-	@param pcb: Progress callback function.
-	"""
-	var_in = nc_in.variables[name]
-	var_out = nc_out.variables[name]
-	chunk_size = var_in.chunking()[0]
-	n = len(var_in)
-	for i in range(0, n, chunk_size):
-		upper = min(n, i + chunk_size)
-		var_out[i:upper] = var_in[i:upper]
-		pcb(upper / n)
-
 def copy(nc_in: Dataset, nc_out: Dataset, pcb: Callable[[float], None]):
 	"""
 	Copy the contents of the input file into the output file.
@@ -250,19 +100,6 @@ def copy(nc_in: Dataset, nc_out: Dataset, pcb: Callable[[float], None]):
 
 		start += step
 		pcb(start)
-
-def get_compression_type(filters: dict) -> str:
-	"""
-	Determine the compression algorithm used for a variable, given that
-	variables filters.
-
-	@param filters: The variable filters, obtained by variable.filters().
-	"""
-	types = ["zlib", "szip", "zstd", "bzip2", "blosc", "fletcher32"]
-	for compression_type in types:
-		if filters[compression_type]:
-			return compression_type
-	return ""
 
 def get_dim_from_std_name(nc, standard_name) -> Dimension:
 	"""
