@@ -1,6 +1,7 @@
 # Logging utility functions.
 
 import enum, sys
+import datetime
 from io import TextIOWrapper
 
 # Maximum length of a progress message. ie how many characters are used
@@ -29,6 +30,9 @@ _show_progress = False
 
 _warnings_as_errors: bool
 _warnings_as_errors = False
+
+_start_time: datetime.datetime
+_start_time = datetime.datetime.now()
 
 def set_warnings_as_errors(warnings_as_errors: bool):
 	"""
@@ -112,7 +116,16 @@ def log_progress(progress: float):
 	Write a progress message.
 	"""
 	global _show_progress
+	global _start_time
 	if progress > 1:
 		log_warning("Attempted to display progress > 1")
+
+	current_time = datetime.datetime.now()
+	elapsed = current_time - _start_time
+	elapsed = elapsed - datetime.timedelta(microseconds = elapsed.microseconds)
+	total = elapsed / progress
+	remaining = total - elapsed
+	remaining = remaining - datetime.timedelta(microseconds = remaining.microseconds)
+
 	if _show_progress:
-		print("Working: %.2f%%\r" % (100 * progress), end = "")
+		print("Working: %.2f%%; elapsed: %s; remaining: %s               \r" % (100 * progress, elapsed, remaining), end = "")
