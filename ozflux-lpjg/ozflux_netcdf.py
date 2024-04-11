@@ -1020,7 +1020,7 @@ def get_dimension_indices(nc_in: Dataset, nc_out: Dataset, name: str
 	var = nc_out.variables[name]
 	return [get_coord_index(dim, var, value) for value in values]
 
-def copy_3d(nc_in: Dataset, nc_out: Dataset, name: str
+def copy_3d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
 		, pcb: Callable[[float], None]):
 	"""
 	Copy the contents of the specified variable in the input file into the
@@ -1029,6 +1029,7 @@ def copy_3d(nc_in: Dataset, nc_out: Dataset, name: str
 	@param nc_in: The input .nc file.
 	@param nc_out: The output .nc file.
 	@param name: The name of the variable to be copied.
+	@param min_chunk_size: Minimum chunk size used when copying data.
 	@param pcb: Progress callback function.
 	"""
 	var_in = nc_in.variables[name]
@@ -1050,6 +1051,7 @@ def copy_3d(nc_in: Dataset, nc_out: Dataset, name: str
 	dims = [nc_in.dimensions[name] for name in dim_names_in]
 
 	chunk_sizes = var_in.chunking()
+	chunk_sizes = [max(min_chunk_size, c) for c in chunk_sizes]
 	shape = var_in.shape
 	niter = [math.ceil(s / c) for (s, c) in zip(shape, chunk_sizes)]
 
@@ -1080,7 +1082,7 @@ def copy_3d(nc_in: Dataset, nc_out: Dataset, name: str
 				it += 1
 				pcb(it / it_max)
 
-def copy_2d(nc_in: Dataset, nc_out: Dataset, name: str
+def copy_2d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
 		, pcb: Callable[[float], None]):
 	"""
 	Copy the contents of the specified variable in the input file into the
@@ -1089,6 +1091,7 @@ def copy_2d(nc_in: Dataset, nc_out: Dataset, name: str
 	@param nc_in: The input .nc file.
 	@param nc_out: The output .nc file.
 	@param name: The name of the variable to be copied.
+	@param min_chunk_size: Minimum chunk size used when copying data.
 	@param pcb: Progress callback function.
 	"""
 	var_in = nc_in.variables[name]
@@ -1110,6 +1113,7 @@ def copy_2d(nc_in: Dataset, nc_out: Dataset, name: str
 	dims = [nc_in.dimensions[name] for name in dim_names_in]
 
 	chunk_sizes = var_in.chunking()
+	chunk_sizes = [max(min_chunk_size, c) for c in chunk_sizes]
 	shape = var_in.shape
 	niter = [math.ceil(s / c) for (s, c) in zip(shape, chunk_sizes)]
 
@@ -1134,7 +1138,7 @@ def copy_2d(nc_in: Dataset, nc_out: Dataset, name: str
 			pcb(it / it_max)
 
 
-def copy_1d(nc_in: Dataset, nc_out: Dataset, name: str
+def copy_1d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
 		, pcb: Callable[[float], None]):
 	"""
 	Copy the contents of the specified variable in the input file into the
@@ -1143,13 +1147,289 @@ def copy_1d(nc_in: Dataset, nc_out: Dataset, name: str
 	@param nc_in: The input .nc file.
 	@param nc_out: The output .nc file.
 	@param name: The name of the variable to be copied.
+	@param min_chunk_size: Minimum chunk size used when copying data.
 	@param pcb: Progress callback function.
 	"""
 	var_in = nc_in.variables[name]
 	var_out = nc_out.variables[name]
 	chunk_size = var_in.chunking()[0]
+	if var_in.chunking() == "contiguous":
+		if min_chunk_size == 0:
+			chunk_size = 64
+		else:
+			chunk_size = min_chunk_size
+	else:
+		chunk_size = max(min_chunk_size, chunk_size)
 	n = len(var_in)
 	for i in range(0, n, chunk_size):
 		upper = min(n, i + chunk_size)
 		var_out[i:upper] = var_in[i:upper]
 		pcb(upper / n)
+
+def _check_ndims(var, expected):
+	actual = len(var.dimensions)
+	if actual != expected:
+		raise ValueError(f"Unable to copy variable {var.name} as {expected}-dimensional variable: variable has {actual} dimensions")
+
+def _append_1d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int, pcb: Callable[[float], None]):
+	"""
+	Append (along the time axis) the contents of the specified 1-dimensional
+	variable in the input file to the variable in the output file.
+
+	This assumes that the input data is temporally adjacent to the data in the
+	output file (if indeed there is any data in the output file).
+
+	@param nc_in: Input netcdf file.
+	@param nc_out: Output netcdf file.
+	@param name: Name of the variable to be copied.
+	@param min_chunk_size: Minimum chunk size used when copying data.
+	@param pcb: Progress reporting function.
+	"""
+	var_in = nc_in.variables[name]
+	var_out = nc_out.variables[name]
+
+	_check_ndims(var_in, 1)
+	_check_ndims(var_out, 1)
+
+	chunk_size = var_in.chunking()[0]
+	chunk_size = max(chunk_size, min_chunk_size)
+
+	n = len(var_in)
+	nexist = len(var_out)
+	for i in range(0, n, chunk_size):
+		upper = min(n, i + chunk_size)
+		var_out[i + nexist:upper + nexist] = var_in[i:upper]
+		pcb(upper / n)
+
+def _append_2d(nc_in: Dataset, nc_out: Dataset, name:str, min_chunk_size: int, pcb: Callable[[float], None]):
+	"""
+	Append (along the time axis) the contents of the specified 2-dimensional
+	variable in the input file to the variable in the output file.
+
+	This assumes that the input data is temporally adjacent to the data in the
+	output file (if indeed there is any data in the output file).
+
+	@param nc_in: Input netcdf file.
+	@param nc_out: Output netcdf file.
+	@param name: Name of the variable to be copied.
+	@param min_chunk_size: Minimum chunk size used when copying data.
+	@param pcb: Progress reporting function.
+	"""
+	var_in = nc_in.variables[name]
+	var_out = nc_out.variables[name]
+
+	_check_ndims(var_in, 2)
+	_check_ndims(var_out, 2)
+
+	dim_names_in = var_in.dimensions
+	dim_names_out = var_out.dimensions
+	nd = len(dim_names_in)
+
+	if nd != len(dim_names_out):
+		m = "Inconsistent dimensionality in variable '%s': input file has %d dimensions (%s), output file has %d dimensions (%s)"
+		raise ValueError(m % (name, nd, ", ".join(dim_names_in), len(dim_names_out), ", ".join(dim_names_out)))
+
+	for i in range(nd):
+		if dim_names_in[i] != dim_names_out[i]:
+			m = "Inconsistent dimension order in variable '%s': dim[%d] in input file is '%s' but in output file it is '%s'"
+			raise ValueError(m % (name, i, dim_names_in[i], dim_names_out[i]))
+
+	dims = [nc_in.dimensions[name] for name in dim_names_in]
+
+	# The chunk size of each dimension in the input file.
+	chunk_sizes = var_in.chunking()
+	chunk_sizes = [max(min_chunk_size, cs) for cs in chunk_sizes]
+
+	# The length of each dimension in the input file.
+	shape = var_in.shape
+
+	# The number of iterations required for each dimension, given the above
+	# chunk sizes.
+	niter = [math.ceil(s / c) for (s, c) in zip(shape, chunk_sizes)]
+
+	# Total number of iterations required.
+	it_max = niter[0] * niter[1]
+
+	# The current iteration.
+	it = 0
+
+	# The offset into the output file's time dimension occupied by the data
+	# being copied from the current input file.
+	time_offset = nc_out.dimensions[DIM_TIME].size - nc_in.dimensions[DIM_TIME].size
+
+	# These tell us whether we can use the same indices in the input and output
+	# files for a particular dimension. This will be true for spatial dimensions
+	# (which are assumed to be identical between files) and it will be false for
+	# temporal dimensions (which is the dimension being appended).
+	offseti = time_offset if dims[0].name == DIM_TIME else 0
+	offsetj = time_offset if dims[1].name == DIM_TIME else 0
+
+	for i in range(niter[0]):
+		# ilow/ihigh are the indices used for reading data.
+		# ir are the indices used for writing data.
+
+		# Start index for this iteration on the i-th dimension.
+		ilow = i * chunk_sizes[0]
+
+		# End index for this iteration on the i-th dimension.
+		ihigh = min(shape[0], ilow + chunk_sizes[0])
+
+		# Index range for the i-th dimension.
+		ir = range(ilow + offseti, ihigh + offseti)
+
+		for j in range(niter[1]):
+			# jlow/jhigh are the indices used for reading data.
+			# jr are the indices used for writing data.
+
+			# Start index for this iteration of the j-th dimension.
+			jlow = j * chunk_sizes[1]
+
+			#  End index for this iteration on the j-th dimension.
+			jhigh = min(shape[1], jlow + chunk_sizes[1])
+
+			# Index range for the j-th dimension.
+			jr = range(jlow + offsetj, jhigh + offsetj)
+
+			# Copy the data.
+			var_out[ir, jr] = var_in[ilow:ihigh, jlow:jhigh]
+
+			# Progress tracking/reporting.
+			it += 1
+			pcb(it / it_max)
+
+def _append_3d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int, pcb: Callable[[float], None]):
+	"""
+	Append (along the time axis) the contents of the specified 3-dimensional
+	variable in the input file to the variable in the output file.
+
+	This assumes that the input data is temporally adjacent to the data in the
+	output file (if indeed there is any data in the output file).
+
+	@param nc_in: Input netcdf file.
+	@param nc_out: Output netcdf file.
+	@param name: Name of the variable to be copied.
+	@param min_chunk_size: Minimum chunk size used when copying data.
+	@param pcb: Progress reporting function.
+	"""
+	var_in = nc_in.variables[name]
+	var_out = nc_out.variables[name]
+
+	_check_ndims(var_in, 3)
+	_check_ndims(var_out, 3)
+
+	dim_names_in = var_in.dimensions
+	dim_names_out = var_out.dimensions
+	nd = len(dim_names_in)
+
+	if nd != len(dim_names_out):
+		m = "Inconsistent dimensionality in variable '%s': input file has %d dimensions (%s), output file has %d dimensions (%s)"
+		raise ValueError(m % (name, nd, ", ".join(dim_names_in), len(dim_names_out), ", ".join(dim_names_out)))
+
+	for i in range(nd):
+		if dim_names_in[i] != dim_names_out[i]:
+			m = "Inconsistent dimension order in variable '%s': dim[%d] in input file is '%s' but in output file it is '%s'"
+			raise ValueError(m % (name, i, dim_names_in[i], dim_names_out[i]))
+
+	dims = [nc_in.dimensions[name] for name in dim_names_in]
+
+	# The chunk size of each dimension in the input file.
+	chunk_sizes = var_in.chunking()
+	chunk_sizes = [max(min_chunk_size, cs) for cs in chunk_sizes]
+
+	# The length of each dimension in the input file.
+	shape = var_in.shape
+
+	# The number of iterations required for each dimension, given the above
+	# chunk sizes.
+	niter = [math.ceil(s / c) for (s, c) in zip(shape, chunk_sizes)]
+
+	# Total number of iterations required.
+	it_max = niter[0] * niter[1] * niter[2]
+
+	# The current iteration.
+	it = 0
+
+	time_offset = nc_out.dimensions[DIM_TIME].size - nc_in.dimensions[DIM_TIME].size
+
+	# These tell us whether we can use the same indices in the input and output
+	# files for a particular dimension. This will be true for spatial dimensions
+	# (which are assumed to be identical between files) and it will be false for
+	# temporal dimensions (which is the dimension being appended).
+	offseti = time_offset if dims[0].name == DIM_TIME else 0
+	offsetj = time_offset if dims[1].name == DIM_TIME else 0
+	offsetk = time_offset if dims[2].name == DIM_TIME else 0
+
+	for i in range(niter[0]):
+		# ilow/ihigh are the indices used for reading data.
+		# ir are the indices used for writing data.
+
+		# Start index for this iteration on the i-th dimension.
+		ilow = i * chunk_sizes[0]
+
+		# End index for this iteration on the i-th dimension.
+		ihigh = min(shape[0], ilow + chunk_sizes[0])
+
+		# Index range for the i-th dimension.
+		ir = range(ilow + offseti, ihigh + offseti)
+
+		for j in range(niter[1]):
+			# jlow/jhigh are the indices used for reading data.
+			# jr are the indices used for writing data.
+
+			# Start index for this iteration on the j-th dimension.
+			jlow = j * chunk_sizes[1]
+
+			# End index for this iteration on the j-th dimension.
+			jhigh = min(shape[1], jlow + chunk_sizes[1])
+
+			# Index range for the j-th dimension.
+			jr = range(jlow + offsetj, jhigh + offsetj)
+
+			for k in range(niter[2]):
+				# klow/khigh are the indices used for reading data.
+				# kr are the indices used for writing data.
+
+				# Start index for this iteration on the k-th dimension.
+				klow = k * chunk_sizes[2]
+
+				# End index for this iteration on the k-th dimension.
+				khigh = min(shape[2], klow + chunk_sizes[2])
+
+				# Index range for the k-th dimension.
+				kr = range(klow + offsetk, khigh + offsetk)
+
+				# Copy the data.
+				chunk = var_in[ilow:ihigh, jlow:jhigh, klow:khigh]
+				var_out[ir, jr, kr] = chunk
+
+				# Progress tracking/reporting.
+				it += 1
+				pcb(it / it_max)
+
+def append_time(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
+				, pcb: Callable[[float], None]):
+	"""
+	Append (along the time axis) the contents of the specified variable in the
+	input file to the variable in the output file.
+
+	This assumes that the input data is temporally adjacent to the data in the
+	output file (if indeed there is any data in the output file).
+
+	@param nc_in: Input netcdf file.
+	@param nc_out: Output netcdf file.
+	@param name: Name of the variable to be copied.
+	@param min_chunk_size: Minimum chunk size used when copying data.
+	@param pcb: Progress reporting function.
+	"""
+	ndim = len(nc_in.variables[name].dimensions)
+	if ndim > 3:
+		raise ValueError(f"{ndim}-dimensional variable encountered: {name}. >3 dimensions is not supported")
+	elif ndim == 3:
+		# Typical spatial variables.
+		_append_3d(nc_in, nc_out, name, min_chunk_size, pcb)
+	elif ndim == 2:
+		# Boundary variable (time_bnds)
+		_append_2d(nc_in, nc_out, name, min_chunk_size, pcb)
+	elif ndim == 1:
+		# Coordinate variable (e.g. time).
+		_append_1d(nc_in, nc_out, name, min_chunk_size, pcb)

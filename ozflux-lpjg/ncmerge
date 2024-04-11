@@ -29,6 +29,9 @@ _STD_TIME = "time"
 # Name of the 'standard name' attribute (from the CF spec).
 _ATTR_STD_NAME = "standard_name"
 
+# Minimum chunk size to use when copying data.
+MIN_CHUNK = 0
+
 class Options:
 	"""
 	Class for storing CLI arguments from the user.
@@ -92,11 +95,11 @@ def copy(nc_in: Dataset, nc_out: Dataset, pcb: Callable[[float], None]):
 		if nd > 3:
 			raise ValueError(">3 dimensions not supported yet")
 		elif nd == 3:
-			copy_3d(nc_in, nc_out, name, prog)
+			copy_3d(nc_in, nc_out, name, MIN_CHUNK, prog)
 		elif len(var_in.dimensions) == 2:
-			copy_2d(nc_in, nc_out, name, prog)
+			copy_2d(nc_in, nc_out, name, MIN_CHUNK, prog)
 		elif len(var_in.dimensions) == 1:
-			copy_1d(nc_in, nc_out, name, prog)
+			copy_1d(nc_in, nc_out, name, MIN_CHUNK, prog)
 
 		start += step
 		pcb(start)
@@ -174,7 +177,7 @@ def init_outfile(nc_out: Dataset, infiles: list[str]):
 		if DIM_TIME in nc_in.dimensions:
 			dim = nc_in.dimensions[DIM_TIME]
 			# No progress reporting here. This should be fast.
-			copy_1d(nc_in, nc_out, DIM_TIME, lambda p: ...)
+			copy_1d(nc_in, nc_out, DIM_TIME, MIN_CHUNK, lambda p: ...)
 
 def main(opts: Options):
 	"""
