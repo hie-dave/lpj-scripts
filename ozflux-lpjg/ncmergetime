@@ -185,6 +185,8 @@ def main(opts: Options):
 	# Each MergeTime object will open and close the output file internally.
 	# Failure to do this results in a memory leak.
 	for file in opts.files:
+		if not os.path.exists(file):
+			raise ValueError(f"File not found: {file}")
 		job_manager.add_job(MergeTime(file, opts.out_file, opts.chunk_size), path.getsize(file))
 	job_manager.run_single_threaded()
 
