@@ -28,13 +28,14 @@ class Options:
 	@param chunk_size: Minimum chunk size to be used when copying data.
 	"""
 	def __init__(self, log : LogLevel, files: list[str], out: str, prog: bool,
-		parallel: bool, chunk_size: int):
+		parallel: bool, chunk_size: int, units: str):
 		self.log_level = log
 		self.files = files
 		self.out_file = out
 		self.report_progress = prog
 		self.parallel = parallel
 		self.chunk_size = chunk_size
+		self.units = units
 
 class MergeTime:
 	def __init__(self, in_file: str, out_file: str, min_chunk_size: int):
@@ -62,12 +63,13 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
 	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel")
 	parser.add_argument("-c", "--chunk-size", type = int, help = "Minimum chunk size to be used when copying data. If 0, the chunk size of the input data will be used. This does not affect the chunking of the variables in the output file. (default: 0)", default = 0)
+	parser.add_argument("-u", "--units", help = "Output units (optional) (default: same as input units)", default = "")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
 
 	p = parser.parse_args(argv[1:])
 
 	return Options(p.verbosity, p.files, p.out_file, p.show_progress
-		, p.parallel, p.chunk_size)
+		, p.parallel, p.chunk_size, p.units)
 
 def get_nc_datatype(fmt: str) -> str:
 	if fmt == "float64":
@@ -76,22 +78,7 @@ def get_nc_datatype(fmt: str) -> str:
 		return FORMAT_SINGLE
 	return fmt
 
-def get_var_from_std_name(nc: Dataset, name: str) -> Variable:
-	"""
-	Find a variable in the input file with the specified standard name. Raise
-	an exception if no matching variable is found.
-
-	@param nc: The input netcdf file.
-	@param name: The standard name for which we search.
-	"""
-	for var in nc.variables:
-		var = nc.variables[var]
-		if hasattr(var, ATTR_STD_NAME):
-			if getattr(var, ATTR_STD_NAME) == name:
-				return var
-	raise ValueError(f"No variable found with standard_name '{name}'")
-
-def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int):
+def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int, units: str):
 	"""
 	Initialise the output file by creating dimensions and variables as required.
 
@@ -99,6 +86,7 @@ def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int):
 	@param first_infile: The first input file. All other input files must have
 	identical variables and dimensionality to this file.
 	@param chunk_size: Minimum chunk size to be used when copying data.
+	@param units: Desired output units (empty string means same as input units).
 	"""
 	if len(infiles) < 1:
 		raise ValueError("No input files")
@@ -132,7 +120,10 @@ def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int):
 			var_out = nc_out.variables[name]
 			for attr in var.ncattrs():
 				if not attr[0] == "_":
-					setattr(var_out, attr, getattr(var, attr))
+					value = getattr(var, attr)
+					if attr == ATTR_UNITS and len(var.dimensions) == 3 and units != "":
+						value = units
+					setattr(var_out, attr, value)
 		lat = get_var_from_std_name(nc_in, STD_LAT)
 		copy_1d(nc_in, nc_out, lat.name, chunk_size, lambda p: ...)
 
@@ -179,7 +170,7 @@ def main(opts: Options):
 	job_manager = JobManager()
 
 	with open_netcdf(opts.out_file, write = True) as nc_out:
-		init_outfile(nc_out, opts.files, opts.chunk_size)
+		init_outfile(nc_out, opts.files, opts.chunk_size, opts.units)
 	# todo: order by start time ascending?
 
 	# Each MergeTime object will open and close the output file internally.

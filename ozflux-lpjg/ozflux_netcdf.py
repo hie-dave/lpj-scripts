@@ -3,7 +3,7 @@ import multiprocessing, multiprocessing.connection
 import traceback, sys
 from ozflux_common import *
 from ozflux_logging import *
-from netCDF4 import Dataset, Variable, Dimension, default_fillvals
+from netCDF4 import Dataset, Variable, Dimension, default_fillvals, num2date
 from enum import IntEnum
 from sys import argv
 from typing import Callable
@@ -106,7 +106,7 @@ cd_tp_lock = multiprocessing.BoundedSemaphore(1)
 # Common alternative names for various units which we may reasonably encounter.
 _units_synonyms = [
 	["W/m2", "W/m^2", "Wm^-2"],
-	["kg/m2/s", "kg/m^2/s", "kgm^-2s^-1"],
+	["kg/m2/s", "kg/m^2/s", "kgm^-2s^-1", "kg m-2 s-1"],
 	["K", "k"],
 	["m/s", "ms^-1"],
 	["Pa", "pa"],
@@ -815,6 +815,38 @@ def find_units_conversion(current_units: str, desired_units: str) \
 	m = "No unit conversion exists from '%s' to '%s'"
 	raise ValueError(m % (current_units, desired_units))
 
+def units_match(x: str, y: str) -> bool:
+	"""
+	Check if the two units are identical or equivalent.
+	"""
+	if x == y:
+		return True
+
+	for units_type in _units_synonyms:
+		if x in units_type and y in units_type:
+			return True
+
+	return False
+
+def find_units_conversion_opt(current: str, desired: str) -> Callable[[float], float]:
+	"""
+	Find a conversion between two different units, if one is required. This will
+	be returned in the form of a function which may be called, taking two
+	arguments:
+
+	1. The data (n-dimensional list of floats) to be converted
+	2. The timestep width in seconds
+
+	If no units conversion is required, this will return a function which
+	returns the original data.
+
+	An exception will be raised if the input units cannot be converted to the
+	specified output units.
+	"""
+	if units_match(current, desired):
+		return lambda x, _: x
+	return find_units_conversion(current, desired)
+
 def get_start_minute(in_file: Dataset):
 	"""
 	Determine the minute at which the dataset starts (0-59).
@@ -1297,7 +1329,47 @@ def _append_2d(nc_in: Dataset, nc_out: Dataset, name:str, min_chunk_size: int, p
 			it += 1
 			pcb(it / it_max)
 
-def _append_3d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int, pcb: Callable[[float], None]):
+def get_var_from_std_name(nc: Dataset, name: str) -> Variable:
+	"""
+	Find a variable in the input file with the specified standard name. Raise
+	an exception if no matching variable is found.
+
+	@param nc: The input netcdf file.
+	@param name: The standard name for which we search.
+	"""
+	for var in nc.variables:
+		var = nc.variables[var]
+		if hasattr(var, ATTR_STD_NAME):
+			if getattr(var, ATTR_STD_NAME) == name:
+				return var
+	raise ValueError(f"No variable found with standard_name '{name}'")
+
+def get_timestep(nc: Dataset) -> int:
+	"""
+	Get the timestep of the netcdf file, in seconds.
+	"""
+	var_time = get_var_from_std_name(nc, STD_TIME)
+	units = getattr(var_time, ATTR_UNITS)
+	calendar = getattr(var_time, ATTR_CALENDAR)
+
+	chunk_size = var_time.chunking()
+	chunk_size = 64 if chunk_size == "contiguous" else chunk_size[0]
+	n = len(var_time)
+	for i in range(0, n, chunk_size):
+		upper = min(n, i + chunk_size)
+		raw = var_time[i:upper]
+		times = num2date(raw, units, calendar, only_use_cftime_datetimes = False, only_use_python_datetimes = True)
+		first_date = times[0].date()
+		for j in range(len(times)):
+			if times[j].date() != first_date:
+				timestep = SECONDS_PER_DAY // j
+				log_diagnostic(f"Input timestep is {timestep} seconds ({j} steps per day)")
+				return timestep
+
+	raise ValueError(f"Unable to determine timestep width: all data appears to be on the same day")
+
+def _append_3d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
+			   , pcb: Callable[[float], None]):
 	"""
 	Append (along the time axis) the contents of the specified 3-dimensional
 	variable in the input file to the variable in the output file.
@@ -1359,6 +1431,15 @@ def _append_3d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int, 
 	offsetj = time_offset if dims[1].name == DIM_TIME else 0
 	offsetk = time_offset if dims[2].name == DIM_TIME else 0
 
+	units_conversion = None
+	if hasattr(var_in, ATTR_UNITS) and hasattr(var_out, ATTR_UNITS):
+		in_units = getattr(var_in, ATTR_UNITS)
+		out_units = getattr(var_out, ATTR_UNITS)
+		units_conversion = find_units_conversion_opt(in_units, out_units)
+	else:
+		units_conversion = lambda x, _: x
+	timestep = get_timestep(nc_in)
+
 	for i in range(niter[0]):
 		# ilow/ihigh are the indices used for reading data.
 		# ir are the indices used for writing data.
@@ -1400,7 +1481,7 @@ def _append_3d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int, 
 
 				# Copy the data.
 				chunk = var_in[ilow:ihigh, jlow:jhigh, klow:khigh]
-				var_out[ir, jr, kr] = chunk
+				var_out[ir, jr, kr] = units_conversion(chunk, timestep)
 
 				# Progress tracking/reporting.
 				it += 1
