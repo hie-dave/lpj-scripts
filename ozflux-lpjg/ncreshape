@@ -198,7 +198,7 @@ def reshape(nc_in: Dataset, nc_out: Dataset, opts: ReshapeOptions
 
 	step_start = 0.0
 	step_sizes = [var_weight(nc_in, nc_out, name) for name in nc_in.variables]
-	step_sizes /= numpy.prod(step_sizes)
+	step_sizes /= numpy.sum(step_sizes)
 
 	# Copy all data, transposing as necessary.
 	for (name, step_size) in zip(nc_in.variables, step_sizes):
@@ -217,6 +217,10 @@ def main(opts: Options):
 		pfx = os.path.basename(opts.in_file)
 		dir = os.path.dirname(opts.in_file)
 		out_file = tempfile.mkstemp(prefix = pfx, dir = dir)
+
+	if os.path.exists(out_file):
+		os.remove(out_file)
+
 	with open_netcdf(opts.in_file) as nc_in:
 		with open_netcdf(out_file, True) as nc_out:
 			reshape(nc_in, nc_out, opts.reshape_options, lambda p: log_progress(p))
