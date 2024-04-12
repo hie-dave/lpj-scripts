@@ -100,10 +100,17 @@ def get_chunk_size(nc: Dataset, dim: str, chunk_sizes: list[tuple[str, int]]) ->
 				log_warning(f"Attempted to use chunk sizes {chunk_size} for dimension {dim}. This exceeds the total dimension length of {dimension.size}. The dimension length will be used as chunk size, but you should consider rethinking your chunking strategy if you see this message.")
 				return dimension.size
 			return chunk_size
-	# We could fallback to using the same as what's in the input file here.
-	# However I would never personally want to rely on that behaviour, so any
-	# time this occurred I would rather see an error.
-	raise ValueError(f"No chunk size specified for dimension {dim}")
+
+	# I'm not entirely comfortable with warnings here, but some netcdf files are
+	# setup in strange ways, so I'll leave it like this for now.
+
+	default_chunking = nc.variables[dim].chunking()
+	if default_chunking == "contiguous":
+		log_warning(f"No chunk size specified for contiguous dimension {dim}. This code pathway is untested. Godspeed!")
+		return None
+
+	log_warning(f"No chunking specified for dimension {dim}. Falling back to the chunk size in the input file, which is {default_chunking[0]}")
+	return default_chunking[0]
 
 def init_outfile(nc_in: Dataset, nc_out: Dataset, reshape_options: ReshapeOptions):
 	"""
@@ -147,7 +154,7 @@ def init_outfile(nc_in: Dataset, nc_out: Dataset, reshape_options: ReshapeOption
 
 		# Chunk sizes.
 		cs = None
-		if len(reshape_options.chunk_sizes) == len(dims):
+		if len(reshape_options.chunk_sizes) > 0:
 			cs = tuple([get_chunk_size(nc_in, dim, reshape_options.chunk_sizes) for dim in dims])
 		else:
 			# Chunking from input file.
