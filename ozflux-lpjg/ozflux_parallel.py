@@ -178,6 +178,8 @@ class JobManager:
 				job.progress_writer.close()
 
 				job.run_local(cum_weight, self._total_weight)
+				if not (job.exitcode == 0 or job.exitcode is None):
+					raise ValueError(f"Job {job} exited with non-zero exit code")
 				cum_weight += job.weight
 
 	def _wait_until(self, condition: Callable[[], bool] = lambda: False):
