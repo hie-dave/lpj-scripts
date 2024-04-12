@@ -1198,7 +1198,7 @@ def copy_1d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
 		var_out[i:upper] = var_in[i:upper]
 		pcb(upper / n)
 
-def _check_ndims(var, expected):
+def check_ndims(var, expected):
 	actual = len(var.dimensions)
 	if actual != expected:
 		raise ValueError(f"Unable to copy variable {var.name} as {expected}-dimensional variable: variable has {actual} dimensions")
@@ -1220,8 +1220,8 @@ def _append_1d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int, 
 	var_in = nc_in.variables[name]
 	var_out = nc_out.variables[name]
 
-	_check_ndims(var_in, 1)
-	_check_ndims(var_out, 1)
+	check_ndims(var_in, 1)
+	check_ndims(var_out, 1)
 
 	chunk_size = var_in.chunking()[0]
 	chunk_size = max(chunk_size, min_chunk_size)
@@ -1250,8 +1250,8 @@ def _append_2d(nc_in: Dataset, nc_out: Dataset, name:str, min_chunk_size: int, p
 	var_in = nc_in.variables[name]
 	var_out = nc_out.variables[name]
 
-	_check_ndims(var_in, 2)
-	_check_ndims(var_out, 2)
+	check_ndims(var_in, 2)
+	check_ndims(var_out, 2)
 
 	dim_names_in = var_in.dimensions
 	dim_names_out = var_out.dimensions
@@ -1386,8 +1386,8 @@ def _append_3d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
 	var_in = nc_in.variables[name]
 	var_out = nc_out.variables[name]
 
-	_check_ndims(var_in, 3)
-	_check_ndims(var_out, 3)
+	check_ndims(var_in, 3)
+	check_ndims(var_out, 3)
 
 	dim_names_in = var_in.dimensions
 	dim_names_out = var_out.dimensions

@@ -11,7 +11,7 @@ from ozflux_logging import *
 from ozflux_netcdf import *
 from argparse import ArgumentParser
 from sys import argv
-from netCDF4 import Dataset, Dimension
+from netCDF4 import Dataset, Dimension, num2date, date2num
 from typing import Callable
 from ozflux_parallel import JobManager
 from os import path
@@ -130,14 +130,56 @@ def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int, units: st
 		lon = get_var_from_std_name(nc_in, STD_LON)
 		copy_1d(nc_in, nc_out, lon.name, chunk_size, lambda p: ...)
 
-def merge_time(nc_in: Dataset, nc_out: Dataset, min_chunk_size: int, pcb: Callable[[float], None]):
-    # Copy time dimension.
-	time_units_in = getattr(nc_in.variables[VAR_TIME], ATTR_UNITS)
-	time_units_out = getattr(nc_out.variables[VAR_TIME], ATTR_UNITS)
-	if time_units_in != time_units_out:
-		raise ValueError(f"Time units in {nc_in} ({time_units_in}) do not match those in the output file ({time_units_out})")
+def append_timepoints(nc_in: Dataset, nc_out: Dataset, min_chunk_size: int, pcb: Callable[[float], None]):
+	"""
+	Append the contents of the time variable in the input file to the time
+	variable in the output file.
 
-	append_time(nc_in, nc_out, VAR_TIME, min_chunk_size, lambda p: ...)
+	@param nc_in: Input netcdf file.
+	@param nc_out: Output netcdf file.
+	@param min_chunk_size: Minimum chunk size to be used for moving data.
+	"""
+	var_in = nc_in.variables[VAR_TIME]
+	var_out = nc_out.variables[VAR_TIME]
+
+	calendar_in = getattr(var_in, ATTR_CALENDAR)
+	calendar_out = getattr(var_out, ATTR_CALENDAR)
+
+	units_in = getattr(nc_in.variables[VAR_TIME], ATTR_UNITS)
+	units_out = getattr(nc_out.variables[VAR_TIME], ATTR_UNITS)
+
+	convert_units = units_in != units_out or calendar_in != calendar_out
+
+	check_ndims(var_in, 1)
+	check_ndims(var_out, 1)
+
+	chunk_size = var_in.chunking()[0]
+	chunk_size = max(chunk_size, min_chunk_size)
+
+	n = len(var_in)
+	nexist = len(var_out)
+	for i in range(0, n, chunk_size):
+		upper = min(n, i + chunk_size)
+		chunk = var_in[i:upper]
+
+		# The calendar or units in the input file don't match those in the
+		# output file. Therefore, we will need to convert these numeric values
+		# to their equivalents in the output file.
+		if convert_units:
+			# Convert these numeric values to dates using the input file's
+			# calendar and units.
+			times = num2date(chunk, units_in, calendar_in)
+
+			# Convert these dates to numeric values using the output file's
+			# calendar and units.
+			chunk = date2num(times, units_out, calendar_out)
+		var_out[i + nexist:upper + nexist] = chunk
+		pcb(upper / n)
+
+def merge_time(nc_in: Dataset, nc_out: Dataset, min_chunk_size: int, pcb: Callable[[float], None]):
+	# This is a special append function designed for time variables. It behaves
+	# the same as the other append_* functions but can convert time units.
+	append_timepoints(nc_in, nc_out, min_chunk_size, lambda p: ...)
 
 	nvar = len([name for name in nc_in.variables if not name in nc_in.dimensions])
 	start = 0
@@ -148,6 +190,7 @@ def merge_time(nc_in: Dataset, nc_out: Dataset, min_chunk_size: int, pcb: Callab
 
 		prog = lambda p: pcb(start + step * p)
 
+		# todo: rename this
 		append_time(nc_in, nc_out, name, min_chunk_size, prog)
 
 		start += step
