@@ -771,6 +771,19 @@ def index_of(xarr: list[float], x: float) -> int:
 			return i
 	return -1
 
+def index_of_throw(needle, haystack, get_error_msg: Callable[[None], str]) -> int:
+	"""
+	Find the index of a specific element in the list, or throw if not found.
+
+	@param needle: The item to search for.
+	@param haystack: The list to be searched.
+	@param get_error_msg: A function which returns an error message if needle is not found.
+	"""
+	for i in range(len(haystack)):
+		if haystack[i] == needle:
+			return i
+	raise ValueError(get_error_msg())
+
 def is_start_of_year(date: datetime.datetime) -> bool:
 	"""
 	Check if a given datetime object represents the start of a year.
@@ -1020,6 +1033,15 @@ def copy_attr(var_in: Variable, var_out: Variable, attr: str):
 		value = getattr(var_in, attr)
 		setattr(var_out, attr, value)
 
+def copy_attributes(nc_in, nc_out):
+	"""
+	Copy all attributes from the input object to the output object. These may
+	be netcdf datasets (ie files), variables, dimensions, etc.
+	"""
+	for attr in nc_in.ncattrs():
+		if not attr[0] == "_":
+			setattr(nc_out, attr, getattr(nc_in, attr))
+
 def get_compression_type(filters: dict) -> str:
 	"""
 	Determine the compression algorithm used for a variable, given that
@@ -1197,6 +1219,194 @@ def copy_1d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
 		upper = min(n, i + chunk_size)
 		var_out[i:upper] = var_in[i:upper]
 		pcb(upper / n)
+
+def copy_transpose_3d(nc_in: Dataset, nc_out: Dataset, name: str
+	, min_chunk_size: int, pcb: Callable[[float], None]):
+	"""
+	Copy a 3d variable from the input file to the output file, reordering the
+	dimensions as specified. If the dimensionality is identical in the two
+	files, it would be faster to call copy_variable().
+
+	@param nc_in: Input netcdf file.
+	@param nc_out: Output netcdf file.
+	@param name: Name of the variable to be copied.
+	@param opts: Reshape options.
+	@param pcb: Progress callback function.
+	"""
+	var_in = nc_in.variables[name]
+	var_out = nc_out.variables[name]
+
+	dims_in = var_in.dimensions
+	dims_out = var_out.dimensions
+
+	# This is currently also checked by the caller.
+	if len(dims_in) != len(dims_out):
+		raise ValueError(f"Inconsistent number of dimensions for variable {name}")
+
+	# Indices of input dimensions in the order of the output file.
+	dimension_indices = [index_of_throw(dim, dims_in, lambda: f"Dimension {dim} not found in input file") for dim in dims_out]
+
+	chunk_sizes = var_in.chunking()
+	chunk_sizes = [max(min_chunk_size, c) for c in chunk_sizes]
+
+	# Length of each dimension.
+	shape = var_in.shape
+
+	# Number of iterations required for each dimension with given chunk sizes.
+	niter = [math.ceil(s / c) for (s, c) in zip(shape, chunk_sizes)]
+
+	# Total number of iterations required.
+	it_max = niter[0] * niter[1] * niter[2]
+
+	# Index of the current iteration.
+	it = 0
+
+	for i in range(niter[0]):
+		# Index of the first element to be read on the i-th dimension.
+		ilow = i * chunk_sizes[0]
+
+		# Index of the last element to be read on the i-th dimension.
+		ihigh = min(shape[0], ilow + chunk_sizes[0])
+
+		# Index range of the i-th dimension of the input file.
+		ir = range(ilow, ihigh)
+
+		for j in range(niter[1]):
+			# Index of the first element to be read on the j-th dimension.
+			jlow = j * chunk_sizes[1]
+
+			# Index of the last element to be read on the j-th dimension.
+			jhigh = min(shape[1], jlow + chunk_sizes[1])
+
+			# Index range of the j-th dimension of the input file.
+			jr = range(jlow, jhigh)
+
+			for k in range(niter[2]):
+				# Index of the first element to be read on the k-th dimension.
+				klow = k * chunk_sizes[2]
+
+				# Index of the last element to be read on the k-th dimension.
+				khigh = min(shape[2], klow + chunk_sizes[2])
+
+				# Index range of the k-th dimension of the input file.
+				kr = range(klow, khigh)
+
+				# Read a chunk of data from the input file.
+				chunk = var_in[ilow:ihigh, jlow:jhigh, klow:khigh]
+
+				# Transpose this chunk into the shape in the output file.
+				chunk = numpy.transpose(chunk, dimension_indices)
+
+				# Get the index ranges for the output file.
+				in_ranges = [ir, jr, kr]
+				out_ranges = [in_ranges[i] for i in dimension_indices]
+
+				# Write data to the output file.
+				var_out[out_ranges[0], out_ranges[1], out_ranges[2]] = chunk
+
+				# Progress reporting.
+				it += 1
+				pcb(it / it_max)
+
+def copy_transpose_2d(nc_in: Dataset, nc_out: Dataset, name: str
+	, min_chunk_size: int, pcb: Callable[[float], None]):
+	"""
+	Copy a 2d variable from the input file to the output file, reordering the
+	dimensions as specified. If the dimensionality is identical in the two
+	files, it would be faster to call copy_variable().
+
+	@param nc_in: Input netcdf file.
+	@param nc_out: Output netcdf file.
+	@param name: Name of the variable to be copied.
+	@param opts: Reshape options.
+	@param pcb: Progress callback function.
+	"""
+	raise ValueError("TBI")
+
+def copy_variable_transpose(nc_in: Dataset, nc_out: Dataset, name: str
+	, min_chunk_size: int, pcb: Callable[[float], None]):
+	"""
+	Copy a variable from the input file to the output file, reordering the
+	dimensions as specified. If the dimensionality is identical in the two
+	files, it would be faster to call copy_variable().
+
+	@param nc_in: Input netcdf file.
+	@param nc_out: Output netcdf file.
+	@param name: Name of the variable to be copied.
+	@param opts: Reshape options.
+	@param pcb: Progress callback function.
+	"""
+	ndim = len(nc_in.variables[name].dimensions)
+	if ndim > 3:
+		raise ValueError(f"Unable to copy variable {name}: >3 dimensions not implemented (variable {name} has {ndim} dimensions)")
+	elif ndim == 3:
+		copy_transpose_3d(nc_in, nc_out, name, min_chunk_size, pcb)
+	elif ndim == 2:
+		copy_transpose_2d(nc_in, nc_out, name, min_chunk_size, pcb)
+	elif ndim == 1:
+		raise ValueError(f"Transposing 1-dimensional variable {name} doesn't make sense.")
+
+def consistent_dimensionality(var_in: Variable, var_out: Variable) -> bool:
+	"""
+	Check if the two variables have consistent dimensionality (ie the same
+	dimensions in the same order).
+
+	This will throw if the two variables have a different number of dimensions.
+
+	@param var_in: The first variable.
+	@param var_out: The second variable.
+	"""
+	name = var_in.name
+
+	dims_in = var_in.dimensions
+	dims_out = var_out.dimensions
+
+	if len(dims_in) != len(dims_out):
+		raise ValueError(f"Unable to copy variable {name}: input file has {len(dims_in)} dimensions but output file has {len(dims_out)} dimensions")
+
+	for i in range(len(dims_in)):
+		if dims_in[i] != dims_out[i]:
+			return False
+
+	return True
+
+def _copy_variable(nc_in: Dataset, nc_out: Dataset, name: str
+	, min_chunk_size: int, pcb: Callable[[float], None]):
+
+	# Call the appropriate function based on number of dimensions.
+	ndim = len(nc_in.variables[name].dimensions)
+
+	if ndim > 3:
+		raise ValueError(f"Unable to copy variable {name}: >3 dimensions not implemented (variable {name} has {len(dims_in)} dimensions)")
+	elif ndim == 3:
+		copy_3d(nc_in, nc_out, name, min_chunk_size, pcb)
+	elif ndim == 2:
+		copy_2d(nc_in, nc_out, name, min_chunk_size, pcb)
+	elif ndim == 1:
+		copy_1d(nc_in, nc_out, name, min_chunk_size, pcb)
+
+def copy_variable(nc_in: Dataset, nc_out: Dataset, name: str
+	, min_chunk_size: int, pcb: Callable[[float], None]):
+	"""
+	Copy the contents of the specified variable in the input file into the
+	output file.
+
+	This will transpose data as necessary if the output file has different
+	dimensionality for this variable.
+
+	@param nc_in: The input .nc file.
+	@param nc_out: The output .nc file.
+	@param anme: The name of the variable to be copied.
+	@param min_chunk_size: Minimum chunk size used when copying data.
+	@param pcb: Progress callback function.
+	"""
+	var_in = nc_in.variables[name]
+	var_out = nc_out.variables[name]
+
+	if consistent_dimensionality(var_in, var_out):
+		_copy_variable(nc_in, nc_out, name, min_chunk_size, pcb)
+	else:
+		copy_variable_transpose(nc_in, nc_out, name, min_chunk_size, pcb)
 
 def check_ndims(var, expected):
 	actual = len(var.dimensions)
@@ -1514,3 +1724,10 @@ def append_time(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
 	elif ndim == 1:
 		# Coordinate variable (e.g. time).
 		_append_1d(nc_in, nc_out, name, min_chunk_size, pcb)
+
+def get_nc_datatype(fmt: str) -> str:
+	if fmt == "float64":
+		return FORMAT_FLOAT
+	if fmt == "float32":
+		return FORMAT_SINGLE
+	return fmt

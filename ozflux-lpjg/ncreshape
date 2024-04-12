@@ -24,12 +24,15 @@ class ReshapeOptions:
 	@param chunk_sizes: Chunk size of each dimension. Unspecified dimensions
                         will be left as-is.
     @param compression_level: Compression level in the output file.
+	@param min_chunk_size: Minimum chunk size to use when copying data.
 	"""
 	def __init__(self, dimension_order: list[str]
-	    , chunk_sizes: list[tuple[str, int]], compression_level: int):
+	    , chunk_sizes: list[tuple[str, int]], compression_level: int
+		, min_chunk_size: int):
 		self.dimension_order = dimension_order
 		self.chunk_sizes = chunk_sizes
 		self.compression_level = compression_level
+		self.min_chunk_size = min_chunk_size
 
 class Options:
 	"""
@@ -68,6 +71,7 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-c", "--chunk-size", help = "Chunk sizes for each dimension. This is optional, and if omitted, the values in the input file will be kept (not recommended!). This should be specified in the same format as for nco. E.g. lat/1,lon/1,time/365", default = "")
 	parser.add_argument("-C", "--compression-level", type = int, help = "Compression level in the output file (0 = off) (default: same as input file)")
 	parser.add_argument("-d", "--dimension-order", help = "Dimension names should be specified separated by commas. E.g. `-d lat,lon,time`")
+	parser.add_argument("-m", "--min-chunk-size", type = int, help = "Minimum chunk size to use when copying data. 0 means use the chunk size in the netcdf file. Higher values result in better performance but higher memory usage. (default: 0)")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
 
 	p = parser.parse_args(argv[1:])
@@ -75,65 +79,132 @@ def parse_args(argv: list[str]) -> Options:
     # lat/1,lon/1,time/365
 	chunks = [x for x in str.split(p.chunk_size, ",")]
 	chunks = [(dim, int(chunk)) for (dim, chunk) in [str.split(c, "/") for c in chunks]]
-	opts = ReshapeOptions(p.dimension_order, chunks, p.compression_level)
+
+	# lat,lon,time
+	dim_order = str.split(p.dimension_order, ",")
+	opts = ReshapeOptions(dim_order, chunks, p.compression_level, p.min_chunk_size)
 	return Options(p.verbosity, p.in_file, p.out_file, p.show_progress, opts)
 
-def init_outfile(nc_out: Dataset, in_file: str
-	, chunk_sizes: list[tuple[str, int]], dimension):
+def get_chunk_size(nc: Dataset, dim: str, chunk_sizes: list[tuple[str, int]]) -> int:
+	"""
+	Get the chunk size for the specified dimension.
+
+	@param nc: The input netcdf file. Used to ensure the chunk size doesn't exceed dimension size.
+	@param dim: The dimension.
+	@param chunk_sizes: List of tuples of dimension name and chunk size.
+	"""
+	dimension = nc.dimensions[dim]
+	for (chunk_dim, chunk_size) in chunk_sizes:
+		if chunk_dim == dim:
+			if chunk_size > dimension.size:
+				log_warning(f"Attempted to use chunk sizes {chunk_size} for dimension {dim}. This exceeds the total dimension length of {dimension.size}. The dimension length will be used as chunk size, but you should consider rethinking your chunking strategy if you see this message.")
+				return dimension.size
+			return chunk_size
+	# We could fallback to using the same as what's in the input file here.
+	# However I would never personally want to rely on that behaviour, so any
+	# time this occurred I would rather see an error.
+	raise ValueError(f"No chunk size specified for dimension {dim}")
+
+def init_outfile(nc_in: Dataset, nc_out: Dataset, reshape_options: ReshapeOptions):
 	"""
 	Initialise the output file by creating dimensions and variables as required.
 
 	@param nc_out: The output file.
-	@param first_infile: The first input file. All other input files must have
-	identical variables and dimensionality to this file.
-	@param chunk_size: Minimum chunk size to be used when copying data.
-	@param units: Desired output units (empty string means same as input units).
+	@param in_file: Path to the input file.
+	@param reshape_options: The parameters defining how the file will be reshaped.
 	"""
-	if len(infiles) < 1:
-		raise ValueError("No input files")
+	# Create dimensions in output file by copying them directly from the input
+	# file.
+	log_information("Creating dimensions in output file...")
+	for name in nc_in.dimensions:
+		dim = nc_in.dimensions[name]
+		size = dim.size
+		create_dim_if_not_exists(nc_out, name, size)
 
-	first_infile = infiles[0]
-	with open_netcdf(first_infile) as nc_in:
-		log_information("Creating dimensions in output file...")
-		for name in nc_in.dimensions:
-			dim = nc_in.dimensions[name]
-			size = dim.size
-			if name == DIM_TIME:
-				# Make time an unlimited dimension
-				size = 0
-			create_dim_if_not_exists(nc_out, name, size)
-		log_information("Creating variables in output file...")
-		for name in nc_in.variables:
-			var = nc_in.variables[name]
-			dims = var.dimensions
-			fmt = get_nc_datatype(var.datatype)
+	# Create variables in output file, with changes based on user inputs.
+	log_information("Creating variables in output file...")
+	for name in nc_in.variables:
+		var = nc_in.variables[name]
+		dims = var.dimensions
+		fmt = get_nc_datatype(var.datatype)
+
+		# Compression level and type.
+		ct = ""
+		cl = 0
+		if reshape_options.compression_level <= 0:
+			# Use same as input file.
 			filters = var.filters()
-			# Compression level
 			cl = filters['complevel']
-
-			# Compression type
 			ct = get_compression_type(filters)
+		else:
+			cl = reshape_options.compression_level
+			ct = "zlib"
 
-			# Chunk size
+		# Dimension order.
+		if len(reshape_options.dimension_order) == len(dims):
+			# User-specified dimension order.
+			dims = reshape_options.dimension_order
+
+		# Chunk sizes.
+		cs = None
+		if len(reshape_options.chunk_sizes) == len(dims):
+			cs = tuple([get_chunk_size(nc_in, dim, reshape_options.chunk_sizes) for dim in dims])
+		else:
+			# Chunking from input file.
 			chunking = var.chunking()
 			cs = None if chunking == "contiguous" else tuple(chunking)
-			create_var_if_not_exists(nc_out, name, fmt, dims, cl, ct, cs)
-			var_out = nc_out.variables[name]
-			for attr in var.ncattrs():
-				if not attr[0] == "_":
-					value = getattr(var, attr)
-					if attr == ATTR_UNITS and len(var.dimensions) == 3 and units != "":
-						value = units
-					setattr(var_out, attr, value)
-		lat = get_var_from_std_name(nc_in, STD_LAT)
-		copy_1d(nc_in, nc_out, lat.name, chunk_size, lambda p: ...)
 
-		lon = get_var_from_std_name(nc_in, STD_LON)
-		copy_1d(nc_in, nc_out, lon.name, chunk_size, lambda p: ...)
+		# Create the variable with these options.
+		create_var_if_not_exists(nc_out, name, fmt, dims, cl, ct, cs)
 
-def reshape(nc_in: Dataset, nc_out: Dataset, dimension_order: list[str]
-	, chunk_sizes: list[tuple[str, int]], compression_level: int):
-	...
+		# Copy all attributes for this variable.
+		copy_attributes(var, nc_out.variables[name])
+
+	# Copy all file-level attributes from the input file to the output file.
+	copy_attributes(nc_in, nc_out)
+
+def var_weight(nc_in: Dataset, nc_out: Dataset, name: str) -> int:
+	"""
+	Get a weighting for the specified variable which is a proxy for the time
+	complexity of copying it into the output file.
+
+	@param nc_in: The input netcdf file.
+	@param nc_out: The output netcdf file..
+	@param name: Name of the variable.
+	"""
+	var = nc_in.variables[name]
+	dim = var.dimensions
+	weight = 1
+	for dim in var.dimensions:
+		weight *= nc_in.dimensions[dim].size
+	if not consistent_dimensionality(var, nc_out.variables[name]):
+		weight *= 2
+	return weight
+		
+
+def reshape(nc_in: Dataset, nc_out: Dataset, opts: ReshapeOptions
+	, pcb: Callable[[float], None]):
+	"""
+	Reshape the input file according to specified parameters.
+
+	@param nc_in: Input netcdf file.
+	@param nc_out: Output netcdf file.
+	@param opts: Configuration settings which define how the file should be reshaped.
+	@param pcb: Progress callback function.
+	"""
+
+	# Initialise the output file: create dimensions, variables, etc.
+	init_outfile(nc_in, nc_out, opts)
+
+	step_start = 0.0
+	step_sizes = [var_weight(nc_in, nc_out, name) for name in nc_in.variables]
+	step_sizes /= numpy.prod(step_sizes)
+
+	# Copy all data, transposing as necessary.
+	for (name, step_size) in zip(nc_in.variables, step_sizes):
+		vpcb = lambda p: pcb(step_start + step_size * p)
+		copy_variable(nc_in, nc_out, name, opts.min_chunk_size, vpcb)
+		step_start += step_size
 
 def main(opts: Options):
 	"""
@@ -148,7 +219,7 @@ def main(opts: Options):
 		out_file = tempfile.mkstemp(prefix = pfx, dir = dir)
 	with open_netcdf(opts.in_file) as nc_in:
 		with open_netcdf(out_file, True) as nc_out:
-			reshape(nc_in, nc_out, opts)
+			reshape(nc_in, nc_out, opts.reshape_options, lambda p: log_progress(p))
 	if temp_file:
 		# os.remove(opts.in_file)
 		# os.rename(out_file, opts.out_file)

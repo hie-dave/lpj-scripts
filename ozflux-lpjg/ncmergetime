@@ -71,13 +71,6 @@ def parse_args(argv: list[str]) -> Options:
 	return Options(p.verbosity, p.files, p.out_file, p.show_progress
 		, p.parallel, p.chunk_size, p.units)
 
-def get_nc_datatype(fmt: str) -> str:
-	if fmt == "float64":
-		return FORMAT_FLOAT
-	if fmt == "float32":
-		return FORMAT_SINGLE
-	return fmt
-
 def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int, units: str):
 	"""
 	Initialise the output file by creating dimensions and variables as required.

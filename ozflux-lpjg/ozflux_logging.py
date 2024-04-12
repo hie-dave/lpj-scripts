@@ -117,6 +117,8 @@ def log_debug(msg: str):
 def log_progress(progress: float):
 	"""
 	Write a progress message.
+
+	@param progress: Current progress in range [0, 1].
 	"""
 	global _show_progress
 	global _start_time
