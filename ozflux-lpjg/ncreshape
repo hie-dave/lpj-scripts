@@ -39,21 +39,34 @@ class Options:
 	Class for storing CLI arguments from the user.
 
 	@param log: Log level.
-	@param in_file: Input file.
-	@param out_file: Output file.
+	@param in_files: Input files.
+	@param out_dir: Output directory.
 	@param prog: True to write progress messages, false otherwise.
 	@param dim_order: Desired order of dimensions in the output file.
 	@param chunk_sizes: Chunk size of each dimension. Unspecified dimensions
                         be left as-is.
+	@param parallel: Should files be processed in parallel?
 	"""
-	def __init__(self, log : LogLevel, in_file: str, out_file: str, prog: bool,
-		reshape_options: ReshapeOptions):
+	def __init__(self, log : LogLevel, in_files: list[str], out_dir: str
+		, prog: bool, parallel: bool, reshape_options: ReshapeOptions):
 
 		self.log_level = log
-		self.in_file = in_file
-		self.out_file = out_file
+		self.in_files = in_files
+		self.out_dir = out_dir
 		self.report_progress = prog
 		self.reshape_options = reshape_options
+		self.parallel = parallel
+
+class ReshapeFile:
+	def __init__(self, in_file: str, out_file: str, opts: ReshapeOptions):
+		self.in_file = in_file
+		self.out_file = out_file
+		self.opts = opts
+	def exec(self, pcb: Callable[[float], None]):
+		log_information("Processing '%s'..." % self.in_file)
+		with open_netcdf(self.out_file, True) as nc_out:
+			with open_netcdf(self.in_file) as nc_in:
+				reshape(nc_in, nc_out, self.opts, pcb)
 
 def parse_args(argv: list[str]) -> Options:
 	"""
@@ -65,9 +78,10 @@ def parse_args(argv: list[str]) -> Options:
 	"""
 	parser = ArgumentParser(prog=argv[0], description = "Formatting ozflux data into a format suitable for consumption by LPJ-Guess")
 	parser.add_argument("-v", "--verbosity", type = int, help = "Logging verbosity (1-5, default 3)", nargs = "?", const = LogLevel.INFORMATION, default = LogLevel.INFORMATION)
-	parser.add_argument("-i", "--in-file", required = True, help = "Input file")
-	parser.add_argument("-o", "--out-file", help = "Path to the output file. If this is the same as the input file, output will be written to a temporary file in the same directory, and the input file will be deleted and overwritten only if processing finishes successfully.")
+	parser.add_argument("files", nargs = "+", help = "Input .nc files to be processed")
+	parser.add_argument("-o", "--out-dir", help = "Directory into which output files will be saved.")
 	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
+	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel")
 	parser.add_argument("-c", "--chunk-size", help = "Chunk sizes for each dimension. This is optional, and if omitted, the values in the input file will be kept (not recommended!). This should be specified in the same format as for nco. E.g. lat/1,lon/1,time/365", default = "")
 	parser.add_argument("-C", "--compression-level", type = int, help = "Compression level in the output file (0 = off) (default: same as input file)")
 	parser.add_argument("-d", "--dimension-order", help = "Dimension names should be specified separated by commas. E.g. `-d lat,lon,time`")
@@ -83,7 +97,7 @@ def parse_args(argv: list[str]) -> Options:
 	# lat,lon,time
 	dim_order = str.split(p.dimension_order, ",")
 	opts = ReshapeOptions(dim_order, chunks, p.compression_level, p.min_chunk_size)
-	return Options(p.verbosity, p.in_file, p.out_file, p.show_progress, opts)
+	return Options(p.verbosity, p.files, p.out_dir, p.show_progress, p.parallel, opts)
 
 def get_chunk_size(nc: Dataset, dim: str, chunk_sizes: list[tuple[str, int]]) -> int:
 	"""
@@ -213,28 +227,35 @@ def reshape(nc_in: Dataset, nc_out: Dataset, opts: ReshapeOptions
 		copy_variable(nc_in, nc_out, name, opts.min_chunk_size, vpcb)
 		step_start += step_size
 
-def main(opts: Options):
+def reshape_file(in_file: str, out_dir: str, opts: ReshapeOptions, pcb: Callable[[float], None]):
 	"""
-	Main function.
+	Reshape the specified file.
 	"""
-	out_file = opts.out_file
-	temp_file = False
-	if opts.in_file == out_file:
-		temp_file = True
-		pfx = os.path.basename(opts.in_file)
-		dir = os.path.dirname(opts.in_file)
-		out_file = tempfile.mkstemp(prefix = pfx, dir = dir)
-
+	out_file = os.path.join(out_dir, os.path.basename(in_file))
 	if os.path.exists(out_file):
 		os.remove(out_file)
 
-	with open_netcdf(opts.in_file) as nc_in:
+	with open_netcdf(in_file) as nc_in:
 		with open_netcdf(out_file, True) as nc_out:
-			reshape(nc_in, nc_out, opts.reshape_options, lambda p: log_progress(p))
-	if temp_file:
-		# os.remove(opts.in_file)
-		# os.rename(out_file, opts.out_file)
-		...
+			reshape(nc_in, nc_out, opts, pcb)
+
+def main(opts: Options):
+	"""
+	Main function.
+
+	@param opts: CLI arguments from the user.
+	"""
+	if not os.path.exists(opts.out_dir):
+		os.makedirs(opts.out_dir)
+
+	job_manager = JobManager()
+	for in_file in opts.in_files:
+		out_file = os.path.join(opts.out_dir, os.path.basename(in_file))
+		job_manager.add_job(ReshapeFile(in_file, out_file, opts.reshape_options), os.path.getsize(in_file))
+	if opts.parallel:
+		job_manager.run_parallel()
+	else:
+		job_manager.run_single_threaded()
 
 if __name__ == "__main__":
 	# Parse CLI args
@@ -246,7 +267,7 @@ if __name__ == "__main__":
 	try:
 		# Actual logic is in main().
 		main(opts)
-		print("\nFiles merged successfully!")
+		print("\nAll files reshaped successfully!")
 	except BaseException as error:
 		# Basic error handling.
 		log_error(traceback.format_exc())
