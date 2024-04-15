@@ -95,14 +95,14 @@ def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int, units: st
 
 	first_infile = infiles[0]
 	with open_netcdf(first_infile) as nc_in:
-		log_information("Creating dimensions in output file...")
+		log_diagnostic("Creating dimensions in output file...")
 		for name in nc_in.dimensions:
 			dim = nc_in.dimensions[name]
 			size = dim.size
 			if name == DIM_TIME:
 				size = ntime
 			create_dim_if_not_exists(nc_out, name, size)
-		log_information("Creating variables in output file...")
+		log_diagnostic("Creating variables in output file...")
 		for name in nc_in.variables:
 			var = nc_in.variables[name]
 			dims = var.dimensions
