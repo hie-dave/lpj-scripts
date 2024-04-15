@@ -1377,7 +1377,7 @@ def _copy_variable(nc_in: Dataset, nc_out: Dataset, name: str
 	ndim = len(nc_in.variables[name].dimensions)
 
 	if ndim > 3:
-		raise ValueError(f"Unable to copy variable {name}: >3 dimensions not implemented (variable {name} has {len(dims_in)} dimensions)")
+		raise ValueError(f"Unable to copy variable {name}: >3 dimensions not implemented (variable {name} has {ndim} dimensions)")
 	elif ndim == 3:
 		copy_3d(nc_in, nc_out, name, min_chunk_size, pcb)
 	elif ndim == 2:
