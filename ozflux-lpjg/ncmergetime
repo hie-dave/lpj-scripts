@@ -71,6 +71,13 @@ def parse_args(argv: list[str]) -> Options:
 	return Options(p.verbosity, p.files, p.out_file, p.show_progress
 		, p.parallel, p.chunk_size, p.units)
 
+def get_ntime(file: str) -> int:
+	"""
+	Get the length of the time dimension in the specified file.
+	"""
+	with open_netcdf(file) as nc:
+		return nc.dimensions[DIM_TIME].size
+
 def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int, units: str):
 	"""
 	Initialise the output file by creating dimensions and variables as required.
@@ -84,6 +91,8 @@ def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int, units: st
 	if len(infiles) < 1:
 		raise ValueError("No input files")
 
+	ntime = sum([get_ntime(file) for file in infiles])
+
 	first_infile = infiles[0]
 	with open_netcdf(first_infile) as nc_in:
 		log_information("Creating dimensions in output file...")
@@ -91,8 +100,7 @@ def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int, units: st
 			dim = nc_in.dimensions[name]
 			size = dim.size
 			if name == DIM_TIME:
-				# Make time an unlimited dimension
-				size = 0
+				size = ntime
 			create_dim_if_not_exists(nc_out, name, size)
 		log_information("Creating variables in output file...")
 		for name in nc_in.variables:
@@ -150,7 +158,10 @@ def append_timepoints(nc_in: Dataset, nc_out: Dataset, min_chunk_size: int, pcb:
 	chunk_size = max(chunk_size, min_chunk_size)
 
 	n = len(var_in)
-	nexist = len(var_out)
+	# nexist = len(var_out)
+	edges = numpy.ma.notmasked_edges(var_out)
+	nexist = 0 if edges is None else edges[1] + 1 #numpy.ma.flatnotmasked_edges(var_out)[0]
+	log_diagnostic(f"nexist = {nexist}")
 	for i in range(0, n, chunk_size):
 		upper = min(n, i + chunk_size)
 		chunk = var_in[i:upper]
