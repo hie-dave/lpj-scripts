@@ -129,7 +129,7 @@ def get_chunk_size(nc: Dataset, dim: str, chunk_sizes: list[tuple[str, int]]) ->
 	default_chunking = nc.variables[dim].chunking()
 	if default_chunking == "contiguous":
 		log_warning(f"No chunk size specified for contiguous dimension {dim}. This code pathway is untested. Godspeed!")
-		return None
+		return 1
 
 	log_warning(f"No chunking specified for dimension {dim}. Falling back to the chunk size in the input file, which is {default_chunking[0]}")
 	return default_chunking[0]
