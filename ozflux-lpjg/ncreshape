@@ -160,7 +160,7 @@ def init_outfile(nc_in: Dataset, nc_out: Dataset, reshape_options: ReshapeOption
 		# Compression level and type.
 		ct = ""
 		cl = 0
-		if reshape_options.compression_level <= 0:
+		if reshape_options.compression_level is None or reshape_options.compression_level <= 0:
 			# Use same as input file.
 			filters = var.filters()
 			cl = filters['complevel']
@@ -170,6 +170,7 @@ def init_outfile(nc_in: Dataset, nc_out: Dataset, reshape_options: ReshapeOption
 			ct = "zlib"
 
 		# Dimension order.
+		# TODO: better way of checking dimensionality - this is terrible
 		if len(reshape_options.dimension_order) == len(dims):
 			# User-specified dimension order.
 			dims = reshape_options.dimension_order
