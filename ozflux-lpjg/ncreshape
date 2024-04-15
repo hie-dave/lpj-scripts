@@ -16,6 +16,14 @@ from typing import Callable
 from ozflux_parallel import JobManager
 from os import path
 
+from mpi4py import MPI
+
+# Tag for work transmissions used in MPI comms.
+_TAG_WORK = 42
+
+# Rank of the master node in MPI mode.
+_RANK_MASTER = 0
+
 class ReshapeOptions:
 	"""
 	Class for storing CLI arguments from the user.
@@ -257,12 +265,47 @@ def main(opts: Options):
 	else:
 		job_manager.run_single_threaded()
 
+def mpi_init() -> list[str]:
+	"""
+	If running in MPI mode, distribute the list of input files equally across
+	the MPI workers. This function will return the list of files that this node
+	should process.
+	"""
+	# TODO: refactor this whole mess so that it's encapsulated by the JobManager
+	# class of ozflux_parallel.py.
+	comm = MPI.COMM_WORLD
+	if comm.size <= 1:
+		log_diagnostic("Running outside of MPI, or in MPI with world size of 1")
+		return opts.in_files
+
+	log_diagnostic(f"Running in MPI environment with world size of {comm.size}")
+
+	if comm.rank == _RANK_MASTER:
+		# Master node: divide work between workers.
+		log_debug(f"[master]: splitting work list into {comm.size} chunks")
+		work = numpy.array_split(opts.in_files, comm.size)
+		log_diagnostic(f"[master] Transmitting work list to slaves...")
+		for i in range(1, comm.size):
+			log_debug(f"[master] Transmitting work list to node {i}")
+			comm.send(work[i], i, tag = _TAG_WORK)
+		log_diagnostic("[master] Work list successfully transmitted")
+		log_diagnostic(f"[master] Master node has {len(work[0])} files to process")
+		return work[0]
+	else:
+		log_diagnostic(f"[slave {comm.rank}] Waiting for work list")
+		in_files = comm.recv(source = _RANK_MASTER, tag = _TAG_WORK)
+		log_diagnostic(f"[slave {comm.rank}] Received work list of {len(in_files)} files")
+		return in_files
+
 if __name__ == "__main__":
 	# Parse CLI args
 	opts = parse_args(argv)
 
 	set_log_level(opts.log_level)
 	set_show_progress(opts.report_progress)
+
+	# TODO: this should be handled by the job manager class.
+	opts.in_files = mpi_init()
 
 	try:
 		# Actual logic is in main().
