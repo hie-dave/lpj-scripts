@@ -144,14 +144,14 @@ def init_outfile(nc_in: Dataset, nc_out: Dataset, reshape_options: ReshapeOption
 	"""
 	# Create dimensions in output file by copying them directly from the input
 	# file.
-	log_information("Creating dimensions in output file...")
+	log_diagnostic("Creating dimensions in output file...")
 	for name in nc_in.dimensions:
 		dim = nc_in.dimensions[name]
 		size = dim.size
 		create_dim_if_not_exists(nc_out, name, size)
 
 	# Create variables in output file, with changes based on user inputs.
-	log_information("Creating variables in output file...")
+	log_diagnostic("Creating variables in output file...")
 	for name in nc_in.variables:
 		var = nc_in.variables[name]
 		dims = var.dimensions
