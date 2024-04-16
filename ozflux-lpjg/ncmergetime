@@ -56,7 +56,7 @@ class MergeTime:
 			with open_netcdf(in_file) as nc_in:
 				merge_time(nc_in, nc_out, self.min_chunk_size, pcb)
 		if self.use_jobfs:
-			log_information(f"Deleting {in_file}...")
+			log_diagnostic(f"Deleting jobfs temp file {in_file}...")
 			os.remove(in_file)
 
 def parse_args(argv: list[str]) -> Options:
@@ -124,7 +124,10 @@ def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int, units: st
 	if len(infiles) < 1:
 		raise ValueError("No input files")
 
+	log_information("Initialising output file")
+
 	ntime = sum([get_ntime(file) for file in infiles])
+	log_diagnostic(f"Input files contain {ntime} timesteps")
 
 	first_infile = infiles[0]
 	with open_netcdf(first_infile) as nc_in:
@@ -158,9 +161,14 @@ def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int, units: st
 					if attr == ATTR_UNITS and len(var.dimensions) == 3 and units != "":
 						value = units
 					setattr(var_out, attr, value)
+
+		log_diagnostic(f"Copying spatial variables into output file...")
+
+		log_debug(f"Copying latitude")
 		lat = get_var_from_std_name(nc_in, STD_LAT)
 		copy_1d(nc_in, nc_out, lat.name, chunk_size, lambda p: ...)
 
+		log_debug(f"Copying longitude")
 		lon = get_var_from_std_name(nc_in, STD_LON)
 		copy_1d(nc_in, nc_out, lon.name, chunk_size, lambda p: ...)
 

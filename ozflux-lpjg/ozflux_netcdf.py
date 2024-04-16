@@ -918,12 +918,18 @@ def create_var_if_not_exists(nc: Dataset, name: str, format: str
 	@param compression_type: Compression algorithm to be used (or None).
 	"""
 	compression = None if compression_level == 0 else compression_type
-	log_diagnostic("Compression = %s L%d" % (compression, compression_level))
 	if not name in nc.variables:
+		log_diagnostic(f"Creating variable {name} with format {format}, dimensions {dims}, compression {compression} L{compression_level}, and chunk sizes {chunksizes}")
 		nc.createVariable(name, format, dims, compression = compression
 		, complevel = compression_level, chunksizes = chunksizes)
+		log_debug(f"Variable {name} created successfully")
+
+		log_debug(f"Setting attribute {_ATTR_MISSING_VAL} on variable {name}")
 		var = nc.variables[name]
 		setattr(var, _ATTR_MISSING_VAL, default_fillvals[format])
+		log_debug(f"Attribute {_ATTR_MISSING_VAL} created successfully on variable {name}")
+	else:
+		log_diagnostic(f"Variable {name} will not be created because it already exists")
 
 def create_dim_if_not_exists(nc: Dataset, name: str, size: int = 0):
 	"""
@@ -934,7 +940,11 @@ def create_dim_if_not_exists(nc: Dataset, name: str, size: int = 0):
 	@param name: Name of the dimension.
 	"""
 	if not name in nc.dimensions:
+		log_diagnostic(f"Creating dimension {name} with size {size}")
 		nc.createDimension(name, size)
+		log_debug(f"Dimension {name} created successfully")
+	else:
+		log_diagnostic(f"Dimension {name} not created because it already exists")
 
 def open_netcdf(file: str, write: bool = False, format: str = NC_FORMAT) -> Dataset:
 	"""
