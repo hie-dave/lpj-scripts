@@ -138,3 +138,9 @@ def log_progress(progress: float):
 
 	if _show_progress:
 		print("Working: %.2f%%; elapsed: %s; remaining: %s               " % (100 * progress, elapsed, remaining), end = _progress_end)
+
+def get_walltime() -> datetime.timedelta:
+	"""
+	Get the total amount of walltime that has elapsed since program start.
+	"""
+	return datetime.datetime.now() - _start_time

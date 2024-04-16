@@ -4,7 +4,7 @@
 # contain the same data over different time ranges.
 #
 import ozflux_common
-import math, shutil, traceback
+import math, shutil, traceback, datetime
 
 from ozflux_logging import *
 from ozflux_netcdf import *
@@ -14,9 +14,6 @@ from netCDF4 import Dataset, Dimension, num2date, date2num
 from typing import Callable
 from ozflux_parallel import JobManager
 from os import path
-
-# Name of an environment variable which defines the JobFS path.
-_ENV_JOBFS = "PBS_JOBFS"
 
 class Options:
 	"""
@@ -28,10 +25,12 @@ class Options:
 	@param prog: True to write progress messages, 0 otherwise.
 	@param parallel: True to process files in parallel.
 	@param chunk_size: Minimum chunk size to be used when copying data.
-	@param use_jobfs: True to move input files into jobfs for processing.
+	@param workdir: Working directory. Input files will be copied to this location
+	before being read. Output file will be written in this location before being moved
+	to the ultimate output path specified by the -o parameter.
 	"""
 	def __init__(self, log : LogLevel, files: list[str], out: str, prog: bool,
-		parallel: bool, chunk_size: int, units: str, use_jobfs: bool):
+		parallel: bool, chunk_size: int, units: str, workdir: str):
 		self.log_level = log
 		self.files = files
 		self.out_file = out
@@ -39,24 +38,26 @@ class Options:
 		self.parallel = parallel
 		self.chunk_size = chunk_size
 		self.units = units
-		self.use_jobfs = use_jobfs
+		self.work_dir = workdir
 
 class MergeTime:
-	def __init__(self, in_file: str, out_file: str, min_chunk_size: int, use_jobfs: bool):
+	def __init__(self, in_file: str, out_file: str, min_chunk_size: int, work_dir: str):
 		self.in_file = in_file
 		self.out_file = out_file
 		self.min_chunk_size = min_chunk_size
-		self.use_jobfs = use_jobfs
+		self.work_dir = work_dir
 	def exec(self, pcb: Callable[[float], None]):
 		in_file = self.in_file
-		if self.use_jobfs:
-			in_file = copy_jobfs(in_file)
+		use_work_dir = False
+		if self.work_dir is not None and self.work_dir != "":
+			use_work_dir = True
+			in_file = copy_workdir(in_file, self.work_dir)
 		log_information("Processing '%s'..." % in_file)
 		with open_netcdf(self.out_file, True) as nc_out:
 			with open_netcdf(in_file) as nc_in:
 				merge_time(nc_in, nc_out, self.min_chunk_size, pcb)
-		if self.use_jobfs:
-			log_diagnostic(f"Deleting jobfs temp file {in_file}...")
+		if use_work_dir:
+			log_diagnostic(f"Deleting temp working file {in_file}...")
 			os.remove(in_file)
 
 def parse_args(argv: list[str]) -> Options:
@@ -75,34 +76,34 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel")
 	parser.add_argument("-c", "--chunk-size", type = int, help = "Minimum chunk size to be used when copying data. If 0, the chunk size of the input data will be used. This does not affect the chunking of the variables in the output file. (default: 0)", default = 0)
 	parser.add_argument("-u", "--units", help = "Output units (optional) (default: same as input units)", default = "")
-	parser.add_argument("-j", "--use-jobfs", action = "store_true", help = "Copy input data into JobFS for processing. This relies on the $PBS_JOBFS environment variable.")
+	parser.add_argument("-w", "--work-dir", default = None, help = "Working directory. Input files will be copied to this location before being read. Output file will be written in this location before being moved to the ultimate output path specified by the -o/--out-file parameter.")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
 
 	p = parser.parse_args(argv[1:])
 
 	return Options(p.verbosity, p.files, p.out_file, p.show_progress
-		, p.parallel, p.chunk_size, p.units, p.use_jobfs)
+		, p.parallel, p.chunk_size, p.units, p.work_dir)
 
-def get_jobfs() -> str:
+def copy_workdir(in_file: str, work_dir: str) -> str:
 	"""
-	Return the path to JobFS, or throw if no JobFS is detected.
-	"""
-	jobfs = os.getenv(_ENV_JOBFS)
-	if jobfs is None or jobfs == "":
-		raise ValueError(f"--use-jobfs is set but environment variable {_ENV_JOBFS} is not set")
-	if not os.path.exists(jobfs):
-		raise ValueError(f"JobFS path does not exist: '{jobfs}'")
-	return jobfs
+	Copy the specified file into the working directory and return the path to
+	the file in the working directory.
 
-def copy_jobfs(in_file: str) -> str:
+	@param in_file: The file to be copied.
+	@param work_dir: The working directory.
 	"""
-	Copy the specified file into jobfs and return the path to the file in jobfs.
-	"""
-	log_diagnostic(f"Copying {in_file} to jobfs...")
-	jobfs = get_jobfs()
-	jobfs_file = os.path.join(jobfs, os.path.basename(in_file))
-	shutil.copy2(in_file, jobfs_file)
-	return jobfs_file
+
+	if not os.path.exists(work_dir):
+		raise ValueError(f"Working directory {work_dir} does not exist")
+
+	work_file = os.path.join(work_dir, os.path.basename(in_file))
+	log_diagnostic(f"Copying {in_file} to {work_file}...")
+
+	copy_start = datetime.datetime.now()
+	shutil.copy2(in_file, work_file)
+	copy_duration = datetime.datetime.now() - copy_start
+	log_diagnostic(f"Successfully copied {in_file} in {copy_duration}")
+	return work_file
 
 def get_ntime(file: str) -> int:
 	"""
@@ -251,13 +252,22 @@ def main(opts: Options):
 	if len(opts.files) < 1:
 		return
 
+	out_file = opts.out_file
+
+	use_work_dir = False
+	if opts.work_dir is not None and opts.work_dir != "":
+		if not os.path.exists(opts.work_dir):
+			raise ValueError(f"Working directory {opts.work_dir} does not exist")
+		use_work_dir = True
+		out_file = os.path.join(opts.work_dir, os.path.basename(opts.out_file))
+
 	# Delete output file if it already exists.
-	if os.path.exists(opts.out_file):
-		os.remove(opts.out_file)
+	if os.path.exists(out_file):
+		os.remove(out_file)
 
 	job_manager = JobManager()
 
-	with open_netcdf(opts.out_file, write = True) as nc_out:
+	with open_netcdf(out_file, write = True) as nc_out:
 		init_outfile(nc_out, opts.files, opts.chunk_size, opts.units)
 	# todo: order by start time ascending?
 
@@ -266,8 +276,15 @@ def main(opts: Options):
 	for file in opts.files:
 		if not os.path.exists(file):
 			raise ValueError(f"File not found: {file}")
-		job_manager.add_job(MergeTime(file, opts.out_file, opts.chunk_size, opts.use_jobfs), path.getsize(file))
+		job_manager.add_job(MergeTime(file, out_file, opts.chunk_size, opts.work_dir), path.getsize(file))
 	job_manager.run_single_threaded()
+
+	if use_work_dir:
+		log_information(f"Moving temporary output file {out_file} to actual output path: {opts.out_file}")
+		move_start = datetime.datetime.now()
+		shutil.move(out_file, opts.out_file)
+		move_duration = datetime.datetime.now() - move_start
+		log_diagnostic(f"Successfully moved output file in {move_duration}")
 
 if __name__ == "__main__":
 	# Parse CLI args
@@ -280,6 +297,7 @@ if __name__ == "__main__":
 		# Actual logic is in main().
 		main(opts)
 		print("\nFiles merged successfully!")
+		print(f"Total duration: {get_walltime()}")
 	except BaseException as error:
 		# Basic error handling.
 		log_error(traceback.format_exc())
