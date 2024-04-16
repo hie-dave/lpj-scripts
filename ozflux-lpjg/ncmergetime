@@ -4,8 +4,7 @@
 # contain the same data over different time ranges.
 #
 import ozflux_common
-import math
-import traceback
+import math, shutil, traceback
 
 from ozflux_logging import *
 from ozflux_netcdf import *
@@ -15,6 +14,9 @@ from netCDF4 import Dataset, Dimension, num2date, date2num
 from typing import Callable
 from ozflux_parallel import JobManager
 from os import path
+
+# Name of an environment variable which defines the JobFS path.
+_ENV_JOBFS = "PBS_JOBFS"
 
 class Options:
 	"""
@@ -26,9 +28,10 @@ class Options:
 	@param prog: True to write progress messages, 0 otherwise.
 	@param parallel: True to process files in parallel.
 	@param chunk_size: Minimum chunk size to be used when copying data.
+	@param use_jobfs: True to move input files into jobfs for processing.
 	"""
 	def __init__(self, log : LogLevel, files: list[str], out: str, prog: bool,
-		parallel: bool, chunk_size: int, units: str):
+		parallel: bool, chunk_size: int, units: str, use_jobfs: bool):
 		self.log_level = log
 		self.files = files
 		self.out_file = out
@@ -36,17 +39,25 @@ class Options:
 		self.parallel = parallel
 		self.chunk_size = chunk_size
 		self.units = units
+		self.use_jobfs = use_jobfs
 
 class MergeTime:
-	def __init__(self, in_file: str, out_file: str, min_chunk_size: int):
+	def __init__(self, in_file: str, out_file: str, min_chunk_size: int, use_jobfs: bool):
 		self.in_file = in_file
 		self.out_file = out_file
 		self.min_chunk_size = min_chunk_size
+		self.use_jobfs = use_jobfs
 	def exec(self, pcb: Callable[[float], None]):
-		log_information("Processing '%s'..." % self.in_file)
+		in_file = self.in_file
+		if self.use_jobfs:
+			in_file = copy_jobfs(in_file)
+		log_information("Processing '%s'..." % in_file)
 		with open_netcdf(self.out_file, True) as nc_out:
-			with open_netcdf(self.in_file) as nc_in:
+			with open_netcdf(in_file) as nc_in:
 				merge_time(nc_in, nc_out, self.min_chunk_size, pcb)
+		if self.use_jobfs:
+			log_information(f"Deleting {in_file}...")
+			os.remove(in_file)
 
 def parse_args(argv: list[str]) -> Options:
 	"""
@@ -64,12 +75,34 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel")
 	parser.add_argument("-c", "--chunk-size", type = int, help = "Minimum chunk size to be used when copying data. If 0, the chunk size of the input data will be used. This does not affect the chunking of the variables in the output file. (default: 0)", default = 0)
 	parser.add_argument("-u", "--units", help = "Output units (optional) (default: same as input units)", default = "")
+	parser.add_argument("-j", "--use-jobfs", action = "store_true", help = "Copy input data into JobFS for processing. This relies on the $PBS_JOBFS environment variable.")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
 
 	p = parser.parse_args(argv[1:])
 
 	return Options(p.verbosity, p.files, p.out_file, p.show_progress
-		, p.parallel, p.chunk_size, p.units)
+		, p.parallel, p.chunk_size, p.units, p.use_jobfs)
+
+def get_jobfs() -> str:
+	"""
+	Return the path to JobFS, or throw if no JobFS is detected.
+	"""
+	jobfs = os.getenv(_ENV_JOBFS)
+	if jobfs is None or jobfs == "":
+		raise ValueError(f"--use-jobfs is set but environment variable {_ENV_JOBFS} is not set")
+	if not os.path.exists(jobfs):
+		raise ValueError(f"JobFS path does not exist: '{jobfs}'")
+	return jobfs
+
+def copy_jobfs(in_file: str) -> str:
+	"""
+	Copy the specified file into jobfs and return the path to the file in jobfs.
+	"""
+	log_diagnostic(f"Copying {in_file} to jobfs...")
+	jobfs = get_jobfs()
+	jobfs_file = os.path.join(jobfs, os.path.basename(in_file))
+	shutil.copy2(in_file, jobfs_file)
+	return jobfs_file
 
 def get_ntime(file: str) -> int:
 	"""
@@ -225,7 +258,7 @@ def main(opts: Options):
 	for file in opts.files:
 		if not os.path.exists(file):
 			raise ValueError(f"File not found: {file}")
-		job_manager.add_job(MergeTime(file, opts.out_file, opts.chunk_size), path.getsize(file))
+		job_manager.add_job(MergeTime(file, opts.out_file, opts.chunk_size, opts.use_jobfs), path.getsize(file))
 	job_manager.run_single_threaded()
 
 if __name__ == "__main__":
