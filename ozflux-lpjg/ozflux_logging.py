@@ -32,8 +32,15 @@ _show_progress = False
 _warnings_as_errors: bool
 _warnings_as_errors = False
 
+# Time at which execution began.
 _start_time: datetime.datetime
 _start_time = datetime.datetime.now()
+
+# Time of first progress report. Having this as a separate variable to
+# _start_time allows the caller to perform some processing before progress
+# reporting begins without influencing the ETA aspect of progress reports.
+_progress_reporting_start: datetime.datetime
+_progress_reporting_start = datetime.datetime.now()
 
 _progress_end: str
 _progress_end = "\r" if sys.stdout.isatty() else "\n"
@@ -124,13 +131,13 @@ def log_progress(progress: float):
 	@param progress: Current progress in range [0, 1].
 	"""
 	global _show_progress
-	global _start_time
+	global _progress_reporting_start
 	global _progress_end
 	if progress > 1:
 		log_warning("Attempted to display progress > 1")
 
 	current_time = datetime.datetime.now()
-	elapsed = current_time - _start_time
+	elapsed = current_time - _progress_reporting_start
 	elapsed = elapsed - datetime.timedelta(microseconds = elapsed.microseconds)
 	total = elapsed / progress
 	remaining = total - elapsed
@@ -144,3 +151,7 @@ def get_walltime() -> datetime.timedelta:
 	Get the total amount of walltime that has elapsed since program start.
 	"""
 	return datetime.datetime.now() - _start_time
+
+def init_walltime():
+	global _progress_reporting_start
+	_progress_reporting_start = datetime.datetime.now()

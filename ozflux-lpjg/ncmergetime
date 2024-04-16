@@ -271,6 +271,8 @@ def main(opts: Options):
 		init_outfile(nc_out, opts.files, opts.chunk_size, opts.units)
 	# todo: order by start time ascending?
 
+	init_walltime()
+
 	# Each MergeTime object will open and close the output file internally.
 	# Failure to do this results in a memory leak.
 	for file in opts.files:
