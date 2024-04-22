@@ -3,7 +3,7 @@
 import enum, sys
 import datetime
 from io import TextIOWrapper
-from mpi4py import MPI
+import mpi4py
 
 # Maximum length of a progress message. ie how many characters are used
 # by printing the longest possible progress message?
@@ -44,8 +44,15 @@ _progress_reporting_start = datetime.datetime.now()
 
 _progress_end: str
 _progress_end = "\r" if sys.stdout.isatty() else "\n"
-if MPI.COMM_WORLD.size > 1:
+if mpi4py.MPI.COMM_WORLD.size > 1:
 	_progress_end = "\n"
+
+_mpi_pfx: bool
+_mpi_pfx = False
+
+def set_use_mpi_pfx(mpi_pfx: bool):
+	global _mpi_pfx
+	_mpi_pfx = mpi_pfx
 
 def set_warnings_as_errors(warnings_as_errors: bool):
 	"""
@@ -86,7 +93,10 @@ def log(msg: str, log_level: LogLevel):
 		if _warnings_as_errors:
 			raise ValueError(msg)
 		else:
-			msg = "WARNING: %s" % msg
+			msg = f"WARNING: {msg}"
+
+	if _mpi_pfx:
+		msg = f"[node {mpi4py.MPI.COMM_WORLD.rank}] {msg}"
 
 	# todo: custom log file as CLI arg?
 	if log_level <= _log_level:

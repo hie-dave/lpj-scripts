@@ -16,8 +16,6 @@ from typing import Callable
 from ozflux_parallel import JobManager
 from os import path
 
-from mpi4py import MPI
-
 # Tag for work transmissions used in MPI comms.
 _TAG_WORK = 42
 
@@ -54,9 +52,11 @@ class Options:
 	@param chunk_sizes: Chunk size of each dimension. Unspecified dimensions
                         be left as-is.
 	@param parallel: Should files be processed in parallel?
+	@param mpi: Should files be processed using MPI? Requires parallel = true.
 	"""
 	def __init__(self, log : LogLevel, in_files: list[str], out_dir: str
-		, prog: bool, parallel: bool, reshape_options: ReshapeOptions):
+		, prog: bool, parallel: bool, mpi: bool
+		, reshape_options: ReshapeOptions):
 
 		self.log_level = log
 		self.in_files = in_files
@@ -64,6 +64,7 @@ class Options:
 		self.report_progress = prog
 		self.reshape_options = reshape_options
 		self.parallel = parallel
+		self.mpi = mpi
 
 class ReshapeFile:
 	def __init__(self, in_file: str, out_file: str, opts: ReshapeOptions):
@@ -94,6 +95,7 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-C", "--compression-level", type = int, help = "Compression level in the output file (0 = off) (default: same as input file)")
 	parser.add_argument("-d", "--dimension-order", help = "Dimension names should be specified separated by commas. E.g. `-d lat,lon,time`")
 	parser.add_argument("-m", "--min-chunk-size", type = int, help = "Minimum chunk size to use when copying data. 0 means use the chunk size in the netcdf file. Higher values result in better performance but higher memory usage. (default: 0)")
+	parser.add_argument("-M", "--mpi", action = "store_true", help = "Use MPI for parallel processing. If not set, process-level parallelisation will be used instead.")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
 
 	p = parser.parse_args(argv[1:])
@@ -105,7 +107,8 @@ def parse_args(argv: list[str]) -> Options:
 	# lat,lon,time
 	dim_order = str.split(p.dimension_order, ",")
 	opts = ReshapeOptions(dim_order, chunks, p.compression_level, p.min_chunk_size)
-	return Options(p.verbosity, p.files, p.out_dir, p.show_progress, p.parallel, opts)
+	return Options(p.verbosity, p.files, p.out_dir, p.show_progress, p.parallel
+				, p.mpi, opts)
 
 def get_chunk_size(nc: Dataset, dim: str, chunk_sizes: list[tuple[str, int]]) -> int:
 	"""
@@ -262,41 +265,12 @@ def main(opts: Options):
 		out_file = os.path.join(opts.out_dir, os.path.basename(in_file))
 		job_manager.add_job(ReshapeFile(in_file, out_file, opts.reshape_options), os.path.getsize(in_file))
 	if opts.parallel:
-		job_manager.run_parallel()
+		if opts.mpi:
+			job_manager.run_mpi()
+		else:
+			job_manager.run_parallel()
 	else:
 		job_manager.run_single_threaded()
-
-def mpi_init() -> list[str]:
-	"""
-	If running in MPI mode, distribute the list of input files equally across
-	the MPI workers. This function will return the list of files that this node
-	should process.
-	"""
-	# TODO: refactor this whole mess so that it's encapsulated by the JobManager
-	# class of ozflux_parallel.py.
-	comm = MPI.COMM_WORLD
-	if comm.size <= 1:
-		log_diagnostic("Running outside of MPI, or in MPI with world size of 1")
-		return opts.in_files
-
-	log_diagnostic(f"Running in MPI environment with world size of {comm.size}")
-
-	if comm.rank == _RANK_MASTER:
-		# Master node: divide work between workers.
-		log_debug(f"[master]: splitting work list into {comm.size} chunks")
-		work = numpy.array_split(opts.in_files, comm.size)
-		log_diagnostic(f"[master] Transmitting work list to slaves...")
-		for i in range(1, comm.size):
-			log_debug(f"[master] Transmitting work list to node {i}")
-			comm.send(work[i], i, tag = _TAG_WORK)
-		log_diagnostic("[master] Work list successfully transmitted")
-		log_diagnostic(f"[master] Master node has {len(work[0])} files to process")
-		return work[0]
-	else:
-		log_diagnostic(f"[slave {comm.rank}] Waiting for work list")
-		in_files = comm.recv(source = _RANK_MASTER, tag = _TAG_WORK)
-		log_diagnostic(f"[slave {comm.rank}] Received work list of {len(in_files)} files")
-		return in_files
 
 if __name__ == "__main__":
 	# Parse CLI args
@@ -304,9 +278,6 @@ if __name__ == "__main__":
 
 	set_log_level(opts.log_level)
 	set_show_progress(opts.report_progress)
-
-	# TODO: this should be handled by the job manager class.
-	opts.in_files = mpi_init()
 
 	try:
 		# Actual logic is in main().
