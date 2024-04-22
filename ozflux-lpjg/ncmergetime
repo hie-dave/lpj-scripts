@@ -14,6 +14,17 @@ from netCDF4 import Dataset, Dimension, num2date, date2num
 from typing import Callable
 from ozflux_parallel import JobManager
 from os import path
+from functools import reduce
+
+# Exit code used when the walltime limit is reached.
+EXIT_CODE_WALLTIME_LIMIT = 2
+
+# The amount of overhead allocated for moving the output file from the working
+# directory to the output directory when a walltime limit is provided. When this
+# happens, an estimate is made of how much time is required to move the file,
+# and we allow for the actual move operation to exceed the estimate by this
+# factor (a fraction of the estimate).
+NOVERHEAD = 4
 
 class Options:
 	"""
@@ -28,9 +39,17 @@ class Options:
 	@param workdir: Working directory. Input files will be copied to this location
 	before being read. Output file will be written in this location before being moved
 	to the ultimate output path specified by the -o parameter.
+	@param restart_file: File containing checkpointing information which allows
+						 this job to be restarted from a previous run.
+	@param walltime_limit: Maximum amount of walltime allowed for this job. If
+						   this time limit is reached, the job will terminate
+						   and may be resumed later by using the restart_file
+						   parameter.
 	"""
 	def __init__(self, log : LogLevel, files: list[str], out: str, prog: bool,
-		parallel: bool, chunk_size: int, units: str, workdir: str):
+		parallel: bool, chunk_size: int, units: str, workdir: str,
+		restart_file: str, walltime_limit: datetime.timedelta):
+
 		self.log_level = log
 		self.files = files
 		self.out_file = out
@@ -39,19 +58,28 @@ class Options:
 		self.chunk_size = chunk_size
 		self.units = units
 		self.work_dir = workdir
+		self.restart_file = restart_file
+		self.walltime_limit = walltime_limit
+		# Rate of file copying between input and working directory, in bytes per second.
+		self.copy_rate: float = 0
 
 class MergeTime:
-	def __init__(self, in_file: str, out_file: str, min_chunk_size: int, work_dir: str):
+	def __init__(self, in_file: str, out_file: str, min_chunk_size: int
+			  , work_dir: str, write_restart_file: bool):
 		self.in_file = in_file
 		self.out_file = out_file
 		self.min_chunk_size = min_chunk_size
 		self.work_dir = work_dir
+		self.write_restart_file = write_restart_file
 	def exec(self, pcb: Callable[[float], None]):
 		in_file = self.in_file
 		use_work_dir = False
 		if self.work_dir is not None and self.work_dir != "":
 			use_work_dir = True
+			copy_start = datetime.datetime.now()
 			in_file = copy_workdir(in_file, self.work_dir)
+			copy_duration = datetime.datetime.now() - copy_start
+			self.copy_rate = path.getsize(in_file) / copy_duration.total_seconds()
 		log_information("Processing '%s'..." % in_file)
 		with open_netcdf(self.out_file, True) as nc_out:
 			with open_netcdf(in_file) as nc_in:
@@ -77,12 +105,18 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-c", "--chunk-size", type = int, help = "Minimum chunk size to be used when copying data. If 0, the chunk size of the input data will be used. This does not affect the chunking of the variables in the output file. (default: 0)", default = 0)
 	parser.add_argument("-u", "--units", help = "Output units (optional) (default: same as input units)", default = "")
 	parser.add_argument("-w", "--work-dir", default = None, help = "Working directory. Input files will be copied to this location before being read. Output file will be written in this location before being moved to the ultimate output path specified by the -o/--out-file parameter.")
+	parser.add_argument("-W", "--walltime-limit", default = None, help = "Walltime limit. If this limit is reached, the job will terminate and may be resumed later by re-running the command with the same restart file.")
+	parser.add_argument("-r", "--restart-file", default = None, help = "Path to the restart file to be used. This allows execution to resume from a previous run of ncmergetime. This requires that the same arguments are used in all invocations of the command.")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
 
 	p = parser.parse_args(argv[1:])
 
+	walltime_limit = datetime.datetime.strptime(p.walltime_limit, "%H:%M:%S")
+	walltime_limit = datetime.timedelta(walltime_limit.hour, walltime_limit.minute, walltime_limit.second)
+
 	return Options(p.verbosity, p.files, p.out_file, p.show_progress
-		, p.parallel, p.chunk_size, p.units, p.work_dir)
+		, p.parallel, p.chunk_size, p.units, p.work_dir, p.restart_file
+		, walltime_limit)
 
 def copy_workdir(in_file: str, work_dir: str) -> str:
 	"""
@@ -127,6 +161,7 @@ def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int, units: st
 
 	log_information("Initialising output file")
 
+	log_diagnostic(f"Opening input files to count total number of timesteps")
 	ntime = sum([get_ntime(file) for file in infiles])
 	log_diagnostic(f"Input files contain {ntime} timesteps")
 
@@ -222,18 +257,30 @@ def append_timepoints(nc_in: Dataset, nc_out: Dataset, min_chunk_size: int, pcb:
 		var_out[i + nexist:upper + nexist] = chunk
 		pcb(upper / n)
 
+def get_weight(nc: Dataset, name: str) -> int:
+	"""
+	Get the total 'weight' of a particular variable in a NetCDF file, where
+	weight is defined as the product of the size of the variable's dimensions.
+
+	@param name: Name of the variable.
+	"""
+	var = nc.variables[name]
+	sizes = [nc.dimensions[dim].size for dim in var.dimensions]
+	return reduce(lambda x, y: x * y, sizes, 1)
+
 def merge_time(nc_in: Dataset, nc_out: Dataset, min_chunk_size: int, pcb: Callable[[float], None]):
 	# This is a special append function designed for time variables. It behaves
 	# the same as the other append_* functions but can convert time units.
 	append_timepoints(nc_in, nc_out, min_chunk_size, lambda p: ...)
 
-	nvar = len([name for name in nc_in.variables if not name in nc_in.dimensions])
+	vars = [name for name in nc_in.variables if not name in nc_in.dimensions]
+	weights = [get_weight(nc_in, var) for var in vars]
+	total_weight = sum(weights)
 	start = 0
-	step = 1.0 / nvar
 	for name in nc_in.variables:
 		if name in nc_in.dimensions:
 			continue
-
+		step = get_weight(nc_in, name) / total_weight
 		prog = lambda p: pcb(start + step * p)
 
 		# todo: rename this
@@ -241,6 +288,15 @@ def merge_time(nc_in: Dataset, nc_out: Dataset, min_chunk_size: int, pcb: Callab
 
 		start += step
 		pcb(start)
+
+def parse_restart_file(restart_file: str) -> list[str]:
+	"""
+	Parse the restart file, and return a list of file names which have already
+	been processed.
+	"""
+	# TODO: this doesn't support file names containing newlines!
+	with open(restart_file) as file:
+		return [line.strip("\n") for line in file.readlines()]
 
 def main(opts: Options):
 	"""
@@ -252,6 +308,9 @@ def main(opts: Options):
 	if len(opts.files) < 1:
 		return
 
+	if opts.walltime_limit is not None and opts.restart_file is None:
+		raise ValueError(f"Walltime limit is set, but no restart file is being used. This doesn't really make sense - what do you plan to do with the resultant incomplete file?")
+
 	out_file = opts.out_file
 
 	use_work_dir = False
@@ -260,26 +319,108 @@ def main(opts: Options):
 			raise ValueError(f"Working directory {opts.work_dir} does not exist")
 		use_work_dir = True
 		out_file = os.path.join(opts.work_dir, os.path.basename(opts.out_file))
+		log_diagnostic(f"Intermediate output file will be used: {out_file}")
+
+	# True to resume from restart file. False otherwise.
+	restart = False
+	write_restart = False
+	restart_files: list[str] = []
+	if opts.restart_file is not None:
+		log_diagnostic(f"Restart file will be written: '{opts.restart_file}'")
+		write_restart = True
+		if os.path.exists(opts.restart_file):
+			log_diagnostic(f"Restart file will be read: '{opts.restart_file}'")
+			restart = True
+			restart_files = parse_restart_file(opts.restart_file)
+			log_diagnostic(f"{len(restart_files)} files have already been processed")
+			if use_work_dir and not os.path.exists(out_file) and os.path.exists(opts.out_file):
+				log_diagnostic(f"Copying existing output file into working directory in order to resume from where we left off")
+				shutil.copy2(opts.out_file, out_file)
 
 	# Delete output file if it already exists.
-	if os.path.exists(out_file):
+	if os.path.exists(out_file) and not restart:
+		log_diagnostic(f"Deleting existing output file '{out_file}'")
 		os.remove(out_file)
 
-	job_manager = JobManager()
-
-	with open_netcdf(out_file, write = True) as nc_out:
-		init_outfile(nc_out, opts.files, opts.chunk_size, opts.units)
+	if not restart:
+		with open_netcdf(out_file, write = True) as nc_out:
+			init_outfile(nc_out, opts.files, opts.chunk_size, opts.units)
 	# todo: order by start time ascending?
 
 	init_walltime()
 
 	# Each MergeTime object will open and close the output file internally.
 	# Failure to do this results in a memory leak.
-	for file in opts.files:
+	in_files = [file for file in opts.files if not file in restart_files]
+	step_start = 0
+	total_weight = sum(path.getsize(file) for file in in_files)
+	copy_rates: list[float] = []
+	iteration_durations: list[float] = []
+	for file in in_files:
 		if not os.path.exists(file):
 			raise ValueError(f"File not found: {file}")
-		job_manager.add_job(MergeTime(file, out_file, opts.chunk_size, opts.work_dir), path.getsize(file))
-	job_manager.run_single_threaded()
+		step_size = path.getsize(file) / total_weight
+		job = MergeTime(file, out_file, opts.chunk_size, opts.work_dir, write_restart)
+		iteration_start = datetime.datetime.now()
+		job.exec(lambda p: log_progress(step_start + step_size * p))
+		iteration_durations.append(datetime.datetime.now() - iteration_start)
+		step_start += step_size
+
+		# Append to restart file.
+		if write_restart:
+			with open(opts.restart_file, "a") as rfile:
+				rfile.writelines([file, '\n'])
+
+		more_files = file != in_files[len(in_files) - 1]
+		if use_work_dir and opts.walltime_limit is not None and more_files:
+			# Record the speed at which this job's input file was copied into
+			# the working directory (in bytes per second).
+			copy_rates.append(job.copy_rate)
+
+			# Get the mean rate of copyin files from the input to the working
+			# directory (bytes per second).
+			mean_copy_rate = sum(copy_rates) / len(copy_rates)
+
+			# Estimated the time required to copy the output file back to the
+			# output directory.
+			copy_time = path.getsize(out_file) / mean_copy_rate
+
+			# Create a timedelta object to store this required time.
+			est_outfile_copy_time = datetime.timedelta(seconds = copy_time)
+
+			# Get the time remaining for this job.
+			time_remaining = opts.walltime_limit - get_walltime()
+
+			log_diagnostic(f"Mean copy rate is {mean_copy_rate} B/s")
+			log_diagnostic(f"Estimated copy time for output file is  {est_outfile_copy_time}")
+			log_diagnostic(f"Remaining time is {time_remaining}")
+
+			# Check if there is enough time remaining to copy the output file
+			# back into the output directory from the working directory.
+			if time_remaining < NOVERHEAD * est_outfile_copy_time:
+				log_error(f"Copying output file to output directory. Estimated time required: {est_outfile_copy_time}. Time remaining: {time_remaining}")
+				copy_start = datetime.datetime.now()
+
+				# Copy the output file back to the output directory from the
+				# working directory.
+				shutil.move(out_file, opts.out_file)
+
+				copy_duration = datetime.datetime.now() - copy_start
+				log_error(f"Output file successfully moved to output directory in {copy_duration}. Exiting job...")
+				sys.exit(EXIT_CODE_WALLTIME_LIMIT)
+		elif opts.walltime_limit is not None:
+			# Mean duration of each iteration.
+			seconds = sum([x.total_seconds() for x in iteration_durations]) / len(iteration_durations)
+			mean_iteration_duration = datetime.timedelta(seconds = seconds)
+
+			# Time remaining to the job.
+			time_remaining = opts.walltime_limit - get_walltime()
+
+			# If not enough time remaining, and more files must be appended,
+			# terminate early.
+			if time_remaining < NOVERHEAD * mean_iteration_duration and more_files:
+				log_information(f"Early termination due to walltime limit of {opts.walltime_limit} being reached. Elapsed time is {get_walltime()} and estimated time required for another iteration is {mean_iteration_duration}")
+				sys.exit(EXIT_CODE_WALLTIME_LIMIT)
 
 	if use_work_dir:
 		log_information(f"Moving temporary output file {out_file} to actual output path: {opts.out_file}")
