@@ -17,7 +17,7 @@ from os import path
 from functools import reduce
 
 # Exit code used when the walltime limit is reached.
-EXIT_CODE_WALLTIME_LIMIT = 2
+EXIT_CODE_WALLTIME_LIMIT = 42
 
 # The amount of overhead allocated for moving the output file from the working
 # directory to the output directory when a walltime limit is provided. When this
@@ -406,7 +406,8 @@ def main(opts: Options):
 				shutil.move(out_file, opts.out_file)
 
 				copy_duration = datetime.datetime.now() - copy_start
-				log_error(f"Output file successfully moved to output directory in {copy_duration}. Exiting job...")
+				log_information(f"Output file successfully moved to output directory in {copy_duration}. Exiting job...")
+				log_error(f"Early termination due to walltime limit of {opts.walltime_limit} being reached. Elapsed time is {get_walltime()} and estimated time required for another iteration is {mean_iteration_duration}")
 				sys.exit(EXIT_CODE_WALLTIME_LIMIT)
 		elif opts.walltime_limit is not None:
 			# Mean duration of each iteration.
@@ -419,7 +420,7 @@ def main(opts: Options):
 			# If not enough time remaining, and more files must be appended,
 			# terminate early.
 			if time_remaining < NOVERHEAD * mean_iteration_duration and more_files:
-				log_information(f"Early termination due to walltime limit of {opts.walltime_limit} being reached. Elapsed time is {get_walltime()} and estimated time required for another iteration is {mean_iteration_duration}")
+				log_error(f"Early termination due to walltime limit of {opts.walltime_limit} being reached. Elapsed time is {get_walltime()} and estimated time required for another iteration is {mean_iteration_duration}")
 				sys.exit(EXIT_CODE_WALLTIME_LIMIT)
 
 	if use_work_dir:
@@ -441,7 +442,7 @@ if __name__ == "__main__":
 		main(opts)
 		print("\nFiles merged successfully!")
 		print(f"Total duration: {get_walltime()}")
-	except BaseException as error:
+	except Exception as error:
 		# Basic error handling.
 		log_error(traceback.format_exc())
 		exit(1)
