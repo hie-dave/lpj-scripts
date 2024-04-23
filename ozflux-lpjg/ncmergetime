@@ -4,7 +4,7 @@
 # contain the same data over different time ranges.
 #
 import ozflux_common
-import math, shutil, traceback, datetime
+import math, shutil, traceback, datetime, pandas
 
 from ozflux_logging import *
 from ozflux_netcdf import *
@@ -111,8 +111,8 @@ def parse_args(argv: list[str]) -> Options:
 
 	p = parser.parse_args(argv[1:])
 
-	walltime_limit = datetime.datetime.strptime(p.walltime_limit, "%H:%M:%S")
-	walltime_limit = datetime.timedelta(walltime_limit.hour, walltime_limit.minute, walltime_limit.second)
+	
+	walltime_limit = pandas.Timedelta(p.walltime_limit).to_pytimedelta()
 
 	return Options(p.verbosity, p.files, p.out_file, p.show_progress
 		, p.parallel, p.chunk_size, p.units, p.work_dir, p.restart_file
