@@ -1588,6 +1588,16 @@ def get_timestep(nc: Dataset) -> int:
 
 	raise ValueError(f"Unable to determine timestep width: all data appears to be on the same day")
 
+def get_nexist(var: Variable) -> int:
+	"""
+	Get the number of existing elements in the variable.
+
+	@param var: Variable in a NetCDF file.
+	"""
+	# return len(var_out)
+	edges = numpy.ma.notmasked_edges(var)
+	return 0 if edges is None else edges[1] + 1 #numpy.ma.flatnotmasked_edges(var_out)[0]
+
 def _append_3d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
 			   , pcb: Callable[[float], None]):
 	"""
@@ -1641,7 +1651,9 @@ def _append_3d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
 	# The current iteration.
 	it = 0
 
-	time_offset = nc_out.dimensions[DIM_TIME].size - nc_in.dimensions[DIM_TIME].size
+	var_time = nc_out.variables[VAR_TIME]
+	time_offset = get_nexist(var_time) - nc_in.dimensions[DIM_TIME].size
+	log_diagnostic(f"time_offset = {time_offset}")
 
 	# These tell us whether we can use the same indices in the input and output
 	# files for a particular dimension. This will be true for spatial dimensions

@@ -235,9 +235,7 @@ def append_timepoints(nc_in: Dataset, nc_out: Dataset, min_chunk_size: int, pcb:
 	chunk_size = max(chunk_size, min_chunk_size)
 
 	n = len(var_in)
-	# nexist = len(var_out)
-	edges = numpy.ma.notmasked_edges(var_out)
-	nexist = 0 if edges is None else edges[1] + 1 #numpy.ma.flatnotmasked_edges(var_out)[0]
+	nexist = get_nexist(var_out)
 	log_diagnostic(f"nexist = {nexist}")
 	for i in range(0, n, chunk_size):
 		upper = min(n, i + chunk_size)
@@ -383,7 +381,9 @@ def main(opts: Options):
 
 			# Estimated the time required to copy the output file back to the
 			# output directory.
-			copy_time = path.getsize(out_file) / mean_copy_rate
+			out_size = path.getsize(out_file)
+			log_diagnostic(f"Output file size is currently {out_size}")
+			copy_time = out_size / mean_copy_rate
 
 			# Create a timedelta object to store this required time.
 			est_outfile_copy_time = datetime.timedelta(seconds = copy_time)
