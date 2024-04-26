@@ -398,16 +398,19 @@ def main(opts: Options):
 			# Check if there is enough time remaining to copy the output file
 			# back into the output directory from the working directory.
 			if time_remaining < NOVERHEAD * est_outfile_copy_time:
-				log_error(f"Copying output file to output directory. Estimated time required: {est_outfile_copy_time}. Time remaining: {time_remaining}")
+				log_warning(f"Copying output file to output directory. Estimated time required: {est_outfile_copy_time}. Time remaining: {time_remaining}")
 				copy_start = datetime.datetime.now()
 
 				# Copy the output file back to the output directory from the
 				# working directory.
 				shutil.move(out_file, opts.out_file)
 
+				seconds = sum([x.total_seconds() for x in iteration_durations]) / len(iteration_durations)
+				mean_iteration_duration = datetime.timedelta(seconds = seconds)
+
 				copy_duration = datetime.datetime.now() - copy_start
 				log_information(f"Output file successfully moved to output directory in {copy_duration}. Exiting job...")
-				log_error(f"Early termination due to walltime limit of {opts.walltime_limit} being reached. Elapsed time is {get_walltime()} and estimated time required for another iteration is {mean_iteration_duration}")
+				log_warning(f"Early termination due to walltime limit of {opts.walltime_limit} being reached. Elapsed time is {get_walltime()} and estimated time required for another iteration is {mean_iteration_duration}")
 				sys.exit(EXIT_CODE_WALLTIME_LIMIT)
 		elif opts.walltime_limit is not None:
 			# Mean duration of each iteration.
@@ -420,7 +423,7 @@ def main(opts: Options):
 			# If not enough time remaining, and more files must be appended,
 			# terminate early.
 			if time_remaining < NOVERHEAD * mean_iteration_duration and more_files:
-				log_error(f"Early termination due to walltime limit of {opts.walltime_limit} being reached. Elapsed time is {get_walltime()} and estimated time required for another iteration is {mean_iteration_duration}")
+				log_warning(f"Early termination due to walltime limit of {opts.walltime_limit} being reached. Elapsed time is {get_walltime()} and estimated time required for another iteration is {mean_iteration_duration}")
 				sys.exit(EXIT_CODE_WALLTIME_LIMIT)
 
 	if use_work_dir:
