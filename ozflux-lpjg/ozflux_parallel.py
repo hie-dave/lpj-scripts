@@ -1,41 +1,8 @@
 from typing import Callable
 import multiprocessing
-import ozflux_logging
-import concurrent.futures, mpi4py, mpi4py.futures
-
-# MPI tag used for communication of worker rank.
-_TAG_RANK = 2
-
-def _mpi_exec(func: Callable[[Callable[[float], None]], None], pcb: Callable[[float], None]):
-	comm = mpi4py.MPI.COMM_WORLD
-	ozflux_logging.log_debug(f"[rank = {comm.rank}] transmitting rank to master...")
-	comm.send(comm.rank, 0, _TAG_RANK)
-	ozflux_logging.log_diagnostic(f"[rank {comm.rank}] rank transmission completed successfully! Beginning work...")
-	func(pcb)
-
-class Task:
-	"""
-	Base class for runnable classes.
-	"""
-	def exec(self, pcb: Callable[[float], None]):
-		pass
-
-class Job:
-	"""
-	Holds metadata common to all job types.
-	"""
-	def __init__(self, id: int, weight: int, task: Task):
-		"""
-		Create a new _Job instance.
-
-		@param id: Job ID.
-		@param weight: Weight of the job.
-		@param task: The task to be executed.
-		"""
-		self.id = id
-		self.weight = weight
-		self.task = task
-		self.progress: int = 0
+import ozflux_logging, ozflux_mpi
+import concurrent.futures
+from ozflux_common import Task, Job
 
 class LocalJob:
 	"""
@@ -90,28 +57,7 @@ class LocalJob:
 		function. Progress reports will be written directly to stdout as
 		start + progress * weight / total_weight.
 		"""
-		self._running = True
-		self._job.task.exec(self.progress_update)
-		self._running = False
-
-	def is_running(self) -> bool:
-		"""
-		Check if this job is running.
-		"""
-		return self._running
-
-	def has_progress_update(self) -> bool:
-		"""
-		Not relevant for this job type. This could theoretically be implemented
-		"correctly" but it would never be used.
-		"""
-		return False
-
-	def get_progress(self) -> float:
-		"""
-		Get the current progress of this job.
-		"""
-		return self._progress
+		self._job.task.exec(self._progress_update)
 
 class ProcessJob(multiprocessing.Process):
 	"""
@@ -171,168 +117,6 @@ class ProcessJob(multiprocessing.Process):
 		msg = self._reader.recv()
 		(progress, _) = msg
 		return progress
-
-class MPIJob:
-	"""
-	Represents a job which will be run by an MPI worker.
-	"""
-	def __init__(self, job: Job):
-		"""
-		Create a new MPIJob instance.
-
-		@param job: The job to be run.
-		@param pool: The MPI pool executor object.
-		"""
-		self._job = job
-		self._worker: int = -1
-
-	def find_worker(self) -> int:
-		"""
-		Find an idle worker process.
-		"""
-		comm = mpi4py.MPI.COMM_WORLD
-		return comm.recv(tag = _TAG_WORKER_IDLE)
-
-	def run(self):
-		"""
-		Run the job. This is not threadsafe.
-		"""
-		ozflux_logging.log_debug(f"Submitting MPI job {self._job.id}...")
-		self._worker = self.find_worker()
-		self._future = pool.submit(_mpi_exec, self._job.task.exec, _mpi_write_progress)
-		ozflux_logging.log_diagnostic(f"MPI job {self._job.id} submitted successfully")
-		comm = mpi4py.MPI.COMM_WORLD
-		ozflux_logging.log_diagnostic(f"[rank = {comm.rank}] Reading rank from worker...")
-		worker = comm.recv(tag = _TAG_RANK)
-		ozflux_logging.log_diagnostic(f"Worker rank = {worker}")
-		self._worker = worker
-
-	def is_running(self) -> bool:
-		"""
-		Check if this job is currently running.
-		"""
-		return self._future is not None and self._future.running() and not self._future.done()
-
-	def has_progress_update(self) -> bool:
-		"""
-		Check if this job has a progress update.
-		"""
-		if not self.is_running():
-			return False
-
-		if self._worker <= 0:
-			raise ValueError(f"Worker rank is unknown")
-
-		if self._req is None:
-			comm = mpi4py.MPI.COMM_WORLD
-			self._req = comm.irecv(source = self._worker, tag = _TAG_PROGRESS)
-		return self._req.test()
-
-	def get_progress(self) -> float:
-		"""
-		Get the current progress of this job. This will block until a progress
-		message is written from the worker process, so it must be called only
-		after has_progress_update() returns true.
-		"""
-		if not self.is_running():
-			raise ValueError(f"Cannot get progress of MPI job: job is not running")
-		if self._req is None:
-			raise ValueError(f"No progress request has been made")
-		progress = self._req.wait()
-		self._req = None
-		return progress
-
-	def assert_successful(self):
-		"""
-		Assert that the job was successful. Throw a useful exception if it was
-		not.
-		"""
-		exception = self._future.exception()
-		if exception is not None:
-			ozflux_logging.log_error(f"Job ran with error:")
-			raise exception
-
-
-
-class MPIPoolJob:
-	"""
-	Represents a job which will be run by an MPI pool worker.
-	"""
-	def __init__(self, job: Job):
-		"""
-		Create a new MPIJob instance.
-
-		@param job: The job to be run.
-		@param pool: The MPI pool executor object.
-		"""
-		self._job = job
-		self._req: mpi4py.MPI.Request = None
-		self._worker: int = -1
-		self._future: mpi4py.futures.Future = None
-
-	def get_id(self) -> int:
-		"""
-		Get the job's ID.
-		"""
-		return self._job.id
-
-	def run(self, pool: mpi4py.futures.MPIPoolExecutor):
-		"""
-		Run the job.
-		"""
-		ozflux_logging.log_debug(f"Submitting MPI job {self._job.id}...")
-		self._future = pool.submit(_mpi_exec, self._job.task.exec, _mpi_write_progress)
-		ozflux_logging.log_diagnostic(f"MPI job {self._job.id} submitted successfully")
-		comm = mpi4py.MPI.COMM_WORLD
-		ozflux_logging.log_diagnostic(f"[rank = {comm.rank}] Reading rank from worker...")
-		worker = comm.recv(tag = _TAG_RANK)
-		ozflux_logging.log_diagnostic(f"Worker rank = {worker}")
-		self._worker = worker
-
-	def is_running(self) -> bool:
-		"""
-		Check if this job is currently running.
-		"""
-		return self._future is not None and self._future.running() and not self._future.done()
-
-	def has_progress_update(self) -> bool:
-		"""
-		Check if this job has a progress update.
-		"""
-		if not self.is_running():
-			return False
-
-		if self._worker <= 0:
-			raise ValueError(f"Worker rank is unknown")
-
-		if self._req is None:
-			comm = mpi4py.MPI.COMM_WORLD
-			self._req = comm.irecv(source = self._worker, tag = _TAG_PROGRESS)
-		return self._req.test()
-
-	def get_progress(self) -> float:
-		"""
-		Get the current progress of this job. This will block until a progress
-		message is written from the worker process, so it must be called only
-		after has_progress_update() returns true.
-		"""
-		if not self.is_running():
-			raise ValueError(f"Cannot get progress of MPI job: job is not running")
-		if self._req is None:
-			raise ValueError(f"No progress request has been made")
-		progress = self._req.wait()
-		self._req = None
-		return progress
-
-	def assert_successful(self):
-		"""
-		Assert that the job was successful. Throw a useful exception if it was
-		not.
-		"""
-		exception = self._future.exception()
-		if exception is not None:
-			ozflux_logging.log_error(f"Job ran with error:")
-			raise exception
 
 class JobManager:
 	def __init__(self):
@@ -443,7 +227,7 @@ class JobManager:
 			cum_weight = 0
 			for task in self._jobs:
 				# Create a local job to manage the execution of this task.
-				job = LocalJob(job)
+				job = LocalJob(task)
 				job.set_weight(cum_weight, self._total_weight)
 
 				# Run the job.
@@ -456,21 +240,8 @@ class JobManager:
 		"""
 		# if mpi4py.MPI.COMM_WORLD.size < 2:
 		# 	raise ValueError(f"Cannot run with MPI: world size is <2")
-		with self._lock:
-			with mpi4py.futures.MPIPoolExecutor() as pool:
-				jobs: list[MPIPoolJob] = []
-				for task in self._jobs:
-					job = MPIPoolJob(task)
-					jobs.append(job)
-					job.run(pool)
-				ozflux_logging.log_diagnostic(f"All MPI jobs submitted")
-
-				# TODO: do we need to manage max degree of concurrency?
-
-				# Wait until all jobs are finished.
-				self._wait_until(jobs, lambda: all([not j.is_running() for j in jobs]))
-				for job in jobs:
-					job.assert_successful()
+		job_manager = ozflux_mpi.MPIJobManager()
+		job_manager.run(self._jobs)
 
 	def _wait_until(self, jobs, condition: Callable[[], bool] = lambda: False):
 		"""

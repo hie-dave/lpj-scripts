@@ -379,3 +379,27 @@ def floats_equal(x: float, y: float) -> bool:
 	@param y: Any real number.
 	"""
 	return abs(x - y) < EPS
+
+class Task:
+	"""
+	Base class for runnable classes.
+	"""
+	def exec(self, pcb: Callable[[float], None]):
+		pass
+
+class Job:
+	"""
+	Holds metadata common to all job types.
+	"""
+	def __init__(self, id: int, weight: int, task: Task):
+		"""
+		Create a new _Job instance.
+
+		@param id: Job ID.
+		@param weight: Weight of the job.
+		@param task: The task to be executed.
+		"""
+		self.id = id
+		self.weight = weight
+		self.task = task
+		self.progress: int = 0
