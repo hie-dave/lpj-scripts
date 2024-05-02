@@ -147,10 +147,9 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("--var-vpd", default = "vpd", help = "Name of the VPD variable in the output file (default: 'ps').")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
 
+	p = parser.parse_args(argv[1:])
 	opts = VpdOptions(p.in_dir, p.out_dir, p.timestep, p.min_chunk_size
 		, p.var_temperature, p.var_humidity, p.var_pressure, p.var_vpd)
-
-	p = parser.parse_args(argv[1:])
 	return Options(p.verbosity, p.show_progress, p.parallel, p.mpi, opts)
 
 class InputFile:
