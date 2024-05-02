@@ -193,25 +193,6 @@ def init_outfile(nc_in: Dataset, nc_out: Dataset, reshape_options: ReshapeOption
 	# Copy all file-level attributes from the input file to the output file.
 	copy_attributes(nc_in, nc_out)
 
-def var_weight(nc_in: Dataset, nc_out: Dataset, name: str) -> int:
-	"""
-	Get a weighting for the specified variable which is a proxy for the time
-	complexity of copying it into the output file.
-
-	@param nc_in: The input netcdf file.
-	@param nc_out: The output netcdf file..
-	@param name: Name of the variable.
-	"""
-	var = nc_in.variables[name]
-	dim = var.dimensions
-	weight = 1
-	for dim in var.dimensions:
-		weight *= nc_in.dimensions[dim].size
-	if not consistent_dimensionality(var, nc_out.variables[name]):
-		weight *= 2
-	return weight
-		
-
 def reshape(nc_in: Dataset, nc_out: Dataset, opts: ReshapeOptions
 	, pcb: Callable[[float], None]):
 	"""

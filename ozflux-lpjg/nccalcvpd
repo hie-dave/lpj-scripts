@@ -1,0 +1,629 @@
+#!/usr/bin/env python3
+#
+# Calculate VPD from atmospheric temperature, pressure, and specific humidity.
+# This is designed to work with the BARRA2 dataset.
+#
+
+import ozflux_common
+import math, tempfile, string
+import traceback
+
+from ozflux_logging import *
+from ozflux_netcdf import *
+from argparse import ArgumentParser
+from sys import argv
+from netCDF4 import Dataset, Dimension
+from typing import Callable
+from ozflux_parallel import JobManager
+from os import path
+
+from mpi4py import MPI
+
+# Tag for work transmissions used in MPI comms.
+_TAG_WORK = 73
+
+# Rank of the master node in MPI mode.
+_RANK_MASTER = 0
+
+# Year of the first input file.
+YEAR_FIRST = 1979
+
+# Month of the first input file.
+MONTH_FIRST = 1
+
+# Year of the last input file.
+YEAR_LAST = 2023
+
+# Month of the last input file.
+MONTH_LAST = 8
+
+# ps_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_1hr_197903-197903.nc
+BASENAME = "AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1"
+
+# Required units for the temperature variable.
+TEMPERATURE_UNITS = "degC"
+
+# Required units for the pressure variable.
+PRESSURE_UNITS = "kPa"
+
+# Required units for the humidity variable.
+HUMIDITY_UNITS = "kg kg-1"
+
+# Ratio of the molecular weight of water vapor to dry air (Mw/Md).
+EPS = 0.622
+
+# Constants used for empirical estimation of saturation vapour pressure.
+
+# Sonntag, 1990
+A_SONNTAG_1990 = 611.2
+B_SONNTAG_1990 = 17.62
+C_SONNTAG_1990 = 243.12
+
+# Alduchov, 1996
+A_ALDUCHOV_1996 = 610.94
+B_ALDUCHOV_1996 = 17.625
+C_ALDUCHOV_1996 = 243.04
+
+# Allen, 1998
+A_ALLEN_1998 = 610.8
+B_ALLEN_1998 = 17.27
+C_ALLEN_1998 = 237.3
+
+# Output file metadata.
+
+# Units of VPD in the output file.
+VPD_UNITS = "kPa"
+
+# Long name of VPD in the output file (as per cf spec).
+VPD_LONG_NAME = "Vapour pressure deficit"
+
+# Standard name of VPD in the output file (as per cf spec).
+VPD_STANDARD_NAME = "water_vapor_saturation_deficit_in_air"
+
+class VpdOptions:
+	"""
+	Options used to control the way in which data is outputted.
+
+	@param in_dir: Input directory.
+	@param out_dir: Output directory.
+	@param timestep: Timestep (e.g. "1hr").
+	@param min_chunk_size: Minimum chunk size used when copying data.
+	@param var_temperature: Name of air temperature variable.
+	@param var_humidity: Name of specific humidity variable.
+	@param var_pressure: Name of air pressure variable.
+	@param var_vpd: Name of vpd variable.
+	"""
+	def __init__(self, in_dir: str, out_dir: str, timestep: str
+		, min_chunk_size: int, var_temperature: str, var_humidity: str
+		, var_pressure: str, var_vpd: str):
+		self.in_dir = in_dir
+		self.out_dir = out_dir
+		self.timestep = timestep
+		self.min_chunk_size = min_chunk_size
+		self.var_temperature = var_temperature
+		self.var_humidity = var_humidity
+		self.var_pressure = var_pressure
+		self.var_vpd = var_vpd
+
+class Options:
+	"""
+	Class for storing CLI arguments from the user.
+
+	@param log: Log level.
+	@param prog: True to write progress messages, false otherwise.
+	@param parallel: Should files be processed in parallel?
+	@param mpi: Should files be processed using MPI-level parallelism?
+	@param opts: Options for file processing.
+	"""
+	def __init__(self, log : LogLevel, prog: bool, parallel: bool, mpi: bool
+		, opts: VpdOptions):
+
+		self.log_level = log
+		self.report_progress = prog
+		self.parallel = parallel
+		self.mpi = mpi
+		self.vpd_options = opts
+
+def parse_args(argv: list[str]) -> Options:
+	"""
+	Parse CLI arguments, return a parsed options object.
+
+	@param argv: Raw CLI arguments.
+
+	@return Parsed Options object.
+	"""
+	parser = ArgumentParser(prog=argv[0], description = "Formatting ozflux data into a format suitable for consumption by LPJ-Guess")
+	parser.add_argument("-v", "--verbosity", type = int, help = "Logging verbosity (1-5, default 3)", nargs = "?", const = LogLevel.INFORMATION, default = LogLevel.INFORMATION)
+	parser.add_argument("-i", "--in-dir", required = True, help = "BARRA2 input directory.")
+	parser.add_argument("-o", "--out-dir", required = True, help = "Directory into which output files will be saved.")
+	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
+	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files using process-level parallelism")
+	parser.add_argument("-M", "--mpi", action = "store_true", help = "Process files using MPI-level parallelism")
+	parser.add_argument("-m", "--min-chunk-size", type = int, help = "Minimum chunk size to use when copying data. 0 means use the chunk size in the netcdf file. Higher values result in better performance but higher memory usage. (default: 0)")
+	parser.add_argument("-t", "--timestep", default = "1hr", help = "Input data timestep (default: '1hr').")
+	parser.add_argument("--var-temperature", default = "tav", help = "Name of the air temperature variable (default: 'tav').")
+	parser.add_argument("--var-humidity", default = "sh", help = "Name of the specific humidity variable (default: 'sh').")
+	parser.add_argument("--var-pressure", default = "ps", help = "Name of the air pressure variable (default: 'ps').")
+	parser.add_argument("--var-vpd", default = "vpd", help = "Name of the VPD variable in the output file (default: 'ps').")
+	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
+
+	opts = VpdOptions(p.in_dir, p.out_dir, p.timestep, p.min_chunk_size
+		, p.var_temperature, p.var_humidity, p.var_pressure, p.var_vpd)
+
+	p = parser.parse_args(argv[1:])
+	return Options(p.verbosity, p.show_progress, p.parallel, p.mpi, opts)
+
+class InputFile:
+	"""
+	This class represents an input file for a particular point in time. The
+	class itself is timestep- and variable-agnostic.
+	"""
+	def __init__(self, year: int, month: int):
+		if month < 1 or month > 12:
+			raise ValueError(f"Month must be in range 1-12.")
+		self.year = year
+		self.month = month
+
+	def get_file_path(self, in_dir: str, var: str, timestep: str) -> str:
+		"""
+		Get the path to the input file for the specified variable, year, and
+		month.
+
+		@param in_dir: BARRA2 input directory.
+		@param var: Variable name.
+		@param timestep: Timestep of the data (e.g. "1hr").
+		@param year: Year of data.
+		@param month: Month of data (1-12).
+		"""
+		# ps_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_1hr_197903-197903.nc
+		datestr = "%04d%02d" % (self.year, self.month)
+		file_name = f"{var}_${BASENAME}_${timestep}_{datestr}_{datestr}.nc"
+		return os.path.join(in_dir, file_name)
+
+	def __str__(self) -> str:
+		return "%04d%02d" % (self.year, self.month)
+
+def get_all_barra2_input_files() -> list[InputFile]:
+	"""
+	Get the list of all input files in the BARRA2 dataset.
+	"""
+	in_files = []
+	for year in range(YEAR_FIRST, YEAR_LAST + 1):
+		for month in range(1, 13):
+			if year == YEAR_LAST and month > MONTH_LAST:
+				break
+			in_files.append(InputFile(year, month))
+	return in_files
+
+def get_input_files() -> list[InputFile]:
+	"""
+	Get the list of input files to be processed.
+
+	If running in MPI mode, distribute the list of input files equally across
+	the MPI workers. This function will return the list of files that this node
+	should process.
+	"""
+	# TODO: refactor this whole mess so that it's encapsulated by the JobManager
+	# class of ozflux_parallel.py.
+	comm = MPI.COMM_WORLD
+
+	in_files = get_all_barra2_input_files()
+
+	if comm.size <= 1 or not opts.mpi:
+		log_diagnostic("Running outside of MPI, or in MPI with world size of 1. Files will not be processed using MPI-level parallelism.")
+		if opts.mpi:
+			log_warning(f"--mpi was given, but MPI world size is {comm.size}. Files will therefore NOT be processed using MPI-level parallelism. Did you forget to run with mpirun/mpiexec?")
+		return in_files
+
+	log_diagnostic(f"Running in MPI environment with world size of {comm.size}")
+
+	if comm.rank == _RANK_MASTER:
+		# Master node: divide work between workers.
+		log_debug(f"[master]: splitting work list into {comm.size} chunks")
+		work = numpy.array_split(in_files, comm.size)
+		log_diagnostic(f"[master] Transmitting work list to slaves...")
+		for i in range(1, comm.size):
+			log_debug(f"[master] Transmitting work list to node {i}")
+			comm.send(work[i], i, tag = _TAG_WORK)
+		log_diagnostic("[master] Work list successfully transmitted")
+		log_diagnostic(f"[master] Master node has {len(work[0])} files to process")
+		return work[0]
+	else:
+		log_diagnostic(f"[slave {comm.rank}] Waiting for work list")
+		in_files = comm.recv(source = _RANK_MASTER, tag = _TAG_WORK)
+		log_diagnostic(f"[slave {comm.rank}] Received work list of {len(in_files)} files")
+		return in_files
+
+def validate_input(nc: Dataset, var_name: str, required_units: str) -> Callable[[float, int], float]:
+	"""
+	Validate the specified input file, and return a function which converts the
+	input variable into the units required to calculate VPD.
+
+	This function returns a function which may be called, taking two arguments:
+
+	1. The data (n-dimensional list of floats) to be converted
+	2. The timestep width in seconds
+
+	If no units conversion is required, this will return a function which
+	returns the original data.
+
+	@param nc: The input NetCDF file.
+	@param var_name: The name of the relevant variable within the input file.
+	@param required_units: The units required by this variable.
+	"""
+	var = nc.variables[var_name]
+	if not hasattr(var, ATTR_UNITS):
+		raise ValueError(f"Variable '{var_name}' has no units attribute")
+
+	if not VAR_TIME in nc.variables:
+		raise ValueError(f"{var_name} input file has no time variable (ie no variable named '{VAR_TIME}'")
+	if not DIM_TIME in nc.dimensions:
+		raise ValueError(f"{var_name} has no time dimension (ie no dimension named '{DIM_TIME}'")
+
+	var_time = nc.variables[VAR_TIME]
+	if not hasattr(var_time, ATTR_UNITS):
+		raise ValueError(f"{var_name}: time variable has no units attribute")
+	if not hasattr(var_time, ATTR_CALENDAR):
+		raise ValueError(f"{var_name}: time variable has no calendar attribute")
+
+	ntime = nc.dimensions[DIM_TIME].size
+	if ntime <= 0:
+		raise ValueError(f"{var_name} has 0-length time dimension")
+
+	actual_units = getattr(var, ATTR_UNITS)
+	return find_units_conversion_opt(actual_units, required_units)
+
+def validate_input_files(vpd_opts: VpdOptions, tfile: Dataset, pfile: Dataset
+	, hfile: Dataset):
+	"""
+	Validate input files. Return any required unit conversions, or throw if
+	input files are invalid in some way.
+	"""
+
+	# Do some basic sanity checks of each input file, and return a function
+	# which converts the inputs to the required units.
+	ttransform = validate_input(tfile, vpd_opts.var_temperature, TEMPERATURE_UNITS)
+	ptransform = validate_input(pfile, vpd_opts.var_pressure, PRESSURE_UNITS)
+	htransform = validate_input(hfile, vpd_opts.var_humidity, HUMIDITY_UNITS)
+
+	# Ensure input files have the same timestep.
+	ttimestep = get_timestep(tfile)
+	ptimestep = get_timestep(pfile)
+	htimestep = get_timestep(hfile)
+
+	if ttimestep != ptimestep:
+		raise ValueError(f"Air temperature input file has timestep of {ttimestep}s but air pressure input file has timestep of {ptimestep}s. These must be identical.")
+	if ttimestep != htimestep:
+		raise ValueError(f"Air temperature input file has timestep of {ttimestep}s but specific humidity input file has timestep of {ptimestep}s. These must be identical.")
+
+	# Ensure input files start at the same time.
+	ttime0 = get_first_time(tfile)
+	ptime0 = get_first_time(pfile)
+	htime0 = get_first_time(hfile)
+
+	if ttime0 != ptime0:
+		raise ValueError(f"Air temperature input file ({ttime0}) does not start at same time as air pressure input file ({ptime0})")
+	if ttime0 != htime0:
+		raise ValueError(f"Air temperature input file ({ttime0}) does not start at same time as specific humidity input file ({htime0})")
+
+	var_temp = tfile.variables[vpd_opts.var_temperature]
+	var_pressure = pfile.variables[vpd_opts.var_pressure]
+	var_humidity = hfile.variables[vpd_opts.var_humidity]
+
+	dims_temp = var_temp.dimensions
+	dims_pressure = var_pressure.dimensions
+	dims_humidity = var_humidity.dimensions
+
+	# Ensure that dimensionality of input variables is identical.
+
+	# Check number of dimensions.
+	if len(dims_temp) != len(dims_pressure):
+		raise ValueError(f"Air temperature has a different number of dimensions ({len(dims_temp)}) to air pressure ({len(dims_pressure)})")
+
+	if len(dims_temp) != len(dims_humidity):
+		raise ValueError(f"Air temperature has a different number of dimensions ({len(dims_temp)}) to specific humidity ({len(dims_humidity)})")
+
+	for i in range(len(dims_temp)):
+		# Check order of dimensions.
+		if dims_temp[i] != dims_pressure[i]:
+			raise ValueError(f"Air temperature has different {i}-th dimension ({dims_temp[i]}) to air pressure ({dims_pressure[i]})")
+		if dims_temp[i] != dims_humidity[i]:
+			raise ValueError(f"Air temperature has different {i}-th dimension ({dims_temp[i]}) to specific humidity ({dims_humidity[i]})")
+
+		# Name of this dimension.
+		dim = dims_temp[i]
+
+		dim_temp = tfile.dimensions[dim]
+		dim_pressure = pfile.dimensions[dim]
+		dim_humidity = hfile.dimensions[dim]
+
+		# Check size of dimensions.
+		if dim_temp.size != dim_pressure.size:
+			raise ValueError(f"Dimension {dim} is of different length in air temperature file ({dim_temp.size}) to air pressure file ({dim_pressure.size})")
+		if dim_temp.size != dim_humidity.size:
+			raise ValueError(f"Dimension {dim} is of different length in air temperature file ({dim_temp.size}) to specific humidity file ({dim_humidity.size})")
+
+	# TODO: should we verify that the spatial resolution is the same? We already
+	# check that the length of each dimension matches, but we could check the
+	# actual data in the spatial variables.
+
+	# Return the unit conversions.
+	return (ttransform, ptransform, htransform)
+
+def calculate_vpd(tav, sh, pa):
+	"""
+	Calculate VPD in kPa from air temperature, pressure, and specific humidity.
+
+	@param tav: N-dimensional array of air temperature in °C (probably 3d).
+	@param sh: N-dimensional array of specific humidity in kg kg-1 (probably 3d).
+	@param pa: N-dimensional array of air pressure in kPa (probably 3d).
+	"""
+	#  	  es === e
+	#
+	#     Given tav in degC, sh in 
+	#
+    #     vpd = esat - es
+    #     es = sh * (pa / 1000) / (0.378 * sh + 0.622)
+    #     esat = 0.001 * 611.2 * exp((17.62 * tav) / (243.04 + tav))
+	#
+    #     esat_units = kPa
+    #     esat_long_name = Saturation vapour pressure
+    #     es_units = kPa
+    #     es_long_name = Vapour pressure
+    #     es_standard_name = water_vapor_partial_pressure_in_air
+    #     vpd_units = kPa
+    #     vpd_long_name = Vapour pressure deficit
+    #     vpd_standard_name = water_vapor_saturation_deficit_in_air
+
+	# Calculate vapour pressure (kPa).
+	e = sh * pa / ((1 - EPS) * sh + EPS)
+
+	# TODO: Support other constants (e.g. Alduchov, 1996)
+	a = A_SONNTAG_1990
+	b = B_SONNTAG_1990
+	c = C_SONNTAG_1990
+
+	# Calculate saturation vapour pressure (kPa).
+	# Dividing by PA_PER_KPA to convert from Pa to kPa.
+	esat = a * math.exp((b * tav) / (c + tav)) / PA_PER_KPA
+
+	# Calculate VPD.
+	return esat - e
+
+def copy_vpd(nc_temp: Dataset, nc_pressure: Dataset, nc_humidity: Dataset
+	, nc_out: Dataset, vpd_opts: VpdOptions
+	, temp_conversion: tuple[Callable[[float, int], float]]
+	, pressure_conversion: tuple[Callable[[float, int], float]]
+	, humidity_conversion: tuple[Callable[[float, int], float]]
+	, pcb: Callable[[float], None]):
+	"""
+	Calculate VPD from the specified input files and store it in the output
+	file. This function assumes that all inputs are valid, and that the output
+	file has already been initialised.
+
+	@param vopts: Processing options.
+	@param nc_temp: Air temperature input file.
+	@param nc_pressure: Air pressure input file.
+	@param nc_humidity: Specific humidity input file.
+	@param nc_out: Output file.
+	@param vpd_opts: User options.
+	@param temp_conversion: Air temperature unit conversion function.
+	@param pressure_conversion: Air pressure unit conversion function.
+	@param humidity_conversion: Specific humidity unit conversion function.
+	@param pcb: Progress callback function.
+	"""
+	# We assume that VPD is a 3-dimensional variable with identical
+	# dimensionality to the input variables. This function therefore is reduced
+	# to a modified copy_3d() function.
+
+	# Air temperature variable in input file.
+	var_temp = nc_temp.variables[vpd_opts.var_temperature]
+
+	# Air pressure variable in input file.
+	var_pressure = nc_pressure.variabels[vpd_opts.var_pressure]
+
+	# Specific humidity variable in input file.
+	var_humidity = nc_humidity.variables[vpd_opts.var_humidity]
+
+	# VPD variable in output file.
+	var_vpd = nc_out.variables[vpd_opts.var_vpd]
+
+	chunk_sizes = var_temp.chunking()
+	chunk_sizes = [max(vpd_opts.min_chunk_size, c) for c in chunk_sizes]
+	shape = var_temp.shape
+	niter = [math.ceil(s / c) for (s, c) in zip(shape, chunk_sizes)]
+
+	# Timestep of input files, in seconds.
+	timestep = get_timestep(nc_temp)
+
+	it_max = niter[0] * niter[1] * niter[2]
+	it = 0
+	for i in range(niter[0]):
+		ilow = i * chunk_sizes[0]
+		ihigh = min(shape[0], ilow + chunk_sizes[0])
+		ir = range(ilow, ihigh)
+		for j in range(niter[1]):
+			jlow = j * chunk_sizes[1]
+			jhigh = min(shape[1], jlow + chunk_sizes[1])
+			jr = range(jlow, jhigh)
+			for k in range(niter[2]):
+				klow = k * chunk_sizes[2]
+				khigh = min(shape[2], klow + chunk_sizes[2])
+				kr = range(klow, khigh)
+
+				# Read from input files and convert to required units.
+				chunk_temp = temp_conversion(var_temp[ir, jr, kr], timestep)
+				chunk_pressure = pressure_conversion(var_pressure[ir, jr, kr], timestep)
+				chunk_humidity = humidity_conversion(var_humidity[ir, jr, kr], timestep)
+
+				# Calculate VPD from air temperature, pressure, and specific
+				# humidity.
+				chunk_vpd = calculate_vpd(chunk_temp, chunk_pressure, chunk_humidity)
+
+				# Write VPD to output file.
+				var_vpd[ir, jr, kr] = chunk_vpd
+
+				# Progress reporting.
+				it += 1
+				pcb(it / it_max)
+
+def calc_vpd(vpd_opts: VpdOptions, nc_temp: Dataset, nc_pressure: Dataset
+	, nc_humidity: Dataset, nc_out: Dataset, pcb: Callable[[float], None]):
+	"""
+	Calculate VPD from the specified input files, and write to the specified
+	output file.
+
+	@param vopts: Processing options.
+	@param nc_temp: Air temperature input file.
+	@param nc_pressure: Air pressure input file.
+	@param nc_humidity: Specific humidity input file.
+	@param nc_out: Output file.
+	@param vpd_opts: User options.
+	@param pcb: Progress callback function.
+	"""
+	# These transformation functions will convert the input data into the
+	# units required by our calculation of VPD. These may be identity functions
+	# if the input variables are already in the required units.
+	conversions = validate_input_files(nc_temp, nc_pressure, nc_humidity, vpd_opts)
+
+	# Initialise the output file.
+	init_outfile(nc_out)
+
+	# Total weight of all variables except VPD.
+	init_weight = 0.05
+
+	vars = [name for name in nc_temp.variables if name != vpd_opts.var_temperature]
+	weights = [var_weight(nc_temp, nc_out, name) for name in vars]
+	weights /= numpy.sum(weights)
+	weights *= init_weight
+
+	# Copy all variables to output file except for VPD.
+	step_start = 0.0
+	for (name, weight) in zip(vars, weights):
+		# Progress reporting function for this variable.
+		p = lambda p: pcb(step_start + weight * p)
+
+		# Copy this variable into the output file.
+		copy_variable(nc_temp, nc_out, name, vpd_opts.min_chunk_size, p)
+		step_start += weight
+
+	# Progress weight for the rest of the job.
+	weight = 1 - init_weight
+
+	# Now to calculate VPD.
+	p = lambda p: pcb(step_start + weight * p)
+	copy_vpd(nc_temp, nc_pressure, nc_humidity, nc_out, vpd_opts, conversions, p)
+
+def init_outfile(nc_in: Dataset, nc_out: Dataset, vpd_opts: VpdOptions):
+	"""
+	Initialise the output file by creating dimensions and variables as required.
+
+	@param in_file: An input file.
+	@param nc_out: The output file.
+	@param vpd_opts: Options controlling the calculation of VPD.
+	"""
+	# Create dimensions in output file by copying them directly from the input
+	# file.
+	log_diagnostic("Creating dimensions in output file...")
+	for name in nc_in.dimensions:
+		dim = nc_in.dimensions[name]
+		size = dim.size
+		create_dim_if_not_exists(nc_out, name, size)
+
+	# Create variables in output file, with changes based on user inputs.
+	log_diagnostic("Creating variables in output file...")
+	for in_name in nc_in.variables:
+		out_name = in_name
+
+		if in_name == vpd_opts.var_temperature \
+		or in_name == vpd_opts.var_pressure \
+		or in_name == vpd_opts.var_humidity:
+			if vpd_opts.var_vpd in nc_out.variables:
+				# VPD variable already exists. This should only occur if the
+				# input variables are in the same .nc file.
+				log_warning(f"Variable {vpd_opts.var_vpd} already exists in the output file. This is normal if input variables are all in the same file.")
+				continue
+			out_name = vpd_opts.var_vpd
+
+		var = nc_in.variables[in_name]
+		dims = var.dimensions
+		fmt = get_nc_datatype(var.datatype)
+
+		# TODO: add CLI options to control dimensionality, chunking, etc, as in
+		# ncreshape.
+
+		# Compression level and type: use same as input file.
+		filters = var.filters()
+		cl = filters['complevel']
+		ct = get_compression_type(filters)
+
+		# Chunk sizes: same as input file.
+		chunking = var.chunking()
+		cs = None if chunking == "contiguous" else tuple(chunking)
+
+		# Create the variable with these options.
+		create_var_if_not_exists(nc_out, out_name, fmt, dims, cl, ct, cs)
+
+		# Copy all attributes for this variable.
+		copy_attributes(var, nc_out.variables[out_name])
+
+	# Copy all file-level attributes from the input file to the output file.
+	copy_attributes(nc_in, nc_out)
+
+	# Overwrite attributes for VPD.
+	var_vpd = nc_out.variables[vpd_opts.var_vpd]
+	setattr(var_vpd, ATTR_UNITS, VPD_UNITS)
+	setattr(var_vpd, ATTR_LONG_NAME, VPD_LONG_NAME)
+	setattr(var_vpd, ATTR_STD_NAME, VPD_STANDARD_NAME)
+
+def process_file(in_file: InputFile, opts: VpdOptions, pcb: Callable[[float], None]):
+	"""
+	Process a single input file (which represents a specific year/month). Create
+	a single output file in the output directory for this year/month.
+
+	@param in_file: The input file (year/month) to be processed.
+	@param vpd_options: Processing options.
+	@param pcb: Progress callback function used for progress reporting.
+	"""
+
+	timestep = opts.timestep
+
+	out_file = in_file.get_file_path(opts.out_dir, opts.var_vpd, timestep)
+	tfile = in_file.get_file_path(opts.in_dir, opts.var_temperature, timestep)
+	pfile = in_file.get_file_path(opts.in_dir, opts.var_pressure, timestep)
+	hfile = in_file.get_file_path(opts.in_dir, opts.var_humidity, timestep)
+
+	with open(tfile) as nc_temp:
+		with open(pfile) as nc_pres:
+			with open(hfile) as nc_humid:
+				with open(out_file, True) as nc_out:
+					calc_vpd(opts, nc_temp, nc_pres, nc_humid, nc_out)
+
+def main(vpd_options: VpdOptions, in_files: list[InputFile]):
+	"""
+	Main function.
+	"""
+	start = 0.0
+	step = 1 / len(in_files)
+	for in_file in in_files:
+		process_file(in_file, vpd_options, lambda p: log_progress(start + p * step))
+		start += step
+
+if __name__ == "__main__":
+	# Parse CLI args
+	opts = parse_args(argv)
+
+	set_log_level(opts.log_level)
+	set_show_progress(opts.report_progress)
+
+	# TODO: this should be handled by the job manager class.
+	in_files = get_input_files()
+
+	try:
+		# Actual logic is in main().
+		main(opts.vpd_options, in_files)
+		print("\nAll files reshaped successfully!")
+	except BaseException as error:
+		# Basic error handling.
+		log_error(traceback.format_exc())
+		exit(1)

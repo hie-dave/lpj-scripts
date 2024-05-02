@@ -110,7 +110,7 @@ _units_synonyms = [
 	["K", "k"],
 	["m/s", "ms^-1"],
 	["Pa", "pa"],
-	["kg/kg", "", "mm/mm", "m/m"], # debatable
+	["kg/kg", "kg kg-1", "", "mm/mm", "m/m"], # debatable
 	["ppm", "umol/mol"],
 	["degC", "°C", "degrees C"],
 	["umol/m2/s", "umol/m^2/s"],
@@ -1564,6 +1564,19 @@ def get_var_from_std_name(nc: Dataset, name: str) -> Variable:
 				return var
 	raise ValueError(f"No variable found with standard_name '{name}'")
 
+def get_first_time(nc: Dataset) -> datetime.datetime:
+	"""
+	Get the first date/time point in the specified input file.
+
+	@param nc: Input NetCDF file.
+	"""
+	var_time = nc.variables[VAR_TIME]
+	time = nc.variables[VAR_TIME][0]
+	units = getattr(var_time, ATTR_UNITS)
+	calendar = getattr(var_time, ATTR_CALENDAR)
+	return num2date(time, units, calendar, only_use_cftime_datetimes = False
+		, only_use_python_datetimes = True)
+
 def get_timestep(nc: Dataset) -> int:
 	"""
 	Get the timestep of the netcdf file, in seconds.
@@ -1753,3 +1766,21 @@ def get_nc_datatype(fmt: str) -> str:
 	if fmt == "float32":
 		return FORMAT_SINGLE
 	return fmt
+
+def var_weight(nc_in: Dataset, nc_out: Dataset, name: str) -> int:
+	"""
+	Get a weighting for the specified variable which is a proxy for the time
+	complexity of copying it into the output file.
+
+	@param nc_in: The input netcdf file.
+	@param nc_out: The output netcdf file..
+	@param name: Name of the variable.
+	"""
+	var = nc_in.variables[name]
+	dim = var.dimensions
+	weight = 1
+	for dim in var.dimensions:
+		weight *= nc_in.dimensions[dim].size
+	if not consistent_dimensionality(var, nc_out.variables[name]):
+		weight *= 2
+	return weight
