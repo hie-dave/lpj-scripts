@@ -263,6 +263,9 @@ def mpi_init() -> list[str]:
 	log_diagnostic(f"Running in MPI environment with world size of {comm.size}")
 
 	if comm.rank == _RANK_MASTER:
+		if not os.path.exists(opts.out_dir):
+			os.makedirs(opts.out_dir)
+
 		# Master node: divide work between workers.
 		log_debug(f"[master]: splitting work list into {comm.size} chunks")
 		work = numpy.array_split(opts.in_files, comm.size)
