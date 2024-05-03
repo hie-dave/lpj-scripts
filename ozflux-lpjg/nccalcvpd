@@ -86,6 +86,8 @@ class VpdOptions:
 
 	@param in_dir: Input directory.
 	@param out_dir: Output directory.
+	@param max_year: Final year of data.
+	@param max_month: Last month of data in the final year.
 	@param timestep: Timestep (e.g. "1hr").
 	@param min_chunk_size: Minimum chunk size used when copying data.
 	@param var_temperature: Name of air temperature variable.
@@ -93,11 +95,13 @@ class VpdOptions:
 	@param var_pressure: Name of air pressure variable.
 	@param var_vpd: Name of vpd variable.
 	"""
-	def __init__(self, in_dir: str, out_dir: str, timestep: str
-		, min_chunk_size: int, var_temperature: str, var_humidity: str
-		, var_pressure: str, var_vpd: str):
+	def __init__(self, in_dir: str, out_dir: str, max_year: int, max_month: int
+		, timestep: str, min_chunk_size: int, var_temperature: str
+		, var_humidity: str, var_pressure: str, var_vpd: str):
 		self.in_dir = in_dir
 		self.out_dir = out_dir
+		self.max_year = max_year
+		self.max_month = max_month
 		self.timestep = timestep
 		self.min_chunk_size = min_chunk_size
 		self.var_temperature = var_temperature
@@ -145,11 +149,14 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("--var-humidity", default = "sh", help = "Name of the specific humidity variable (default: 'sh').")
 	parser.add_argument("--var-pressure", default = "ps", help = "Name of the air pressure variable (default: 'ps').")
 	parser.add_argument("--var-vpd", default = "vpd", help = "Name of the VPD variable in the output file (default: 'ps').")
+	parser.add_argument("--max-year", default = YEAR_LAST, type = int, help = f"Final year of data (default: {YEAR_LAST})")
+	parser.add_argument("--max-month", default = MONTH_LAST, type = int, help = f"Last month of data in the final year (default: {MONTH_LAST})")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
 
 	p = parser.parse_args(argv[1:])
-	opts = VpdOptions(p.in_dir, p.out_dir, p.timestep, p.min_chunk_size
-		, p.var_temperature, p.var_humidity, p.var_pressure, p.var_vpd)
+	opts = VpdOptions(p.in_dir, p.out_dir, p.max_year, p.max_month, p.timestep
+		, p.min_chunk_size, p.var_temperature, p.var_humidity, p.var_pressure
+		, p.var_vpd)
 	return Options(p.verbosity, p.show_progress, p.parallel, p.mpi, opts)
 
 class InputFile:
@@ -187,9 +194,9 @@ def get_all_barra2_input_files() -> list[InputFile]:
 	Get the list of all input files in the BARRA2 dataset.
 	"""
 	in_files = []
-	for year in range(YEAR_FIRST, YEAR_LAST + 1):
+	for year in range(YEAR_FIRST, opts.max_year + 1):
 		for month in range(1, 13):
-			if year == YEAR_LAST and month > MONTH_LAST:
+			if year == opts.max_year and month > opts.max_month:
 				break
 			in_files.append(InputFile(year, month))
 	return in_files
