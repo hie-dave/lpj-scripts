@@ -82,8 +82,9 @@ class ReshapeFile:
 		if use_workdir:
 			log_diagnostic(f"Working directory will be used: {workdir}")
 
-			in_file = os.path.join(workdir, os.path.basename(in_file))
-			out_file = os.path.join(workdir, "out.nc")
+			basename = os.path.basename(in_file)
+			in_file = os.path.join(workdir, basename)
+			out_file = os.path.join(workdir, f"{basename}.out.nc")
 
 			# Copy input file into working directory.
 			copy_start = datetime.datetime.now()
