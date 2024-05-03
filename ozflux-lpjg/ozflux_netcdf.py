@@ -110,7 +110,7 @@ _units_synonyms = [
 	["K", "k"],
 	["m/s", "ms^-1"],
 	["Pa", "pa"],
-	["kg/kg", "kg kg-1", "", "mm/mm", "m/m"], # debatable
+	["kg/kg", "kg kg-1", "", "mm/mm", "m/m", "1"], # debatable
 	["ppm", "umol/mol"],
 	["degC", "°C", "degrees C"],
 	["umol/m2/s", "umol/m^2/s"],
@@ -142,7 +142,8 @@ units_conversions = {
 	("K", "degC"): lambda x, _: x - DEG_C_TO_K,
 	("kPa", "Pa"): lambda x, _: x * PA_PER_KPA,
 	("umol/m2/s", "kgC/m2/day"): lambda x, _: x * MOL_PER_UMOL * G_C_PER_MOL * KG_PER_G * SECONDS_PER_DAY,
-	("umol/m2/s", "gC/m2/day"): lambda x, _: x * MOL_PER_UMOL * G_C_PER_MOL * SECONDS_PER_DAY
+	("umol/m2/s", "gC/m2/day"): lambda x, _: x * MOL_PER_UMOL * G_C_PER_MOL * SECONDS_PER_DAY,
+	("Pa", "kPa"): lambda x, _: x / PA_PER_KPA,
 }
 
 _qc_flag_definitions = {
