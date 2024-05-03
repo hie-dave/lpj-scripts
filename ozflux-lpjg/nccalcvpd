@@ -413,7 +413,7 @@ def calculate_vpd(tav, sh, pa):
 
 	# Calculate saturation vapour pressure (kPa).
 	# Dividing by PA_PER_KPA to convert from Pa to kPa.
-	esat = a * math.exp((b * tav) / (c + tav)) / PA_PER_KPA
+	esat = a * numpy.exp((b * tav) / (c + tav)) / PA_PER_KPA
 
 	# Calculate VPD.
 	return esat - e
