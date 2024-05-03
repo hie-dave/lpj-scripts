@@ -183,7 +183,7 @@ class InputFile:
 		"""
 		# ps_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_1hr_197903-197903.nc
 		datestr = "%04d%02d" % (self.year, self.month)
-		file_name = f"{var}_${BASENAME}_${timestep}_{datestr}_{datestr}.nc"
+		file_name = f"{var}_{BASENAME}_{timestep}_{datestr}-{datestr}.nc"
 		return os.path.join(in_dir, file_name)
 
 	def __str__(self) -> str:
@@ -426,7 +426,7 @@ def copy_vpd(nc_temp: Dataset, nc_pressure: Dataset, nc_humidity: Dataset
 	var_temp = nc_temp.variables[vpd_opts.var_temperature]
 
 	# Air pressure variable in input file.
-	var_pressure = nc_pressure.variabels[vpd_opts.var_pressure]
+	var_pressure = nc_pressure.variables[vpd_opts.var_pressure]
 
 	# Specific humidity variable in input file.
 	var_humidity = nc_humidity.variables[vpd_opts.var_humidity]
@@ -490,10 +490,10 @@ def calc_vpd(vpd_opts: VpdOptions, nc_temp: Dataset, nc_pressure: Dataset
 	# These transformation functions will convert the input data into the
 	# units required by our calculation of VPD. These may be identity functions
 	# if the input variables are already in the required units.
-	conversions = validate_input_files(nc_temp, nc_pressure, nc_humidity, vpd_opts)
+	conversions = validate_input_files(vpd_opts, nc_temp, nc_pressure, nc_humidity)
 
 	# Initialise the output file.
-	init_outfile(nc_out)
+	init_outfile(nc_temp, nc_out, vpd_opts)
 
 	# Total weight of all variables except VPD.
 	init_weight = 0.05
@@ -518,7 +518,7 @@ def calc_vpd(vpd_opts: VpdOptions, nc_temp: Dataset, nc_pressure: Dataset
 
 	# Now to calculate VPD.
 	p = lambda p: pcb(step_start + weight * p)
-	copy_vpd(nc_temp, nc_pressure, nc_humidity, nc_out, vpd_opts, conversions, p)
+	copy_vpd(nc_temp, nc_pressure, nc_humidity, nc_out, vpd_opts, *conversions, p)
 
 def init_outfile(nc_in: Dataset, nc_out: Dataset, vpd_opts: VpdOptions):
 	"""
