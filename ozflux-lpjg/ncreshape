@@ -5,7 +5,7 @@
 
 import ozflux_common
 import math, tempfile, string
-import traceback
+import traceback, shutil
 
 from ozflux_logging import *
 from ozflux_netcdf import *
@@ -33,14 +33,16 @@ class ReshapeOptions:
                         will be left as-is.
     @param compression_level: Compression level in the output file.
 	@param min_chunk_size: Minimum chunk size to use when copying data.
+	@param workdir: Working directory, or None if not used.
 	"""
 	def __init__(self, dimension_order: list[str]
 	    , chunk_sizes: list[tuple[str, int]], compression_level: int
-		, min_chunk_size: int):
+		, min_chunk_size: int, workdir: str):
 		self.dimension_order = dimension_order
 		self.chunk_sizes = chunk_sizes
 		self.compression_level = compression_level
 		self.min_chunk_size = min_chunk_size
+		self.workdir = workdir
 
 class Options:
 	"""
@@ -72,9 +74,38 @@ class ReshapeFile:
 		self.opts = opts
 	def exec(self, pcb: Callable[[float], None]):
 		log_information("Processing '%s'..." % self.in_file)
-		with open_netcdf(self.out_file, True) as nc_out:
-			with open_netcdf(self.in_file) as nc_in:
+
+		workdir = self.opts.workdir
+		use_workdir = workdir is not None and workdir != ""
+		in_file = self.in_file
+		out_file = self.out_file
+		if use_workdir:
+			log_diagnostic(f"Working directory will be used: {workdir}")
+
+			in_file = os.path.join(workdir, os.path.basename(in_file))
+			out_file = os.path.join(workdir, "out.nc")
+
+			# Copy input file into working directory.
+			copy_start = datetime.datetime.now()
+			shutil.copy2(self.in_file, in_file)
+			copy_duration = datetime.datetime.now() - copy_start
+			log_diagnostic(f"Copied input file into working directory in {copy_duration}")
+
+		with open_netcdf(out_file, True) as nc_out:
+			with open_netcdf(in_file) as nc_in:
 				reshape(nc_in, nc_out, self.opts, pcb)
+
+		if use_workdir:
+			# Move output file from working directory to output directory.
+			move_start = datetime.datetime.now()
+			shutil.move(out_file, self.out_file)
+			move_duration = datetime.datetime.now() - move_start
+			log_diagnostic(f"Moved output file into output directory in {move_duration}")
+
+			# Remove the copy of the input file in the working directory.
+			if in_file != self.in_file:
+				log_debug(f"Removing input file from working directory: {in_file}")
+				os.remove(in_file)
 
 def parse_args(argv: list[str]) -> Options:
 	"""
@@ -94,6 +125,7 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-C", "--compression-level", type = int, help = "Compression level in the output file (0 = off) (default: same as input file)")
 	parser.add_argument("-d", "--dimension-order", help = "Dimension names should be specified separated by commas. E.g. `-d lat,lon,time`")
 	parser.add_argument("-m", "--min-chunk-size", type = int, help = "Minimum chunk size to use when copying data. 0 means use the chunk size in the netcdf file. Higher values result in better performance but higher memory usage. (default: 0)")
+	parser.add_argument("-w", "--work-dir", default = None, help = "Working directory. Input files will be copied to this location before being read. Output file will be written in this location before being moved to the ultimate output path specified by the -o/--out-dir parameter. This is an optimisation on some filesystems.")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
 
 	p = parser.parse_args(argv[1:])
@@ -104,7 +136,7 @@ def parse_args(argv: list[str]) -> Options:
 
 	# lat,lon,time
 	dim_order = str.split(p.dimension_order, ",")
-	opts = ReshapeOptions(dim_order, chunks, p.compression_level, p.min_chunk_size)
+	opts = ReshapeOptions(dim_order, chunks, p.compression_level, p.min_chunk_size, p.work_dir)
 	return Options(p.verbosity, p.files, p.out_dir, p.show_progress, p.parallel, opts)
 
 def get_chunk_size(nc: Dataset, dim: str, chunk_sizes: list[tuple[str, int]]) -> int:
@@ -257,14 +289,24 @@ def mpi_init() -> list[str]:
 	# class of ozflux_parallel.py.
 	comm = MPI.COMM_WORLD
 	if comm.size <= 1:
+		workdir = opts.reshape_options.workdir
+
+		# Create working directory if it doesn't already exist.
+		if workdir is not None and workdir != "" and not os.path.exists(workdir):
+			os.makedirs(opts.workdir)
+
 		log_diagnostic("Running outside of MPI, or in MPI with world size of 1")
 		return opts.in_files
 
 	log_diagnostic(f"Running in MPI environment with world size of {comm.size}")
 
 	if comm.rank == _RANK_MASTER:
+		# Avoid having each slave attempt to create the same directories.
 		if not os.path.exists(opts.out_dir):
 			os.makedirs(opts.out_dir)
+		workdir = opts.reshape_options.workdir
+		if workdir is not None and workdir != "" and not os.path.exists(workdir):
+			os.makedirs(opts.workdir)
 
 		# Master node: divide work between workers.
 		log_debug(f"[master]: splitting work list into {comm.size} chunks")
