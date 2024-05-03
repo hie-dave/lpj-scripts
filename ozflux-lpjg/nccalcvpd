@@ -189,7 +189,7 @@ class InputFile:
 	def __str__(self) -> str:
 		return "%04d%02d" % (self.year, self.month)
 
-def get_all_barra2_input_files() -> list[InputFile]:
+def get_all_barra2_input_files(opts: VpdOptions) -> list[InputFile]:
 	"""
 	Get the list of all input files in the BARRA2 dataset.
 	"""
@@ -201,7 +201,25 @@ def get_all_barra2_input_files() -> list[InputFile]:
 			in_files.append(InputFile(year, month))
 	return in_files
 
-def get_input_files() -> list[InputFile]:
+def check_input_files(files: list[InputFile], opts: VpdOptions):
+	"""
+	Verify that all required input files exist.
+	"""
+	timestep = opts.timestep
+	dir = opts.in_dir
+
+	for file in files:
+		temp_path = file.get_file_path(dir, opts.var_temperature, timestep)
+		humidity_path = file.get_file_path(dir, opts.var_humidity, timestep)
+		pressure_path = file.get_file_path(dir, opts.var_pressure, timestep)
+		if not os.path.exists(temp_path):
+			raise ValueError(f"Input file '{temp_path}' does not exist")
+		if not os.path.exists(humidity_path):
+			raise ValueError(f"Input file '{humidity_path}' does not exist")
+		if not os.path.exists(pressure_path):
+			raise ValueError(f"Input file '{pressure_path}' does not exist")
+
+def get_input_files(opts: Options) -> list[InputFile]:
 	"""
 	Get the list of input files to be processed.
 
@@ -213,17 +231,21 @@ def get_input_files() -> list[InputFile]:
 	# class of ozflux_parallel.py.
 	comm = MPI.COMM_WORLD
 
-	in_files = get_all_barra2_input_files()
+	in_files = get_all_barra2_input_files(opts.vpd_options)
 
 	if comm.size <= 1 or not opts.mpi:
 		log_diagnostic("Running outside of MPI, or in MPI with world size of 1. Files will not be processed using MPI-level parallelism.")
 		if opts.mpi:
 			log_warning(f"--mpi was given, but MPI world size is {comm.size}. Files will therefore NOT be processed using MPI-level parallelism. Did you forget to run with mpirun/mpiexec?")
+		check_input_files(in_files, opts.vpd_options)
 		return in_files
 
 	log_diagnostic(f"Running in MPI environment with world size of {comm.size}")
 
 	if comm.rank == _RANK_MASTER:
+		# Verify that all required input files exist.
+		check_input_files(in_files, opts.vpd_options)
+
 		# Master node: divide work between workers.
 		log_debug(f"[master]: splitting work list into {comm.size} chunks")
 		work = numpy.array_split(in_files, comm.size)
@@ -623,7 +645,7 @@ if __name__ == "__main__":
 	set_show_progress(opts.report_progress)
 
 	# TODO: this should be handled by the job manager class.
-	in_files = get_input_files()
+	in_files = get_input_files(opts)
 
 	try:
 		# Actual logic is in main().
