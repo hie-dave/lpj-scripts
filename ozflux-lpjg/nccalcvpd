@@ -143,7 +143,7 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
 	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files using process-level parallelism")
 	parser.add_argument("-M", "--mpi", action = "store_true", help = "Process files using MPI-level parallelism")
-	parser.add_argument("-m", "--min-chunk-size", type = int, help = "Minimum chunk size to use when copying data. 0 means use the chunk size in the netcdf file. Higher values result in better performance but higher memory usage. (default: 0)")
+	parser.add_argument("-m", "--min-chunk-size", type = int, default = 1, help = "Number of chunks to read at a time (along each dimension) when copying data. If 1, the chunk size of the input data will be used. This does not affect the chunking of the variables in the output file. Higher values result in higher throughput at the cost of higher memory usage (default: 1)")
 	parser.add_argument("-t", "--timestep", default = "1hr", help = "Input data timestep (default: '1hr').")
 	parser.add_argument("--var-temperature", default = "tav", help = "Name of the air temperature variable (default: 'tav').")
 	parser.add_argument("--var-humidity", default = "sh", help = "Name of the specific humidity variable (default: 'sh').")
@@ -457,7 +457,7 @@ def copy_vpd(nc_temp: Dataset, nc_pressure: Dataset, nc_humidity: Dataset
 	var_vpd = nc_out.variables[vpd_opts.var_vpd]
 
 	chunk_sizes = var_temp.chunking()
-	chunk_sizes = [max(vpd_opts.min_chunk_size, c) for c in chunk_sizes]
+	chunk_sizes = [vpd_opts.min_chunk_size * c for c in chunk_sizes]
 	shape = var_temp.shape
 	niter = [math.ceil(s / c) for (s, c) in zip(shape, chunk_sizes)]
 

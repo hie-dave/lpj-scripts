@@ -1116,7 +1116,7 @@ def copy_3d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
 	dims = [nc_in.dimensions[name] for name in dim_names_in]
 
 	chunk_sizes = var_in.chunking()
-	chunk_sizes = [max(min_chunk_size, c) for c in chunk_sizes]
+	chunk_sizes = [max(min_chunk_size * c, c) for c in chunk_sizes]
 	shape = var_in.shape
 	niter = [math.ceil(s / c) for (s, c) in zip(shape, chunk_sizes)]
 
@@ -1178,7 +1178,7 @@ def copy_2d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
 	dims = [nc_in.dimensions[name] for name in dim_names_in]
 
 	chunk_sizes = var_in.chunking()
-	chunk_sizes = [max(min_chunk_size, c) for c in chunk_sizes]
+	chunk_sizes = [max(min_chunk_size * c, c) for c in chunk_sizes]
 	shape = var_in.shape
 	niter = [math.ceil(s / c) for (s, c) in zip(shape, chunk_sizes)]
 
@@ -1224,7 +1224,7 @@ def copy_1d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
 		else:
 			chunk_size = min_chunk_size
 	else:
-		chunk_size = max(min_chunk_size, chunk_size)
+		chunk_size = max(min_chunk_size * chunk_size, chunk_size)
 	n = len(var_in)
 	for i in range(0, n, chunk_size):
 		upper = min(n, i + chunk_size)
@@ -1258,7 +1258,7 @@ def copy_transpose_3d(nc_in: Dataset, nc_out: Dataset, name: str
 	dimension_indices = [index_of_throw(dim, dims_in, lambda: f"Dimension {dim} not found in input file") for dim in dims_out]
 
 	chunk_sizes = var_in.chunking()
-	chunk_sizes = [max(min_chunk_size, c) for c in chunk_sizes]
+	chunk_sizes = [max(min_chunk_size * c, c) for c in chunk_sizes]
 
 	# Length of each dimension.
 	shape = var_in.shape
@@ -1445,7 +1445,7 @@ def _append_1d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int, 
 	check_ndims(var_out, 1)
 
 	chunk_size = var_in.chunking()[0]
-	chunk_size = max(chunk_size, min_chunk_size)
+	chunk_size = max(chunk_size, min_chunk_size * chunk_size)
 
 	n = len(var_in)
 	nexist = len(var_out)
@@ -1491,7 +1491,7 @@ def _append_2d(nc_in: Dataset, nc_out: Dataset, name:str, min_chunk_size: int, p
 
 	# The chunk size of each dimension in the input file.
 	chunk_sizes = var_in.chunking()
-	chunk_sizes = [max(min_chunk_size, cs) for cs in chunk_sizes]
+	chunk_sizes = [max(min_chunk_size * cs, cs) for cs in chunk_sizes]
 
 	# The length of each dimension in the input file.
 	shape = var_in.shape
@@ -1650,7 +1650,7 @@ def _append_3d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
 
 	# The chunk size of each dimension in the input file.
 	chunk_sizes = var_in.chunking()
-	chunk_sizes = [max(min_chunk_size, cs) for cs in chunk_sizes]
+	chunk_sizes = [max(min_chunk_size * cs, cs) for cs in chunk_sizes]
 
 	# The length of each dimension in the input file.
 	shape = var_in.shape

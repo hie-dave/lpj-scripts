@@ -110,7 +110,7 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-o", "--out-file", required = True, help = "Path to the output file.")
 	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
 	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel")
-	parser.add_argument("-m", "--min-chunk-size", type = int, help = "Minimum chunk size to be used when copying data. If 0, the chunk size of the input data will be used. This does not affect the chunking of the variables in the output file. (default: 0)", default = 0)
+	parser.add_argument("-m", "--min-chunk-size", type = int, default = 0, help = "Number of chunks to read at a time (along each dimension) when copying data. If 1, the chunk size of the input data will be used. This does not affect the chunking of the variables in the output file. Higher values result in higher throughput at the cost of higher memory usage (default: 1)")
 	parser.add_argument("-u", "--units", help = "Output units (optional) (default: same as input units)", default = "")
 	parser.add_argument("-w", "--work-dir", default = None, help = "Working directory. Input files will be copied to this location before being read. Output file will be written in this location before being moved to the ultimate output path specified by the -o/--out-file parameter.")
 	parser.add_argument("-W", "--walltime-limit", default = None, help = f"Walltime limit. If this limit is reached, the job will terminate (with exit code {EXIT_CODE_WALLTIME_LIMIT}) and may be resumed later by re-running the command with the same restart file. If the job is running in PBS, it will be resubmitted via the `qrerun` command. This requires that the job is restartable (ie submitted with -ry).")
@@ -120,7 +120,6 @@ def parse_args(argv: list[str]) -> Options:
 
 	p = parser.parse_args(argv[1:])
 
-	
 	walltime_limit = pandas.Timedelta(p.walltime_limit).to_pytimedelta()
 	chunks = parse_chunksizes(p.chunk_sizes)
 
@@ -248,7 +247,7 @@ def append_timepoints(nc_in: Dataset, nc_out: Dataset, min_chunk_size: int, pcb:
 	check_ndims(var_out, 1)
 
 	chunk_size = var_in.chunking()[0]
-	chunk_size = max(chunk_size, min_chunk_size)
+	chunk_size = max(chunk_size * min_chunk_size, chunk_size)
 
 	n = len(var_in)
 	nexist = get_nexist(var_out)

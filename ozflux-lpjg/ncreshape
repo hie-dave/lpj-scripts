@@ -124,7 +124,7 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-c", "--chunk-size", help = "Chunk sizes for each dimension. This is optional, and if omitted, the values in the input file will be kept (not recommended!). This should be specified in the same format as for nco. E.g. lat/1,lon/1,time/365", default = "")
 	parser.add_argument("-C", "--compression-level", type = int, help = "Compression level in the output file (0 = off) (default: same as input file)")
 	parser.add_argument("-d", "--dimension-order", help = "Dimension names should be specified separated by commas. E.g. `-d lat,lon,time`")
-	parser.add_argument("-m", "--min-chunk-size", type = int, help = "Minimum chunk size to use when copying data. 0 means use the chunk size in the netcdf file. Higher values result in better performance but higher memory usage. (default: 0)")
+	parser.add_argument("-m", "--min-chunk-size", type = int, default = 1, help = "Number of chunks to read at a time (along each dimension) when copying data. If 1, the chunk size of the input data will be used. This does not affect the chunking of the variables in the output file. Higher values result in higher throughput at the cost of higher memory usage (default: 1)")
 	parser.add_argument("-w", "--work-dir", default = None, help = "Working directory. Input files will be copied to this location before being read. Output file will be written in this location before being moved to the ultimate output path specified by the -o/--out-dir parameter. This is an optimisation on some filesystems.")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
 
