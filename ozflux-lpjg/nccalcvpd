@@ -621,11 +621,14 @@ def process_file(in_file: InputFile, opts: VpdOptions, pcb: Callable[[float], No
 	pfile = in_file.get_file_path(opts.in_dir, opts.var_pressure, timestep)
 	hfile = in_file.get_file_path(opts.in_dir, opts.var_humidity, timestep)
 
-	with open(tfile) as nc_temp:
-		with open(pfile) as nc_pres:
-			with open(hfile) as nc_humid:
-				with open(out_file, True) as nc_out:
-					calc_vpd(opts, nc_temp, nc_pres, nc_humid, nc_out)
+	if os.path.exists(out_file):
+		os.remove(out_file)
+
+	with open_netcdf(tfile) as nc_temp:
+		with open_netcdf(pfile) as nc_pres:
+			with open_netcdf(hfile) as nc_humid:
+				with open_netcdf(out_file, True) as nc_out:
+					calc_vpd(opts, nc_temp, nc_pres, nc_humid, nc_out, pcb)
 
 def main(vpd_options: VpdOptions, in_files: list[InputFile]):
 	"""
