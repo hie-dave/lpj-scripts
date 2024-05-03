@@ -320,7 +320,7 @@ def walltime_abort():
 	job_id = os.getenv(ENV_PBS_JOBID)
 
 	# If this environment variable is set, we are probably running in PBS.
-	if job_id is not None and job_id is not "":
+	if job_id != None and job_id is not "":
 		# Resubmit PBS job.
 		log_information(f"We appear to be running in PBS with job ID {job_id}")
 
