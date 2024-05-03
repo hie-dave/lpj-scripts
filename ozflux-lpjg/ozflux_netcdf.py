@@ -1785,3 +1785,39 @@ def var_weight(nc_in: Dataset, nc_out: Dataset, name: str) -> int:
 	if not consistent_dimensionality(var, nc_out.variables[name]):
 		weight *= 2
 	return weight
+
+def parse_chunksizes(chunks: str) -> list[tuple[str, int]]:
+	"""
+	Parse chunk sizes from a chunk size specification in the "nco" format. 
+
+	@param chunks: Chunk sizes specified in NCO format; E.g. `lon/1,lat/2,time/365`
+	"""
+	chunks = [x for x in str.split(chunks, ",")]
+	return [(dim, int(chunk)) for (dim, chunk) in [str.split(c, "/") for c in chunks]]
+
+def get_chunk_size(nc: Dataset, dim: str, chunk_sizes: list[tuple[str, int]]) -> int:
+	"""
+	Get the chunk size for the specified dimension.
+
+	@param nc: The input netcdf file. Used to ensure the chunk size doesn't exceed dimension size.
+	@param dim: The dimension.
+	@param chunk_sizes: List of tuples of dimension name and chunk size.
+	"""
+	dimension = nc.dimensions[dim]
+	for (chunk_dim, chunk_size) in chunk_sizes:
+		if chunk_dim == dim:
+			if chunk_size > dimension.size:
+				log_warning(f"Attempted to use chunk sizes {chunk_size} for dimension {dim}. This exceeds the total dimension length of {dimension.size}. The dimension length will be used as chunk size, but you should consider rethinking your chunking strategy if you see this message.")
+				return dimension.size
+			return chunk_size
+
+	# I'm not entirely comfortable with warnings here, but some netcdf files are
+	# setup in strange ways, so I'll leave it like this for now.
+
+	default_chunking = nc.variables[dim].chunking()
+	if default_chunking == "contiguous":
+		log_warning(f"No chunk size specified for contiguous dimension {dim}. This code pathway is untested. Godspeed!")
+		return 1
+
+	log_warning(f"No chunking specified for dimension {dim}. Falling back to the chunk size in the input file, which is {default_chunking[0]}")
+	return default_chunking[0]

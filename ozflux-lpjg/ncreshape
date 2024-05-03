@@ -131,40 +131,12 @@ def parse_args(argv: list[str]) -> Options:
 	p = parser.parse_args(argv[1:])
 
     # lat/1,lon/1,time/365
-	chunks = [x for x in str.split(p.chunk_size, ",")]
-	chunks = [(dim, int(chunk)) for (dim, chunk) in [str.split(c, "/") for c in chunks]]
+	chunks = parse_chunksizes(p.chunk_size)
 
 	# lat,lon,time
 	dim_order = str.split(p.dimension_order, ",")
 	opts = ReshapeOptions(dim_order, chunks, p.compression_level, p.min_chunk_size, p.work_dir)
 	return Options(p.verbosity, p.files, p.out_dir, p.show_progress, p.parallel, opts)
-
-def get_chunk_size(nc: Dataset, dim: str, chunk_sizes: list[tuple[str, int]]) -> int:
-	"""
-	Get the chunk size for the specified dimension.
-
-	@param nc: The input netcdf file. Used to ensure the chunk size doesn't exceed dimension size.
-	@param dim: The dimension.
-	@param chunk_sizes: List of tuples of dimension name and chunk size.
-	"""
-	dimension = nc.dimensions[dim]
-	for (chunk_dim, chunk_size) in chunk_sizes:
-		if chunk_dim == dim:
-			if chunk_size > dimension.size:
-				log_warning(f"Attempted to use chunk sizes {chunk_size} for dimension {dim}. This exceeds the total dimension length of {dimension.size}. The dimension length will be used as chunk size, but you should consider rethinking your chunking strategy if you see this message.")
-				return dimension.size
-			return chunk_size
-
-	# I'm not entirely comfortable with warnings here, but some netcdf files are
-	# setup in strange ways, so I'll leave it like this for now.
-
-	default_chunking = nc.variables[dim].chunking()
-	if default_chunking == "contiguous":
-		log_warning(f"No chunk size specified for contiguous dimension {dim}. This code pathway is untested. Godspeed!")
-		return 1
-
-	log_warning(f"No chunking specified for dimension {dim}. Falling back to the chunk size in the input file, which is {default_chunking[0]}")
-	return default_chunking[0]
 
 def init_outfile(nc_in: Dataset, nc_out: Dataset, reshape_options: ReshapeOptions):
 	"""

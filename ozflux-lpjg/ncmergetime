@@ -48,20 +48,22 @@ class Options:
 	"""
 	def __init__(self, log : LogLevel, files: list[str], out: str, prog: bool,
 		parallel: bool, chunk_size: int, units: str, workdir: str,
-		restart_file: str, walltime_limit: datetime.timedelta):
+		restart_file: str, walltime_limit: datetime.timedelta,
+		chunk_sizes = list[tuple[str, int]]):
 
 		self.log_level = log
 		self.files = files
 		self.out_file = out
 		self.report_progress = prog
 		self.parallel = parallel
-		self.chunk_size = chunk_size
+		self.min_chunk_size = chunk_size
 		self.units = units
 		self.work_dir = workdir
 		self.restart_file = restart_file
 		self.walltime_limit = walltime_limit
 		# Rate of file copying between input and working directory, in bytes per second.
 		self.copy_rate: float = 0
+		self.chunk_sizes = chunk_sizes
 
 class MergeTime:
 	def __init__(self, in_file: str, out_file: str, min_chunk_size: int
@@ -102,21 +104,23 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-o", "--out-file", required = True, help = "Path to the output file.")
 	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
 	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel")
-	parser.add_argument("-c", "--chunk-size", type = int, help = "Minimum chunk size to be used when copying data. If 0, the chunk size of the input data will be used. This does not affect the chunking of the variables in the output file. (default: 0)", default = 0)
+	parser.add_argument("-m", "--min-chunk-size", type = int, help = "Minimum chunk size to be used when copying data. If 0, the chunk size of the input data will be used. This does not affect the chunking of the variables in the output file. (default: 0)", default = 0)
 	parser.add_argument("-u", "--units", help = "Output units (optional) (default: same as input units)", default = "")
 	parser.add_argument("-w", "--work-dir", default = None, help = "Working directory. Input files will be copied to this location before being read. Output file will be written in this location before being moved to the ultimate output path specified by the -o/--out-file parameter.")
 	parser.add_argument("-W", "--walltime-limit", default = None, help = "Walltime limit. If this limit is reached, the job will terminate and may be resumed later by re-running the command with the same restart file.")
 	parser.add_argument("-r", "--restart-file", default = None, help = "Path to the restart file to be used. This allows execution to resume from a previous run of ncmergetime. This requires that the same arguments are used in all invocations of the command.")
+	parser.add_argument("-c", "--chunk-sizes", default = "", help = "Chunk sizes for each dimension. This is optional, and if omitted, the values in the input files will be kept. This should be specified in the same format as for nco. E.g. lat/1,lon/1,time/365")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
 
 	p = parser.parse_args(argv[1:])
 
 	
 	walltime_limit = pandas.Timedelta(p.walltime_limit).to_pytimedelta()
+	chunks = parse_chunksizes(p.chunk_sizes)
 
 	return Options(p.verbosity, p.files, p.out_file, p.show_progress
 		, p.parallel, p.chunk_size, p.units, p.work_dir, p.restart_file
-		, walltime_limit)
+		, walltime_limit, p.chunk_sizes)
 
 def copy_workdir(in_file: str, work_dir: str) -> str:
 	"""
@@ -186,9 +190,15 @@ def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int, units: st
 			# Compression type
 			ct = get_compression_type(filters)
 
-			# Chunk size
-			chunking = var.chunking()
-			cs = None if chunking == "contiguous" else tuple(chunking)
+			# Chunk sizes.
+			cs = None
+			if len(opts.chunk_sizes) > 0:
+				cs = tuple([get_chunk_size(nc_in, dim, opts.chunk_sizes) for dim in dims])
+			else:
+				# Chunking from input file.
+				chunking = var.chunking()
+				cs = None if chunking == "contiguous" else tuple(chunking)
+
 			create_var_if_not_exists(nc_out, name, fmt, dims, cl, ct, cs)
 			var_out = nc_out.variables[name]
 			for attr in var.ncattrs():
@@ -342,7 +352,7 @@ def main(opts: Options):
 
 	if not restart:
 		with open_netcdf(out_file, write = True) as nc_out:
-			init_outfile(nc_out, opts.files, opts.chunk_size, opts.units)
+			init_outfile(nc_out, opts.files, opts.min_chunk_size, opts.units)
 	# todo: order by start time ascending?
 
 	init_walltime()
@@ -358,7 +368,7 @@ def main(opts: Options):
 		if not os.path.exists(file):
 			raise ValueError(f"File not found: {file}")
 		step_size = path.getsize(file) / total_weight
-		job = MergeTime(file, out_file, opts.chunk_size, opts.work_dir, write_restart)
+		job = MergeTime(file, out_file, opts.min_chunk_size, opts.work_dir, write_restart)
 		iteration_start = datetime.datetime.now()
 		job.exec(lambda p: log_progress(step_start + step_size * p))
 		iteration_durations.append(datetime.datetime.now() - iteration_start)
