@@ -4,7 +4,7 @@
 # contain the same data over different time ranges.
 #
 import ozflux_common
-import math, shutil, traceback, datetime, pandas
+import math, shutil, traceback, datetime, pandas, subprocess
 
 from ozflux_logging import *
 from ozflux_netcdf import *
@@ -18,6 +18,12 @@ from functools import reduce
 
 # Exit code used when the walltime limit is reached.
 EXIT_CODE_WALLTIME_LIMIT = 42
+
+# Name of the Job ID environment variable provided by PBS.
+ENV_PBS_JOBID = "PBS_JOBID"
+
+# Name of a command which will rerun the current job.
+CMD_RERUN = "qrerun"
 
 # The amount of overhead allocated for moving the output file from the working
 # directory to the output directory when a walltime limit is provided. When this
@@ -107,7 +113,7 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-m", "--min-chunk-size", type = int, help = "Minimum chunk size to be used when copying data. If 0, the chunk size of the input data will be used. This does not affect the chunking of the variables in the output file. (default: 0)", default = 0)
 	parser.add_argument("-u", "--units", help = "Output units (optional) (default: same as input units)", default = "")
 	parser.add_argument("-w", "--work-dir", default = None, help = "Working directory. Input files will be copied to this location before being read. Output file will be written in this location before being moved to the ultimate output path specified by the -o/--out-file parameter.")
-	parser.add_argument("-W", "--walltime-limit", default = None, help = "Walltime limit. If this limit is reached, the job will terminate and may be resumed later by re-running the command with the same restart file.")
+	parser.add_argument("-W", "--walltime-limit", default = None, help = f"Walltime limit. If this limit is reached, the job will terminate (with exit code {EXIT_CODE_WALLTIME_LIMIT}) and may be resumed later by re-running the command with the same restart file. If the job is running in PBS, it will be resubmitted via the `qrerun` command. This requires that the job is restartable (ie submitted with -ry).")
 	parser.add_argument("-r", "--restart-file", default = None, help = "Path to the restart file to be used. This allows execution to resume from a previous run of ncmergetime. This requires that the same arguments are used in all invocations of the command.")
 	parser.add_argument("-c", "--chunk-sizes", default = "", help = "Chunk sizes for each dimension. This is optional, and if omitted, the values in the input files will be kept. This should be specified in the same format as for nco. E.g. lat/1,lon/1,time/365")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
@@ -120,7 +126,7 @@ def parse_args(argv: list[str]) -> Options:
 
 	return Options(p.verbosity, p.files, p.out_file, p.show_progress
 		, p.parallel, p.chunk_size, p.units, p.work_dir, p.restart_file
-		, walltime_limit, p.chunk_sizes)
+		, walltime_limit, chunks)
 
 def copy_workdir(in_file: str, work_dir: str) -> str:
 	"""
@@ -306,6 +312,36 @@ def parse_restart_file(restart_file: str) -> list[str]:
 	with open(restart_file) as file:
 		return [line.strip("\n") for line in file.readlines()]
 
+def walltime_abort():
+	"""
+	Abort the job due to reaching the walltime limit. This will resubmit the
+	current PBS job if running in PBS.
+	"""
+	# Get PBS job ID.
+	job_id = os.getenv(ENV_PBS_JOBID)
+
+	# If this environment variable is set, we are probably running in PBS.
+	if job_id is not None and job_id is not "":
+		# Resubmit PBS job.
+		log_information(f"We appear to be running in PBS with job ID {job_id}")
+
+		# TODO: check if qrerun is on PATH?? Is this provided by other PBS
+		# implementations?
+		cmd = [CMD_RERUN, job_id]
+
+		# TODO: capture and print the job ID of the new job?
+		log_information(f"Executing {str.join(" ", cmd)}...")
+
+		# This will throw if the command fails.
+		subprocess.run(cmd, check = True)
+		log_information(f"Successfully resubmitted job!")
+	else:
+		log_information("This does not appear to be running in PBS. The caller will need to handle resubmission of the job.")
+
+	# Exit with the standard exit code.
+	log_warning(f"Early termination due to walltime limit of {opts.walltime_limit} being reached.")
+	sys.exit(EXIT_CODE_WALLTIME_LIMIT)
+
 def main(opts: Options):
 	"""
 	Main function.
@@ -417,11 +453,11 @@ def main(opts: Options):
 
 				seconds = sum([x.total_seconds() for x in iteration_durations]) / len(iteration_durations)
 				mean_iteration_duration = datetime.timedelta(seconds = seconds)
+				log_diagnostic(f"Elapsed time is {get_walltime()} and estimated time required for another iteration is {mean_iteration_duration}")
 
 				copy_duration = datetime.datetime.now() - copy_start
 				log_information(f"Output file successfully moved to output directory in {copy_duration}. Exiting job...")
-				log_warning(f"Early termination due to walltime limit of {opts.walltime_limit} being reached. Elapsed time is {get_walltime()} and estimated time required for another iteration is {mean_iteration_duration}")
-				sys.exit(EXIT_CODE_WALLTIME_LIMIT)
+				walltime_abort()
 		elif opts.walltime_limit is not None:
 			# Mean duration of each iteration.
 			seconds = sum([x.total_seconds() for x in iteration_durations]) / len(iteration_durations)
@@ -433,8 +469,8 @@ def main(opts: Options):
 			# If not enough time remaining, and more files must be appended,
 			# terminate early.
 			if time_remaining < NOVERHEAD * mean_iteration_duration and more_files:
-				log_warning(f"Early termination due to walltime limit of {opts.walltime_limit} being reached. Elapsed time is {get_walltime()} and estimated time required for another iteration is {mean_iteration_duration}")
-				sys.exit(EXIT_CODE_WALLTIME_LIMIT)
+				log_diagnostic(f"Elapsed time is {get_walltime()} and estimated time required for another iteration is {mean_iteration_duration}")
+				walltime_abort()
 
 	if use_work_dir:
 		log_information(f"Moving temporary output file {out_file} to actual output path: {opts.out_file}")
