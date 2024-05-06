@@ -200,7 +200,7 @@ def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int, units: st
 			# Chunk sizes.
 			cs = None
 			if len(opts.chunk_sizes) > 0:
-				cs = tuple([get_chunk_size(nc_in, dim, opts.chunk_sizes) for dim in dims])
+				cs = tuple([get_chunk_size(nc_in, nc_out, dim, opts.chunk_sizes) for dim in dims])
 			else:
 				# Chunking from input file.
 				chunking = var.chunking()

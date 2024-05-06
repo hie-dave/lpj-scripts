@@ -1797,15 +1797,16 @@ def parse_chunksizes(chunks: str) -> list[tuple[str, int]]:
 	chunks = [x for x in str.split(chunks, ",")]
 	return [(dim, int(chunk)) for (dim, chunk) in [str.split(c, "/") for c in chunks]]
 
-def get_chunk_size(nc: Dataset, dim: str, chunk_sizes: list[tuple[str, int]]) -> int:
+def get_chunk_size(nc_in: Dataset, nc_out: Dataset, dim: str, chunk_sizes: list[tuple[str, int]]) -> int:
 	"""
 	Get the chunk size for the specified dimension.
 
-	@param nc: The input netcdf file. Used to ensure the chunk size doesn't exceed dimension size.
+	@param nc_in: The input netcdf file. Used to ensure the chunk size doesn't exceed dimension size.
+	@param nc_out: The output netcdf file. Used to ensure the chunk size doesn't exceed dimension size.
 	@param dim: The dimension.
 	@param chunk_sizes: List of tuples of dimension name and chunk size.
 	"""
-	dimension = nc.dimensions[dim]
+	dimension = nc_out.dimensions[dim]
 	for (chunk_dim, chunk_size) in chunk_sizes:
 		if chunk_dim == dim:
 			if chunk_size > dimension.size:
@@ -1816,6 +1817,7 @@ def get_chunk_size(nc: Dataset, dim: str, chunk_sizes: list[tuple[str, int]]) ->
 	# I'm not entirely comfortable with warnings here, but some netcdf files are
 	# setup in strange ways, so I'll leave it like this for now.
 
+	nc = nc_out if dim in nc_out.variables else nc_in
 	default_chunking = nc.variables[dim].chunking()
 	if default_chunking == "contiguous":
 		log_warning(f"No chunk size specified for contiguous dimension {dim}. This code pathway is untested. Godspeed!")

@@ -183,7 +183,7 @@ def init_outfile(nc_in: Dataset, nc_out: Dataset, reshape_options: ReshapeOption
 		# Chunk sizes.
 		cs = None
 		if len(reshape_options.chunk_sizes) > 0:
-			cs = tuple([get_chunk_size(nc_in, dim, reshape_options.chunk_sizes) for dim in dims])
+			cs = tuple([get_chunk_size(nc_in, nc_out, dim, reshape_options.chunk_sizes) for dim in dims])
 		else:
 			# Chunking from input file.
 			chunking = var.chunking()
