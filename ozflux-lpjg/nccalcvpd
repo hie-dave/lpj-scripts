@@ -615,7 +615,7 @@ def copy_file(file: str, dest_dir: str, move: bool = False) -> str:
 	verb = "moving" if move else "copying"
 	func = shutil.move if move else shutil.copy2
 	dest = os.path.join(dest_dir, os.path.basename(file))
-	log_diagnostic(f"{verb} file {file} to {dest_dir}...")
+	log_diagnostic(f"{verb} file {file} to {dest}...")
 	start_time = datetime.datetime.now()
 	func(file, dest)
 	duration = datetime.datetime.now() - start_time
