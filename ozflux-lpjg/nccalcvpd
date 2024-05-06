@@ -5,7 +5,7 @@
 #
 
 import ozflux_common
-import math, tempfile, string
+import math, tempfile, string, shutil
 import traceback
 
 from ozflux_logging import *
@@ -94,10 +94,11 @@ class VpdOptions:
 	@param var_humidity: Name of specific humidity variable.
 	@param var_pressure: Name of air pressure variable.
 	@param var_vpd: Name of vpd variable.
+	@param work_dir: Optional working directory or None if not used.
 	"""
 	def __init__(self, in_dir: str, out_dir: str, max_year: int, max_month: int
 		, timestep: str, min_chunk_size: int, var_temperature: str
-		, var_humidity: str, var_pressure: str, var_vpd: str):
+		, var_humidity: str, var_pressure: str, var_vpd: str, work_dir: str):
 		self.in_dir = in_dir
 		self.out_dir = out_dir
 		self.max_year = max_year
@@ -108,6 +109,7 @@ class VpdOptions:
 		self.var_humidity = var_humidity
 		self.var_pressure = var_pressure
 		self.var_vpd = var_vpd
+		self.workdir = work_dir
 
 class Options:
 	"""
@@ -145,6 +147,7 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-M", "--mpi", action = "store_true", help = "Process files using MPI-level parallelism")
 	parser.add_argument("-m", "--min-chunk-size", type = int, default = 1, help = "Number of chunks to read at a time (along each dimension) when copying data. If 1, the chunk size of the input data will be used. This does not affect the chunking of the variables in the output file. Higher values result in higher throughput at the cost of higher memory usage (default: 1)")
 	parser.add_argument("-t", "--timestep", default = "1hr", help = "Input data timestep (default: '1hr').")
+	parser.add_argument("-w", "--work-dir", default = None, help = "Working directory. Input files will be copied to this location before being read. Output file will be written in this location before being moved to the ultimate output path specified by the -o/--out-dir parameter. This is an optimisation on some filesystems.")
 	parser.add_argument("--var-temperature", default = "tav", help = "Name of the air temperature variable (default: 'tav').")
 	parser.add_argument("--var-humidity", default = "sh", help = "Name of the specific humidity variable (default: 'sh').")
 	parser.add_argument("--var-pressure", default = "ps", help = "Name of the air pressure variable (default: 'ps').")
@@ -156,7 +159,7 @@ def parse_args(argv: list[str]) -> Options:
 	p = parser.parse_args(argv[1:])
 	opts = VpdOptions(p.in_dir, p.out_dir, p.max_year, p.max_month, p.timestep
 		, p.min_chunk_size, p.var_temperature, p.var_humidity, p.var_pressure
-		, p.var_vpd)
+		, p.var_vpd, p.work_dir)
 	return Options(p.verbosity, p.show_progress, p.parallel, p.mpi, opts)
 
 class InputFile:
@@ -604,6 +607,39 @@ def init_outfile(nc_in: Dataset, nc_out: Dataset, vpd_opts: VpdOptions):
 	setattr(var_vpd, ATTR_LONG_NAME, VPD_LONG_NAME)
 	setattr(var_vpd, ATTR_STD_NAME, VPD_STANDARD_NAME)
 
+def copy_file(file: str, dest_dir: str, move: bool = False) -> str:
+	"""
+	Copy a file to the specified destination directory, and return the path to
+	the copied file.
+
+	@param file: Path to the source file.
+	@param dest_dir: Destination directory.
+	@param move: True to move, false to copy.
+	"""
+	verb = "moving" if move else "copying"
+	func = shutil.move if move else shutil.copy2
+	dest = os.path.join(dest_dir, os.path.basename(file))
+	log_diagnostic(f"{verb} file {file} to {dest_dir}...")
+	start_time = datetime.datetime.now()
+	func(file, dest)
+	duration = datetime.datetime.now() - start_time
+	log_diagnostic(f"{verb} of {file} to {dest} completed successfully in {duration}")
+	return dest
+
+def delete_working_file(file: str, in_dir: str, workdir: str):
+	"""
+	Delete a file from the working directory, but only if the work directory is
+	not the same as the input directory.
+
+	@param file: The file to be deleted.
+	@param in_dir: The input directory.
+	@param workdir: The working directory.
+	"""
+	in_file = os.path.join(in_dir, os.path.basename(file))
+	if file != in_file:
+		log_diagnostic(f"Deleting temporary working copy of input file: {file}")
+		os.remove(file)
+
 def process_file(in_file: InputFile, opts: VpdOptions, pcb: Callable[[float], None]):
 	"""
 	Process a single input file (which represents a specific year/month). Create
@@ -621,6 +657,13 @@ def process_file(in_file: InputFile, opts: VpdOptions, pcb: Callable[[float], No
 	pfile = in_file.get_file_path(opts.in_dir, opts.var_pressure, timestep)
 	hfile = in_file.get_file_path(opts.in_dir, opts.var_humidity, timestep)
 
+	use_workdir = opts.workdir != None and opts.workdir != ""
+	if use_workdir:
+		tfile = copy_file(tfile, opts.workdir)
+		pfile = copy_file(pfile, opts.workdir)
+		hfile = copy_file(hfile, opts.workdir)
+		out_file = os.path.join(opts.workdir, os.path.basename(out_file))
+
 	if os.path.exists(out_file):
 		os.remove(out_file)
 
@@ -629,6 +672,15 @@ def process_file(in_file: InputFile, opts: VpdOptions, pcb: Callable[[float], No
 			with open_netcdf(hfile) as nc_humid:
 				with open_netcdf(out_file, True) as nc_out:
 					calc_vpd(opts, nc_temp, nc_pres, nc_humid, nc_out, pcb)
+
+	if use_workdir:
+		# Move output file to actual output directory.
+		copy_file(out_file, opts.out_dir, move = True)
+
+		# Delete temporary copies of input files from the working directory.
+		delete_working_file(tfile, opts.in_dir, opts.workdir)
+		delete_working_file(pfile, opts.in_dir, opts.workdir)
+		delete_working_file(hfile, opts.in_dir, opts.workdir)
 
 def main(vpd_options: VpdOptions, in_files: list[InputFile]):
 	"""
