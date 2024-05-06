@@ -1792,6 +1792,8 @@ def parse_chunksizes(chunks: str) -> list[tuple[str, int]]:
 
 	@param chunks: Chunk sizes specified in NCO format; E.g. `lon/1,lat/2,time/365`
 	"""
+	if chunks == None or chunks == "":
+		return []
 	chunks = [x for x in str.split(chunks, ",")]
 	return [(dim, int(chunk)) for (dim, chunk) in [str.split(c, "/") for c in chunks]]
 

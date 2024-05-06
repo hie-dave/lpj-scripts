@@ -120,11 +120,13 @@ def parse_args(argv: list[str]) -> Options:
 
 	p = parser.parse_args(argv[1:])
 
-	walltime_limit = pandas.Timedelta(p.walltime_limit).to_pytimedelta()
+	walltime_limit: datetime.timedelta = None
+	if p.walltime_limit != None:
+		walltime_limit = pandas.Timedelta(p.walltime_limit).to_pytimedelta()
 	chunks = parse_chunksizes(p.chunk_sizes)
 
 	return Options(p.verbosity, p.files, p.out_file, p.show_progress
-		, p.parallel, p.chunk_size, p.units, p.work_dir, p.restart_file
+		, p.parallel, p.min_chunk_size, p.units, p.work_dir, p.restart_file
 		, walltime_limit, chunks)
 
 def copy_workdir(in_file: str, work_dir: str) -> str:
