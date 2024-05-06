@@ -240,15 +240,11 @@ def get_input_files(opts: Options) -> list[InputFile]:
 		log_diagnostic("Running outside of MPI, or in MPI with world size of 1. Files will not be processed using MPI-level parallelism.")
 		if opts.mpi:
 			log_warning(f"--mpi was given, but MPI world size is {comm.size}. Files will therefore NOT be processed using MPI-level parallelism. Did you forget to run with mpirun/mpiexec?")
-		check_input_files(in_files, opts.vpd_options)
 		return in_files
 
 	log_diagnostic(f"Running in MPI environment with world size of {comm.size}")
 
 	if comm.rank == _RANK_MASTER:
-		# Verify that all required input files exist.
-		check_input_files(in_files, opts.vpd_options)
-
 		# Master node: divide work between workers.
 		log_debug(f"[master]: splitting work list into {comm.size} chunks")
 		work = numpy.array_split(in_files, comm.size)
@@ -701,6 +697,9 @@ if __name__ == "__main__":
 
 	# TODO: this should be handled by the job manager class.
 	in_files = get_input_files(opts)
+
+	# Verify that all required input files exist.
+	check_input_files(in_files, opts.vpd_options)
 
 	try:
 		# Actual logic is in main().
