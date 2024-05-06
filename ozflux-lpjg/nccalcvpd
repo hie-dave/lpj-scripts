@@ -701,6 +701,10 @@ if __name__ == "__main__":
 	# Verify that all required input files exist.
 	check_input_files(in_files, opts.vpd_options)
 
+	# This allows for more accurate progress reporting, particularly when
+	# running in MPI mode with large number of CPUs.
+	init_walltime()
+
 	try:
 		# Actual logic is in main().
 		main(opts.vpd_options, in_files)
