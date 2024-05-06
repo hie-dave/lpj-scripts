@@ -187,7 +187,7 @@ class InputFile:
 		# ps_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_1hr_197903-197903.nc
 		datestr = "%04d%02d" % (self.year, self.month)
 		file_name = f"{var}_{BASENAME}_{timestep}_{datestr}-{datestr}.nc"
-		return os.path.join(in_dir, file_name)
+		return os.path.join(in_dir, var, file_name)
 
 	def __str__(self) -> str:
 		return "%04d%02d" % (self.year, self.month)
