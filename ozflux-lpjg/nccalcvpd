@@ -671,7 +671,8 @@ def process_file(in_file: InputFile, opts: VpdOptions, pcb: Callable[[float], No
 
 	if use_workdir:
 		# Move output file to actual output directory.
-		copy_file(out_file, opts.out_dir, move = True)
+		out_dir = os.path.join(opts.out_dir, opts.var_vpd)
+		copy_file(out_file, out_dir, move = True)
 
 		# Delete temporary copies of input files from the working directory.
 		delete_working_file(tfile, opts.in_dir, opts.workdir)
