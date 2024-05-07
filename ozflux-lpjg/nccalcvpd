@@ -684,7 +684,7 @@ def main(vpd_options: VpdOptions, in_files: list[InputFile]):
 	Main function.
 	"""
 	start = 0.0
-	step = 1 / len(in_files)
+	step = 1 / len(in_files) if len(in_files) > 0 else 0
 	for in_file in in_files:
 		process_file(in_file, vpd_options, lambda p: log_progress(start + p * step))
 		start += step
