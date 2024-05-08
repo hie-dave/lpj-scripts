@@ -51,11 +51,13 @@ class Options:
 						   this time limit is reached, the job will terminate
 						   and may be resumed later by using the restart_file
 						   parameter.
+	@param compression_level: Compression levels to be used in output files. -1
+							  means same as input file.
 	"""
 	def __init__(self, log : LogLevel, files: list[str], out: str, prog: bool,
 		parallel: bool, chunk_size: int, units: str, workdir: str,
 		restart_file: str, walltime_limit: datetime.timedelta,
-		chunk_sizes = list[tuple[str, int]]):
+		compression_level: int, chunk_sizes = list[tuple[str, int]]):
 
 		self.log_level = log
 		self.files = files
@@ -69,6 +71,7 @@ class Options:
 		self.walltime_limit = walltime_limit
 		# Rate of file copying between input and working directory, in bytes per second.
 		self.copy_rate: float = 0
+		self.compression_level = compression_level
 		self.chunk_sizes = chunk_sizes
 
 class MergeTime:
@@ -116,6 +119,7 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-W", "--walltime-limit", default = None, help = f"Walltime limit. If this limit is reached, the job will terminate (with exit code {EXIT_CODE_WALLTIME_LIMIT}) and may be resumed later by re-running the command with the same restart file. If the job is running in PBS, it will be resubmitted via the `qrerun` command. This requires that the job is restartable (ie submitted with -ry).")
 	parser.add_argument("-r", "--restart-file", default = None, help = "Path to the restart file to be used. This allows execution to resume from a previous run of ncmergetime. This requires that the same arguments are used in all invocations of the command.")
 	parser.add_argument("-c", "--chunk-sizes", default = "", help = "Chunk sizes for each dimension. This is optional, and if omitted, the values in the input files will be kept. This should be specified in the same format as for nco. E.g. lat/1,lon/1,time/365")
+	parser.add_argument("--compression-level", type = int, default = -1, help = "Compression level 0-9. 0 means no compression. 9 means highest compression ratio but slowest performance. Default behaviour is to use the same compression level as in the input files.")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + ozflux_common.VERSION)
 
 	p = parser.parse_args(argv[1:])
@@ -125,9 +129,12 @@ def parse_args(argv: list[str]) -> Options:
 		walltime_limit = pandas.Timedelta(p.walltime_limit).to_pytimedelta()
 	chunks = parse_chunksizes(p.chunk_sizes)
 
+	if p.compression_level > 9:
+		raise ValueError(f"Compression level must be between 0-9, but was: {p.compression_level}")
+
 	return Options(p.verbosity, p.files, p.out_file, p.show_progress
 		, p.parallel, p.min_chunk_size, p.units, p.work_dir, p.restart_file
-		, walltime_limit, chunks)
+		, walltime_limit, p.compression_level, chunks)
 
 def copy_workdir(in_file: str, work_dir: str) -> str:
 	"""
@@ -192,7 +199,9 @@ def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int, units: st
 			fmt = get_nc_datatype(var.datatype)
 			filters = var.filters()
 			# Compression level
-			cl = filters['complevel']
+			cl = opts.compression_level
+			if cl < 0:
+				cl = filters['complevel']
 
 			# Compression type
 			ct = get_compression_type(filters)
