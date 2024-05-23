@@ -60,7 +60,7 @@ def set_dim(nc: Dataset, names: list[str], newval: float):
 			values = nc.variables[dim_name]
 			if len(values) > 1:
 				raise ValueError("Dimension '%s' contains %d values (expected 1)" % (dim_name, len(values)))
-			log_diagnostic("Modifying %s from %.2f to %.2f" % dim_name, values[0], newval)
+			log_diagnostic(f"Modifying {dim_name} from {values[0]} to {newval}")
 			values[0] = newval
 			return
 	raise ValueError("Unable to find dimension (possible names: [%s])" % (str.join(", ", names)))
