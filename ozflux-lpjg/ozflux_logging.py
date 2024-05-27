@@ -136,6 +136,9 @@ def log_progress(progress: float):
 	if progress > 1:
 		log_warning("Attempted to display progress > 1")
 
+	if progress == 0:
+		return
+
 	current_time = datetime.datetime.now()
 	elapsed = current_time - _progress_reporting_start
 	elapsed = elapsed - datetime.timedelta(microseconds = elapsed.microseconds)
