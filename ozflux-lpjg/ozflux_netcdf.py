@@ -66,6 +66,15 @@ ATTR_CALENDAR = "calendar"
 # Name of the 'missing value' attribute (from the CF spec).
 _ATTR_MISSING_VAL = "missing_value"
 
+# Name of the attribute which specifies the valid range of a variable.
+_ATTR_VALID_RANGE = "valid_range"
+
+# Name of the attribute which specifies the minimum valid value of a variable.
+_ATTR_VALID_MIN = "valid_min"
+
+# Name of the attribute which specifies the maximum valid value of a variable.
+_ATTR_VALID_MAX = "valid_max"
+
 # Name of the gregorian value of the calendar attribute (from the CF spec).
 CALENDAR_GREGORIAN = "gregorian"
 
@@ -414,6 +423,18 @@ def _get_data(in_file: Dataset \
 		step_start += units_time_proportion
 
 		bounds_start = time.time()
+		if hasattr(var_id, _ATTR_VALID_RANGE):
+			# Use valid range to further restrict the range of the variable.
+			valid_range = getattr(var_id, _ATTR_VALID_RANGE)
+			lower_bound = max(valid_range[0], lower_bound)
+			upper_bound = min(valid_range[1], upper_bound)
+		else:
+			if hasattr(var_id, _ATTR_VALID_MIN):
+				valid_min = getattr(var_id, _ATTR_VALID_MIN)
+				lower_bound = max(lower_bound, valid_min)
+			if hasattr(var_id, _ATTR_VALID_MAX):
+				valid_max = getattr(var_id, _ATTR_VALID_MAX)
+				upper_bound = min(upper_bound, valid_max)
 		data = bounds_checks(data, lower_bound, upper_bound, lambda p: \
 			progress_cb(step_start + bounds_time_prop * p))
 		bounds_tot = time.time() - bounds_start
