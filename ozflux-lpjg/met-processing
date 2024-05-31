@@ -1,15 +1,15 @@
 #!/usr/bin/env python
 from argparse import ArgumentParser
-import os, re, time
+import os, re, time, pandas
 import ozflux_dave, ozflux_netcdf, ozflux_parallel
 import traceback
 from ozflux_logging import *
-from netCDF4 import Dataset
+from netCDF4 import Dataset, date2num
 from sys import argv
 from typing import Callable
 from ozflux_netcdf import *
 from ozflux_common import *
-from ozflux_dave import get_dailygrass_vars
+from ozflux_dave import get_dailygrass_vars, get_ameriflux_vars
 import ozflux_lsm
 
 class Options:
@@ -25,10 +25,12 @@ class Options:
 	@param compression_level: Compression quality for output file [0, 9]. 0 = none, 1 = fastest compression, largest filesize, 9 = slowest compression, smallest filesize.
 	@param compression_type: Compression algorithm to be used (default 'zlib').
 	@param single_outfile: Iff true, inputs will be written to a single output file.
+	@param ameriflux: True to treat input files as ameriflux files (e.g. for checking variable names).
 	"""
 	def __init__(self, log : LogLevel, files: list[str], odir: str, \
 		prog: bool, parallel: bool, timestep: int, out_type: LpjVersion,
-		compression_level: int, compression_type: str, single_outfile: bool):
+		compression_level: int, compression_type: str, single_outfile: bool,
+		ameriflux: bool):
 		self.log_level = log
 		self.files = files
 		self.out_dir = odir
@@ -39,6 +41,7 @@ class Options:
 		self.compression_type = compression_type
 		self.out_type = LpjVersion(out_type)
 		self.single_outfile = single_outfile
+		self.ameriflux = ameriflux
 
 class MetProcessingTask(ozflux_parallel.Task):
 	def __init__(self, infile: str, outfile: str, timestep: int
@@ -138,6 +141,8 @@ def get_vars(version: LpjVersion, timestep: int) -> list[ForcingVariable]:
 	if version == LpjVersion.LSM:
 		return ozflux_lsm.get_lsm_vars()
 	if version == LpjVersion.DAILY_GRASS:
+		if (opts.ameriflux):
+			return get_ameriflux_vars(timestep)
 		return get_dailygrass_vars(timestep)
 	raise ValueError("Unknown output mode: %d" % version)
 
@@ -173,6 +178,24 @@ def copy_data_lsm(in_file: Dataset, out_file: Dataset, timestep: int, \
 		ozflux_lsm.write_data(out_file, data, var, reporter)
 		i += 1
 
+def get_coord(nc: Dataset, attr: str, std_name: str):
+	if hasattr(nc, attr):
+		return getattr(nc, attr)
+	dim = get_dim_from_std_name(nc, std_name)
+	if dim.size > 1:
+		raise ValueError(f"Input file has multiple ({len(dim)}) {std_name} values")
+	if dim.size < 1:
+		raise ValueError(f"Input file has 0 {std_name} values")
+	if not dim.name in nc.variables:
+		raise ValueError(f"Variable not found: {dim.name}")
+	return nc.variables[dim.name][0]
+
+def get_longitude(nc: Dataset) -> float:
+	return get_coord(nc, "longitude", STD_LON)
+
+def get_latitude(nc: Dataset) -> float:
+	return get_coord(nc, "latitude", STD_LAT)
+
 def write_data(nc_in: Dataset, nc_out: Dataset, data: list[float] \
 	, var: ForcingVariable, version: LpjVersion, toffset: int
 	, pcb: Callable[[float], None]):
@@ -189,8 +212,8 @@ def write_data(nc_in: Dataset, nc_out: Dataset, data: list[float] \
 	if version == LpjVersion.LSM:
 		ozflux_lsm.write_data(nc_out, data, var, pcb)
 	elif version == LpjVersion.DAILY_GRASS:
-		lon = float(nc_in.longitude)
-		lat = float(nc_in.latitude)
+		lon = get_longitude(nc_in)
+		lat = get_latitude(nc_in)
 		write_data_dg(nc_out, var.out_name, data, lon, lat, toffset, pcb)
 	else:
 		raise ValueError("Unknown lpj version %d" % version)
@@ -233,7 +256,7 @@ def copy_data(nc_in: Dataset, nc_out: Dataset, timestep: int
 			cd_tp_lock.release()
 
 		log_diagnostic("----- %s -----" % var.in_name)
-		log_diagnostic("Reading %s data")
+		log_diagnostic("Reading %s data" % var.in_name)
 
 		reporter = lambda p: pcb( (i + p * read_prop) / nvar)
 		read_start = time.time()
@@ -242,7 +265,7 @@ def copy_data(nc_in: Dataset, nc_out: Dataset, timestep: int
 
 		n = max(n, len(data))
 
-		log_diagnostic("Writing %s data")
+		log_diagnostic("Writing %s data" % var.in_name)
 		reporter = lambda p: pcb( (i + read_prop + write_prop * p) / nvar)
 		write_start = time.time()
 		write_data(nc_in, nc_out, data, var, version, toffset, reporter)
@@ -278,7 +301,7 @@ def copy_data(nc_in: Dataset, nc_out: Dataset, timestep: int
 
 	# First we need to get the offset since the baseline date. For that, we need
 	# to know the start date of the output data.
-	start_date = parse_date(nc_in.time_coverage_start)
+	start_date = get_first_date(nc_in)
 	if (start_date.minute == 30):
 		# temporal_aggregation() trims the first value if it lies on the
 		# half-hour boundary. We need to do the same here.
@@ -286,17 +309,23 @@ def copy_data(nc_in: Dataset, nc_out: Dataset, timestep: int
 		start_date = start_date + datetime.timedelta(minutes = 30)
 	start_date = get_next_year(start_date)
 
-	# Get total offset from DATE_BASELINE in hours.
-	# todo: make this flexible based on output time units.
-	offset = (start_date - DATE_BASELINE).days * HOURS_PER_DAY
-
 	step_width = opts.timestep / MINUTES_PER_HOUR
-	timesteps = [offset + i * step_width for i in range(n)]
+	dlt = datetime.timedelta(hours = step_width)
+	dates = pandas.date_range(start_date, periods = n, freq = dlt)
+	dates = [d.to_pydatetime() for d in dates]
+
+	# TODO: this probably won't work correctly with --single-outfile option, but
+	# using date2num() really is the only rational way of handling this.
+	var_time = nc_out.variables[VAR_TIME]
+	var_time.units = f"hours since {DATE_BASELINE}"
+	var_time.calendar = CALENDAR_GREGORIAN
+	values = date2num(dates, var_time.units, var_time.calendar)
+
 	for i in range(toffset, n, CHUNK_SIZE):
 		up = min(n, i + CHUNK_SIZE)
 		tlow = i + toffset
 		thigh = up + toffset
-		nc_out.variables[DIM_TIME][tlow:thigh] = timesteps[i:up]
+		var_time[tlow:thigh] = values[i:up]
 
 def create_dimensions(nc: Dataset, version: LpjVersion, ngridcell: int):
 	"""
@@ -328,7 +357,8 @@ def create_variables(nc: Dataset, version: LpjVersion, timestep: int
 	else:
 		# I've created a separate function for the dailygrass variables to
 		# improve readability in this function.
-		ozflux_dave.create_dailygrass_variables(nc, timestep, clevel, ctype)
+		vars = get_vars(version, timestep)
+		ozflux_dave.create_dailygrass_variables(nc, timestep, vars, clevel, ctype)
 
 def prepare_outfile(nc: Dataset, version: LpjVersion, ngridcell: int
 	, timestep: int, clevel: int, ctype: str):
@@ -383,6 +413,26 @@ def write_metadata(nc: Dataset, timestep: int, version: LpjVersion):
 	else:
 		raise ValueError("Unknown output version %d" % version)
 
+def get_timestep(nc: Dataset) -> int:
+	"""
+	Get the timestep of the specified file in minutes.
+
+	@param nc: The netcdf file.
+	"""
+	# The ozflux method.
+	ATTR_TIMESTEP = "time_ste"
+	if hasattr(nc, ATTR_TIMESTEP):
+		return getattr(nc, ATTR_TIMESTEP)
+
+	# The fallback.
+	time = nc.variables[VAR_TIME]
+	times = time[0:2]
+	dates = num2date(times, time.units, time.calendar
+		, only_use_cftime_datetimes = False, only_use_python_datetimes = True)
+	timestep: datetime.timedelta = dates[1] - dates[0]
+	timestep.min
+	return timestep.total_seconds() // 60
+
 def process_file(in_file: str, out_file: str, timestep: int \
 	, version: LpjVersion, clevel: int, ctype: str, ngridcell
 	, first_date: datetime.datetime
@@ -406,7 +456,7 @@ def process_file(in_file: str, out_file: str, timestep: int \
 		log_debug("Opening input file %s for reading" % in_file)
 		with Dataset(in_file, "r", format=NC_FORMAT) as nc_in:
 			# Quick sanity check of time step.
-			instep = int(nc_in.time_step)
+			instep = get_timestep(nc_in)
 			if instep > timestep:
 				m = "Invalid input timestep (%d). Must be <= output (%d)"
 				raise ValueError(m % instep, timestep)
@@ -421,8 +471,7 @@ def process_file(in_file: str, out_file: str, timestep: int \
 			copy_data(nc_in, nc_out, timestep, version, first_date, pcb)
 
 			# Write site metadata.
-			start_date = get_next_year(
-				parse_date(nc_in.time_coverage_start))
+			start_date = get_next_year(get_first_date(nc_in))
 			attr_tstart = "time_coverage_start"
 			attr_tend = "time_coverage_end"
 			attr_lon = "longitude"
@@ -435,9 +484,9 @@ def process_file(in_file: str, out_file: str, timestep: int \
 				attr_lat = "%s_%s" % (attr_lat, site_short)
 
 			setattr(nc_out, attr_tstart, start_date.strftime(DATE_FORMAT))
-			setattr(nc_out, attr_tend, nc_in.time_coverage_end)
-			setattr(nc_out, attr_lat, nc_in.latitude)
-			setattr(nc_out, attr_lon, nc_in.longitude)
+			setattr(nc_out, attr_tend, get_last_date(nc_out).strftime(DATE_FORMAT))
+			setattr(nc_out, attr_lat, get_latitude(nc_in))
+			setattr(nc_out, attr_lon, get_longitude(nc_out))
 
 			if not opts.single_outfile:
 				site_name = os.path.basename(in_file)
@@ -478,13 +527,26 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("--compression-level", type = int, nargs = "?", default = 4, help = "Compression quality for output file [0, 9]. 0 = none, 1 = fastest compression, largest filesize, 9 = slowest compression, smallest filesize (default 4)")
 	parser.add_argument("--compression-type", default = "zlib", help = "Compression algorithm to be used (default 'zlib')")
 	parser.add_argument("-s", "--single-outfile", action = "store_true", help = "Combine all inputs into a single output file")
+	parser.add_argument("-a", "--ameriflux", action = "store_true", help = "Treat input files as ameriflux files (e.g. for checking variable names).")
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + VERSION)
 
 	parsed = parser.parse_args(argv[1:])
 	return Options(parsed.verbosity, parsed.files, parsed.out_dir
 	, parsed.show_progress, parsed.parallel, parsed.timestep
 	, parsed.output_compatibility, parsed.compression_level
-	, parsed.compression_type, parsed.single_outfile)
+	, parsed.compression_type, parsed.single_outfile, parsed.ameriflux)
+
+def read_first_date(nc: Dataset) -> datetime.datetime:
+	"""
+	Read the first date within the netcdf file and return it as a python
+	datetime object.
+
+	@param nc: The netcdf file.
+	"""
+	# Assuming the name of the time variable is time...
+	# Assuming the variable is one-dimensional...
+	time = nc.variables[VAR_TIME]
+	return num2date(time[0], time.units, time.calendar, only_use_cftime_datetimes = False, only_use_python_datetimes = True)
 
 def get_first_date(nc: Dataset) -> datetime.datetime:
 	"""
@@ -493,7 +555,17 @@ def get_first_date(nc: Dataset) -> datetime.datetime:
 
 	@param nc: Opened netcdf dataset.
 	"""
-	start_date = parse_date(nc.time_coverage_start)
+	# Ozflux method.
+	ATTR_TIME_START = "time_coverage_start"
+	start_date: datetime
+	if hasattr(nc, ATTR_TIME_START):
+		# Ozflux sites provide an attribute. It would be better to not rely on
+		# this but I'm not going to refactor this at this point.
+		start_date = parse_date(getattr(nc, ATTR_TIME_START))
+	else:
+		# The fallback is to read the first time value from the input file.
+		start_date = read_first_date(nc)
+
 	if (start_date.minute == 30):
 		# temporal_aggregation() trims the first value if it lies on the
 		# half-hour boundary. We need to do the same here.
@@ -501,6 +573,15 @@ def get_first_date(nc: Dataset) -> datetime.datetime:
 		start_date = start_date + datetime.timedelta(minutes = 30)
 	start_date = get_next_year(start_date)
 	return start_date
+
+def get_last_date(nc: Dataset) -> datetime.datetime:
+	"""
+	Get the last date in the given file.
+	"""
+	time = nc.variables[VAR_TIME]
+	value = time[len(time) - 1]
+	return num2date(value, time.units, time.calendar
+		, only_use_cftime_datetimes = False, only_use_python_datetimes = True)
 
 def get_file_first_date(ncfile: str):
 	"""

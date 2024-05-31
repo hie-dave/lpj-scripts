@@ -53,6 +53,31 @@ _OUT_WIND = "wind"
 # Output units for wind speed.
 _WIND_UNITS = "m/s"
 
+################################################################################
+# Ameriflux input variable names.
+################################################################################
+
+# Name of the air temperature variable in the ameriflux input files.
+_AMERIFLUX_TAIR = "TA_F"
+
+# Name of the downwelling shortwave radiation variable in the ameriflux input files.
+_AMERIFLUX_SWDOWN = "SW_IN_F"
+
+# Name of the precipitation variable in the ameriflux input files.
+_AMERIFLUX_PRECIP = "P_F"
+
+# Name of the co2 concentration variable in the ameriflux input files.
+_AMERIFLUX_CO2 = "CO2_F_MDS"
+
+# Name of the vpd variable in the ameriflux input files.
+_AMERIFLUX_VPD = "VPD_F"
+
+# Name of the air pressure variable in the ameriflux input files.
+_AMERIFLUX_PRESSURE = "PA_F"
+
+# Name of the wind speed variable in the ameriflux input files.
+_AMERIFLUX_WIND = "WS_F"
+
 def temp_var(i: str, o: str, aggregator: Callable[[list[float]], float]) \
 	-> ForcingVariable:
 	"""
@@ -86,6 +111,35 @@ def get_dailygrass_vars(timestep: int) -> list[ForcingVariable]:
 
 	return vars
 
+def get_ameriflux_vars(timestep: int) -> list[ForcingVariable]:
+	"""
+	Get the list of variables required for ameriflux processing.
+
+	@param timestep: Output timestep in minutes.
+	"""
+	tair = temp_var(_AMERIFLUX_TAIR, _OUT_TEMP, numpy.mean)
+	swdown = ForcingVariable(_AMERIFLUX_SWDOWN, _OUT_INSOL, _SWDOWN_UNITS
+							 , numpy.mean , MIN_SWDOWN, MAX_SWDOWN)
+	precip = ForcingVariable(_AMERIFLUX_PRECIP, _OUT_PREC, _PREC_UNITS
+						  	 , numpy.sum, MIN_PRECLS, MAX_PRECLS)
+	co2 = ForcingVariable(_AMERIFLUX_CO2, _OUT_CO2, _CO2_UNITS, numpy.mean, 250
+					   		 , 900)
+	vpd = ForcingVariable(_AMERIFLUX_VPD, _OUT_VPD, _VPD_UNITS, numpy.mean, 0
+						     , 100)
+	pressure = ForcingVariable(_AMERIFLUX_PRESSURE, _OUT_PS, _PS_UNITS
+							 , numpy.mean, MIN_PS, MAX_PS)
+	wind = ForcingVariable(_AMERIFLUX_WIND, _OUT_WIND, _WIND_UNITS, numpy.mean
+							 , 0, 100)
+
+	vars = [tair, swdown, precip, co2, vpd, pressure, wind]
+
+	# If generating a daily file, need to include tmax/tmin variables in output.
+	if timestep / MINUTES_PER_HOUR == 24:
+		vars.append(temp_var(_AMERIFLUX_TAIR, _OUT_TMAX, numpy.amax))
+		vars.append(temp_var(_AMERIFLUX_TAIR, _OUT_TMIN, numpy.amin))
+
+	return vars
+
 def create_dimensions(nc: Dataset, ngridcell: int):
 	"""
 	Create dimensions required by the dave-daily-grass version.
@@ -103,14 +157,14 @@ def create_dimensions(nc: Dataset, ngridcell: int):
 	create_var_if_not_exists(nc, DIM_LAT, FORMAT_FLOAT, DIM_LAT, chunksizes = geo_chunk_size)
 	var_lon = nc.variables[DIM_LON]
 	var_lat = nc.variables[DIM_LAT]
-	var_lon.long_name = "longitude"
-	var_lat.long_name = "latitude"
-	var_lon.standard_name = "longitude"
-	var_lat.standard_name = "latitude"
-	var_lon.units = "degree_east"
-	var_lat.units = "degree_north"
+	var_lon.long_name = LONG_LON
+	var_lat.long_name = LONG_LAT
+	var_lon.standard_name = STD_LON
+	var_lat.standard_name = STD_LAT
+	var_lon.units = UNITS_LON
+	var_lat.units = UNITS_LAT
 
-def create_dailygrass_variables(nc: Dataset, timestep: int
+def create_dailygrass_variables(nc: Dataset, timestep: int, vars: list[ForcingVariable]
 		, compression_level: int, compression_type: str):
 	"""
 	Create the variables required for dailygrass mode.
@@ -126,7 +180,7 @@ def create_dailygrass_variables(nc: Dataset, timestep: int
 	chunksizes = (1, 1, time_chunksize)
 	format = FORMAT_FLOAT
 
-	for var in get_dailygrass_vars(timestep):
+	for var in vars:
 		create_var_if_not_exists(nc, var.out_name, format, dims
 			, compression_level, compression_type, chunksizes)
 

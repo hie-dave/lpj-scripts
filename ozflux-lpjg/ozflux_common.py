@@ -142,6 +142,9 @@ KG_PER_G = 1e-3
 # KPa to Pa
 PA_PER_KPA = 1e3
 
+# Number of pascals in a hectopascal.
+PA_PER_HPA = 100
+
 # °C to K
 DEG_C_TO_K = 273.15
 
@@ -264,7 +267,7 @@ def neighbouring_indices(data: list[float], index: int, nindex
 		def can_use(idx: int) -> bool:
 			if idx < 0 or idx >= ndata or idx in indices:
 				return False
-			if predicate != None and not predicate(data[idx]):
+			if predicate != None and not predicate(idx):
 				return False
 			return True
 
@@ -280,7 +283,7 @@ def neighbouring_mean(data: list[float], index: int, n: int) -> float:
 	"""
 	Return the mean of the N closest neighbours in the list.
 	"""
-	indices = neighbouring_indices(data, index, n, lambda x: not x.mask)
+	indices = neighbouring_indices(data, index, n, lambda x: not data.mask[x])
 	mean = 0
 	for i in indices:
 		mean += data[i]

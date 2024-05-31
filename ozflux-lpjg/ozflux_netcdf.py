@@ -42,11 +42,29 @@ FORMAT_FLOAT = "f8"
 # Data format for single-precision floating point numbers.
 FORMAT_SINGLE = "f4"
 
+# Data format of the ulong netcdf data type.
+FORMAT_ULONG = "u8"
+
+# Data format of the long netcdf data type.
+FORMAT_LONG = "i8"
+
 # Data format of unsigned long (uint64_t) in the output file.
-FORMAT_UINT = "u8"
+FORMAT_UINT = "u4"
+
+# Data format of the int netcdf data type.
+FORMAT_INT = "i4"
+
+# Data format of the ushort netcdf data type.
+FORMAT_USHORT = "u2"
+
+# Data format of the short netcdf data type.
+FORMAT_SHORT = "i2"
 
 # Name of the time variable in the input files.
 VAR_TIME = "time"
+
+# Name of the zlib compression level.
+COMPRESSION_ZLIB = "zlib"
 
 # Standard names defined by the CF spec. See here for all defined values:
 # https://cfconventions.org/Data/cf-standard-names/current/build/cf-standard-name-table.html
@@ -86,6 +104,21 @@ STD_LON = "longitude"
 
 # Standard name of the time variable (from the CF spec).
 STD_TIME = "time"
+
+# Long name of the latitude variable (from the CF spec).
+LONG_LAT = "latitude"
+
+# Long name of the longitude variable (from the CF spec).
+LONG_LON = "longitude"
+
+# Long name of the time variable (from the CF spec).
+LONG_TIME = "time"
+
+# Units used in the latitude variable.
+UNITS_LAT = "degrees_north"
+
+# Units used in the longitude variable.
+UNITS_LON = "degrees_east"
 
 # Global estimates of how much time it takes to perform various tasks (as a
 # proportion of total time spent in get_data() function [0, 1]). These get
@@ -153,6 +186,8 @@ units_conversions = {
 	("umol/m2/s", "kgC/m2/day"): lambda x, _: x * MOL_PER_UMOL * G_C_PER_MOL * KG_PER_G * SECONDS_PER_DAY,
 	("umol/m2/s", "gC/m2/day"): lambda x, _: x * MOL_PER_UMOL * G_C_PER_MOL * SECONDS_PER_DAY,
 	("Pa", "kPa"): lambda x, _: x / PA_PER_KPA,
+	("hPa", "Pa"): lambda x, _: x * PA_PER_HPA,
+	("hPa", "kPa"): lambda x, _: x * PA_PER_HPA / PA_PER_KPA,
 }
 
 _qc_flag_definitions = {
@@ -198,6 +233,17 @@ _qc_flag_definitions = {
 	80: (False, "Partitioning Day: GPP/Re computed from light-response curves, GPP = Re - Fc"),
 	81: (False, "Partitioning Day: GPP night mask"),
 	82: (False, "Partitioning Day: Fc > Re, GPP = 0, Re = Fc"),
+}
+
+_nc_type_lookup = {
+	"float64": FORMAT_FLOAT,
+	"float32": FORMAT_SINGLE,
+	"uint64": FORMAT_ULONG,
+	"int64": FORMAT_LONG,
+	"uint32": FORMAT_UINT,
+	"int32": FORMAT_INT,
+	"uint16": FORMAT_USHORT,
+	"int16": FORMAT_SHORT,
 }
 
 class ForcingVariable():
@@ -324,8 +370,7 @@ def _get_data(in_file: Dataset \
 			data = zeroes(n)
 			return trim_to_start_year(in_file, output_timestep, data)
 		if not in_name in in_file.variables:
-			m = "Variable %s does not exist in input file"
-			raise ValueError(m % in_name)
+			raise ValueError(f"Variable {in_name} does not exist in input file")
 
 		var_id = in_file.variables[in_name]
 
@@ -473,14 +518,37 @@ def read_data(variable: Variable, progress_callback: Callable[[float], None]) \
 	"""
 	Read all data for a variable from the .nc input file.
 	"""
-	arr = [float] * variable.size
-	n = len(arr)
+	for (shape, dim) in zip(variable.shape, variable.dimensions):
+		if dim != DIM_TIME and shape > 1:
+			raise ValueError(f"This read_data() function does not work with truly multi-dimensional variables")
+
+	n = variable.size
+	arr = numpy.ma.MaskedArray([float] * n)
+	time_index = index_of_throw(DIM_TIME, variable.dimensions, lambda: f"Variable {variable.name} has no time dimension")
+	indices = [range(0, 1)] * len(variable.dimensions)
+
 	for i in range(0, n, CHUNK_SIZE):
 		lower = i
-		upper = i + CHUNK_SIZE
-		arr[lower:upper] = variable[lower:upper]
-		progress_callback(i / n)
+		upper = min(variable.size, i + CHUNK_SIZE)
+		indices[time_index] = range(lower, upper)
+
+		arr[lower:upper] = variable[indices].ravel()
+		progress_callback(upper / n)
 	return arr
+
+# def read_data(variable: Variable, progress_callback: Callable[[float], None]) \
+# 	-> list[float]:
+# 	"""
+# 	Read all data for a variable from the .nc input file.
+# 	"""
+# 	n = variable.size
+# 	arr = [float] * n
+# 	for i in range(0, n, CHUNK_SIZE):
+# 		lower = i
+# 		upper = min(n, i + CHUNK_SIZE)
+# 		arr[lower:upper] = variable[lower:upper].ravel()
+# 		progress_callback(upper / n)
+# 	return arr
 
 def get_steps_per_year(timestep: int) -> int:
 	"""
@@ -535,7 +603,7 @@ def trim_to_start_year(in_file: Dataset, timestep: int
 	@param timestep: Output timestep in minutes.
 	@param data: The data to be trimmed.
 	"""
-	start_date = parse_date(in_file.time_coverage_start)
+	start_date = get_first_time(in_file)
 	if (start_date.minute == 30):
 		# temporal_aggregation() trims the first value if it lies on the
 		# half-hour boundary. We need to do the same here.
@@ -572,7 +640,7 @@ def remove_nans(data: list[float]
 	n = len(data)
 	N_NEIGHBOUR = 5
 	for i in range(n):
-		if data[i].mask:
+		if data.mask[i]:
 			# Use mean of 5 closest values if value is nan.
 			x = neighbouring_mean(data, i, N_NEIGHBOUR)
 			m = "Replacing NaN at %d with mean %.2f (n = %d)"
@@ -630,7 +698,7 @@ def temporal_aggregation(in_file: Dataset, data: list[float] \
 	@param progress_callback: Function used for progress reporting.
 	"""
 	# todo: support other timesteps (both source and target)?
-	input_timestep = int(in_file.time_step)
+	input_timestep = get_timestep(in_file) // SECONDS_PER_MINUTE
 	if input_timestep == output_timestep:
 		return data
 	if output_timestep < input_timestep:
@@ -887,14 +955,8 @@ def get_start_minute(in_file: Dataset):
 	Determine the minute at which the dataset starts (0-59).
 	This is done by checking the time_coverage_start attribute of the dataset.
 	"""
-	start_time = in_file.time_coverage_start
-	# yyyy-MM-dd hh:mm:ss
-	pattern = r"\d{4}-\d{1,2}-\d{1,2} \d{1,2}:(\d{1,2}):\d{1,2}"
-	matches = re.findall(pattern, start_time)
-	if len(matches) < 1:
-		m = "Unable to parse start time; expected yyyy-MM-dd hh:mm:ss format, but was '%s'"
-		raise ValueError(m % in_file.time_coverage_start)
-	return int(matches[0])
+	start_time = get_first_time(in_file)
+	return start_time.minute
 
 def write_common_metadata(nc: Dataset, timestep: int):
 	"""
@@ -1783,10 +1845,8 @@ def append_time(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
 		_append_1d(nc_in, nc_out, name, min_chunk_size, pcb)
 
 def get_nc_datatype(fmt: str) -> str:
-	if fmt == "float64":
-		return FORMAT_FLOAT
-	if fmt == "float32":
-		return FORMAT_SINGLE
+	if fmt in _nc_type_lookup.keys():
+		return _nc_type_lookup[fmt]
 	return fmt
 
 def var_weight(nc_in: Dataset, nc_out: Dataset, name: str) -> int:
@@ -1817,6 +1877,22 @@ def parse_chunksizes(chunks: str) -> list[tuple[str, int]]:
 		return []
 	chunks = [x for x in str.split(chunks, ",")]
 	return [(dim, int(chunk)) for (dim, chunk) in [str.split(c, "/") for c in chunks]]
+
+def try_get_chunk_size(dim: str, dim_size: int, chunk_sizes: list[tuple[str, int]]) -> int:
+	"""
+	Get a chunk size for the specified dimension.
+
+	@param dim: Name of the dimension.
+	@param dim_size: Size of the dimension.
+	@param chunk_sizes: User specified per-dimension chunk sizes.
+	"""
+	for (chunk_dim, chunk_size) in chunk_sizes:
+		if chunk_dim == dim:
+			if chunk_size > dim_size:
+				log_warning(f"Attempted to use chunk sizes {chunk_size} for dimension {dim}. This exceeds the total dimension length of {dim_size}. The dimension length will be used as chunk size, but you should consider rethinking your chunking strategy if you see this message.")
+				return dim_size
+			return chunk_size
+	return dim_size
 
 def get_chunk_size(nc_in: Dataset, nc_out: Dataset, dim: str, chunk_sizes: list[tuple[str, int]]) -> int:
 	"""
