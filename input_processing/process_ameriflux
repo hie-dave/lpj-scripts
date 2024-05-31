@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Get path to current directory.
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+
+die() {
+    echo -e $* >&2
+    exit 1
+}
+
+################################################################################
+# Parsing user inputs.
+################################################################################
+
+USAGE="Usage: ${0} <in-file> <longitude> <latitude> <site name>"
+
+NARG_REQ=4
+if [ $# -ne ${NARG_REQ} ]
+then
+    die "${USAGE}\nExpected ${NARG_REQ} arguments but received: $#"
+fi
+
+# The input (.csv) file path.
+IN_FILE="${1}"
+
+# Longitude of the site (this is not included anywhere in the file itself).
+LONGITUDE="${2}"
+
+# Latitude of the site (this is not included anywhere in the file itself).
+LATITUDE="${3}"
+
+# Name of the site.
+SITE="${4}"
+
+################################################################################
+# Processing.
+################################################################################
+
+OUT_DIR="$(dirname "${IN_FILE}")"
+
+# The output (.nc) file path.
+OUT_FILE="${OUT_DIR}/${SITE}.nc"
+
+# Path to the csv2nc script.
+CSV2NC="${DIR}/../ozflux-lpjg/csv2netcdf.py"
+
+# Note: the units specified here are the units of the raw input data.
+echo "Converting CSV to NetCDF..."
+"${CSV2NC}" -pv3 \
+    --longitude "${LONGITUDE}" --latitude "${LATITUDE}" \
+    --time-column TIMESTAMP_START --time-format "%Y%m%d%H%M" \
+    --missing-value "-9999" --compression-level 5 \
+    --chunk-sizes lon/1,lat/1,time/17520 \
+    --metadata \
+    'TA_F,air_temperature,Air Temperature,degC' \
+    --metadata \
+    'SW_IN_F,surface_downwelling_shortwave_flux_in_air,Down-welling shortwave radiation,W/m^2' \
+    --metadata \
+    'P_F,thickness_of_rainfall_amount,Rainfall,mm' \
+    --metadata \
+    'CO2_F_MDS,mole_fraction_of_carbon_dioxide_in_air,CO2 concentration,umol/mol' \
+    --metadata \
+    'VPD_F,water_vapor_saturation_deficit_in_air,Vapour pressure deficit,hPa' \
+    --metadata \
+    'PA_F,surface_air_pressure,Surface air pressure,kPa' \
+    --metadata \
+    'WS_F,wind_speed,Wind speed,m/s' \
+    --keep-only-metadata \
+    --in-file "${IN_FILE}" --out-file "${OUT_FILE}"
+
+echo "Renaming variables..."
+ncrename -O -v TA_F,tav -v SW_IN_F,insol -v P_F,prec -v CO2_F_MDS,co2 \
+         -v VPD_F,vpd -v PA_F,ps -v WS_F,wind \
+         -v lon,longitude -v lat,latitude \
+         -d lon,longitude -d lat,latitude \
+         "${OUT_FILE}" "${OUT_FILE}"
+
+# ncrename will overwrite the coordinates in the file (why??).
+# Therefore we need to fix this.
+"${DIR}/../ozflux-lpjg/ncmc" --latitude "${LATITUDE}" --longitude "${LONGITUDE}" -f "${OUT_FILE}"
+
+echo "Reordering dimensions for cdo..."
+ncpdq -O -a time,longitude,latitude "${OUT_FILE}" "${OUT_FILE}"
+
+# Temporal aggregation.
+
+WORKING_FILE="${OUT_FILE}.tmp"
+
+# Precipitation must be summed over the aggregation period.
+echo "Aggregating precipitation..."
+FILE_PR="${OUT_DIR}/${SITE}.pr.nc"
+cdo -O -L hoursum -selvar,prec "${OUT_FILE}" "${FILE_PR}"
+
+# All other variables can be averaged over the aggregation period.
+echo "Aggregating other variables..."
+cdo -O -L hourmean -delvar,prec "${OUT_FILE}" "${WORKING_FILE}"
+mv "${WORKING_FILE}" "${OUT_FILE}"
+
+# Units correction: air pressure: kPa -> Pa
+#                   vpd         : hPa -> kPa
+cdo -O -L aexpr,'ps = ps * 1000; vpd = vpd / 10' "${OUT_FILE}" "${WORKING_FILE}"
+mv "${WORKING_FILE}" "${OUT_FILE}"
+ncatted -O -a 'units,ps,o,c,Pa' -a 'units,vpd,o,c,kPa' "${OUT_FILE}"
+
+# Merge the precipitation file back into the main output file.
+echo "Merging data back together..."
+cdo -O -L merge "${FILE_PR}" "${OUT_FILE}" "${WORKING_FILE}"
+mv "${WORKING_FILE}" "${OUT_FILE}"
+rm "${FILE_PR}"
+
+echo "Fixing dimension order and chuning..."
+ncpdq -O -L 5 -a longitude,latitude,time --cnk_dmn longitude,1 --cnk_dmn latitude,1 \
+    --cnk_dmn time,8760 "${OUT_FILE}" "${OUT_FILE}"

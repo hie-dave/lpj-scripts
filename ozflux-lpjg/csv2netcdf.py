@@ -12,6 +12,7 @@ from ozflux_netcdf import *
 from argparse import ArgumentParser
 from sys import argv
 from netCDF4 import Dataset, date2num
+from typing import Optional
 
 # Default name of the latitude dimension in the output file.
 DIM_LAT = "lat"
@@ -22,17 +23,19 @@ DIM_LON = "lon"
 # Default name of the time dimension in the output file.
 DIM_TIME = "time"
 
-# Units used in the latitude variable.
-UNITS_LAT = "degrees_north"
-
-# Units used in the longitude variable.
-UNITS_LON = "degrees_east"
-
 # Units used in the time variable.
 TIME_UNITS = "hours since 1900-01-01"
 
 # Calendar used in the time variable.
 TIME_CALENDAR = "gregorian"
+
+class VariableMetadata:
+    def __init__(self, name: str, std_name: str, long_name: str, units: str, newname: Optional[str] = None):
+        self.name = name
+        self.std_name = std_name
+        self.long_name = long_name
+        self.units = units
+        self.newname = name if newname is None else newname
 
 class Options:
     """
@@ -53,13 +56,15 @@ class Options:
     @param chunk_sizes: Chunk sizes to be used in the output file.
     @param compression_level: zlib deflation level to be used in the output file. 0 means no compression.
     @param missing_value: Missing value used in input file.
+    @param keep_only_metadata: Copy only coordinate variables and those variables which have a corresponding --metadata option.
     """
     def __init__(self, log : LogLevel, in_file: str, out_file: str, prog: bool
                  , time_column: str, time_fmt: str, latitude: float
                  , latitude_column: str, longitude: float
                  , longitude_column: str, dim_lat: str, dim_lon: str
                  , dim_time: str, chunk_sizes: list[tuple[str, int]]
-                 , compression_level: int, missing_value: int):
+                 , compression_level: int, missing_value: int
+                 , metadata: list[VariableMetadata], keep_only_metadata: bool):
 
         self.log_level = log
         self.report_progress = prog
@@ -75,6 +80,9 @@ class Options:
         self.longitude = longitude
         self.longitude_column = longitude_column
 
+        self.metadata = metadata
+        self.keep_only_metadata = keep_only_metadata
+
         self.dim_lat = dim_lat
         self.dim_lon = dim_lon
         self.dim_time = dim_time
@@ -85,6 +93,12 @@ class Options:
         self.compression_level = compression_level
         if compression_level < 0:
             raise ValueError(f"Invalid compression level (must be >= 0): {compression_level}")
+
+def parse_metadata(raw: str) -> VariableMetadata:
+    parts = raw.split(",")
+    # fixme
+    # if len(parts) <
+    return VariableMetadata(*parts)
 
 def parse_args(argv: list[str]) -> Options:
     """
@@ -106,6 +120,9 @@ def parse_args(argv: list[str]) -> Options:
     parser.add_argument("--time-format", required = True, help = r"Format of data in the time column. E.g. %d/%m/%y %H:%M:%S).")
     parser.add_argument("--missing-value", help = "Special value used in input file to represent missing values.")
 
+    parser.add_argument("--metadata", action = "append", help = "Variable-level metadata which will be written to the output file. This option may be passed multiple times (once per variable). The value should be of the form '--metadata name,std_name,long_name,units[,newname]'. Each part specifies an attribute which will be written. The newname part is optional, and if provided, will rename the variable.")
+    parser.add_argument("--keep-only-metadata", action = "store_true", help = "Copy only coordinate variables and those variables which have a corresponding --metadata option.")
+
     parser.add_argument("--dim-lat", default = DIM_LAT, help = f"Optional name of the latitude dimension to be created in the output file (default: {DIM_LAT})")
     parser.add_argument("--dim-lon", default = DIM_LON, help = f"Optional name of the longitude dimension to be created in the output file (default: {DIM_LON})")
     parser.add_argument("--dim-time", default = DIM_TIME, help = f"Optional name of the time dimension to be created in the output file (default: {DIM_TIME})")
@@ -124,11 +141,13 @@ def parse_args(argv: list[str]) -> Options:
 
     chunk_sizes = parse_chunksizes(p.chunk_sizes)
 
+    metadata = None if p.metadata is None else [parse_metadata(m) for m in p.metadata]
+
     return Options(p.verbosity, p.in_file, p.out_file, p.show_progress
                    , p.time_column, p.time_format, p.latitude, p.latitude_column
                    , p.longitude, p.longitude_column, p.dim_lat, p.dim_lon
                    , p.dim_time, chunk_sizes, p.compression_level
-                   , p.missing_value)#, p.metadata_line, p.metadata_delimiter)
+                   , p.missing_value, metadata, p.keep_only_metadata)
 
 def read_input_file(opts: Options) -> pandas.DataFrame:
     """
@@ -158,6 +177,15 @@ def read_input_file(opts: Options) -> pandas.DataFrame:
         opts.latitude_column: opts.dim_lat,
         opts.time_column: opts.dim_time,
     })
+
+    for col in data.columns:
+        metadata = get_metadata(col, opts.metadata)
+        if metadata is None:
+            if opts.keep_only_metadata and col != opts.dim_time and \
+                    col != opts.dim_lon and col != opts.dim_lat:
+                data = data.drop(col, axis = 1)
+        elif metadata.name != metadata.newname:
+            data.rename({col: metadata.newname})
 
     # Convert time column to datetime type.
     # data[opts.time_column] = [datetime.datetime.strptime(t.__str__(), opts.time_fmt) for t in data[opts.time_column]]
@@ -210,6 +238,33 @@ def create_coordinate(opts: Options, data, nc: Dataset
     setattr(var, ATTR_LONG_NAME, long_name)
     setattr(var, ATTR_UNITS, units)
 
+def get_metadata(name: str, metadata: list[VariableMetadata]) -> Optional[VariableMetadata]:
+    """
+    Get metadata for the specified variable, if any has been provided by the user.
+
+    @param name: Name of the variable.
+    @param metadata: Parsed metadata.
+    """
+    for meta in metadata:
+        if meta.name == name or meta.newname == name:
+            return meta
+    return None
+
+def set_metadata(nc: Dataset, metadata: VariableMetadata):
+    """
+    Set metadata in the output file.
+
+    @param nc: The netcdf file.
+    @param metadata: The metadata.
+    """
+    if not metadata.newname in nc.variables:
+        raise ValueError(f"Unable to set metadata: variable {metadata.newname} does not exist in output file")
+
+    var = nc.variables[metadata.newname]
+    setattr(var, ATTR_STD_NAME, metadata.std_name)
+    setattr(var, ATTR_LONG_NAME, metadata.long_name)
+    setattr(var, ATTR_UNITS, metadata.units)
+
 def init_outfile(opts: Options, data: pandas.DataFrame, nc: Dataset):
     """
     Initialise the output file.
@@ -234,8 +289,14 @@ def init_outfile(opts: Options, data: pandas.DataFrame, nc: Dataset):
             continue
 
         fmt = get_nc_datatype(str(data[col].dtype))
-        create_var_if_not_exists(nc, col, fmt, dims, opts.compression_level
+        name = col
+
+        create_var_if_not_exists(nc, name, fmt, dims, opts.compression_level
                                  , COMPRESSION_ZLIB, chunksizes = chunk_sizes)
+
+        metadata = get_metadata(col, opts.metadata)
+        if metadata is not None:
+            set_metadata(nc, metadata)
 
     # TODO: Write metadata.
 
