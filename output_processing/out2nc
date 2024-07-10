@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+#
+# Convert an LPJ-GUESS output (.out) file to NetCDF format.
+#
+# This is a wrapper around csv2netcdf.py. This requires that the input file is
+# daily and contains Year and Day columns.
+#
+# Usage: out2nc <infile.out> <outfile.nc>
+#
 
 set -euo pipefail
 
