@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Get directory containing this script.
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+  echo "Running in debug mode. Set DEBUG to 0 to disable."
+  set -x
+fi
+
+die() { echo "$*" >&2; exit 1; }
+
+CSV2NC="${DIR}/../ozflux-lpjg/csv2netcdf.py"
+
+if [ $# -ne 2 ]
+then
+    die "Usage: ${0} <infile.out> <outfile.nc>"
+fi
+
+IN_FILE="${1}"
+OUT_FILE="${2}"
+
+"${CSV2NC}" -pv3 -i "${IN_FILE}" -o "${OUT_FILE}" --year-column Year --day-column Day --latitude-column Lat --longitude-column Lon -s ' '
