@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+#PBS -l ncpus=4
+#PBS -l walltime=48:00:00
+#PBS -l mem=128GB
+#PBS -q hugemem
+#PBS -l wd
+#PBS -j oe
+#PBS -m abe
+#PBS -M d.holzworth@westernsydney.edu.au
+#PBS -o /scratch/hw83/dh7190/ISMIP3b/logs
+#PBS -l storage=scratch/hw83
+
+# Exit immediately if any command fails.
+set -euo pipefail
+
+module purge
+module load use.own
+module load netcdf cdo nco moreutils
+
+ISMIP="/scratch/hw83/dh7190/ISMIP3b"
+
+# Directory containing input files.
+IN_DIR="${ISMIP}/raw"
+
+# Directory into which output files will be saved.
+OUT_DIR="${ISMIP}/processed"
+
+# Directory in which log files will be written.
+LOG_DIR="${ISMIP}/logs"
+
+# The log file.
+LOG_FILE="${LOG_DIR}/process_climate_ismip.log"
+
+# We can ignore the following variables:
+# - hurs (relative humidity)
+# - prsn (snow flux)
+# - rlds (longwave radiation)
+# - sfcWind (wind speed)
+VARS="huss
+pr
+ps
+rsds
+tas
+tasmax
+tasmin"
+
+SCENARIOS=$*
+if [ -z ${SCENARIOS} ]
+then
+    SCENARIOS="historical picontrol ssp126 ssp370 ssp585"
+    SCENARIOS="historical"
+fi
+
+mkdir -p "${OUT_DIR}"
+
+# Overwrite existing log file.
+echo "ISMIP processing started" | tee "${LOG_FILE}"
+
+# Iterate over climate scenarios.
+for SCENARIO in ${SCENARIOS}
+do
+    # Prepend timestamps to stdin, and write it to the log file and stdout.
+    logi() { ts "[%Y-%m-%d %H:%M:%S ${SCENARIO}]" | tee -a "${LOG_FILE}"; }
+
+    # Prepend timestamps to a message (specified by $* args), and write it to
+    # the log file and stdout.
+    log() { echo $* | logi; }
+
+    # Run the command (specified by $* args), and write its output, along with
+    # additional resource usage info and timestamps, to the log file and stdout.
+    dbg() { (/usr/bin/time -v $*) 2>&1 | logi; }
+
+    # Get the output file name for a variable (specified by $1).
+    get_file_name() { echo "${OUT_DIR}/${SCENARIO}_${1}.nc"; }
+
+    if false ; then # begin debug
+
+    # Merge timeseries for each variable into single files.
+    MERGE_IDS=""
+    for VAR in ${VARS}
+    do
+        log "Merging ${VAR} files..."
+        OUT_FILE="$(get_file_name "${VAR}")"
+        dbg cdo -O mergetime "${IN_DIR}"/*${SCENARIO}_${VAR}_*.nc "${OUT_FILE}"
+    done
+
+    # Fix units.
+
+    # hurs    (relative humidity): %         : ok
+    # huss    (specific humidity): kg kg-1   : ok
+
+    # pr      (precipitation)    : kg m-2 s-1 -> mm
+    log "Converting precipitation to mm..."
+    PR_FILE="$(get_file_name pr)"
+    dbg cdo -O mulc,86400 "${PR_FILE}" "${PR_FILE}2"
+    mv "${PR_FILE}2" "${PR_FILE}"
+    dbg ncatted -O -a units,pr,o,c,mm "${PR_FILE}" "${PR_FILE}"
+
+    # prsn    (snow flux)        : kg m-2 s-1: ok
+    # ps      (air pressure)     : Pa        : ok
+    # rlds    (longwave radn)    : W m-2     : ok
+    # rsds    (shortwave radn)   : W m-2     : ok
+    # sfcwind (wind speed)       : m s-1     : ok
+
+    # tas     (air temperature)  : K -> degC
+    # tasmax  (max air temp)     : K -> degC
+    # tasmin  (min air temp)     : K -> degC
+    TEMP_VARS="tas tasmax tasmin"
+    for VAR in ${TEMP_VARS}
+    do
+        log "Converting ${VAR} to °C..."
+        FILE="$(get_file_name "${VAR}")"
+        dbg cdo -O addc,273.14 "${FILE}" "${FILE}2"
+        mv "${FILE}2" "${FILE}"
+        dbg ncatted -O -a "units,${VAR},o,c,degC" "${FILE}" "${FILE}"
+    done
+
+    # Calculate VPD.
+    log "Calculating VPD..."
+    FILE_VPD="$(get_file_name vpd)"
+    FILE_SH="$(get_file_name  huss)"
+    FILE_PS="$(get_file_name  ps)"
+    FILE_TAS="$(get_file_name tas)"
+    EQN_FILE="$(mktemp)"
+    echo '_esat=0.001*611.2*exp((17.62*tas)/(243.04+tas));
+_es=huss * (ps / 1000) / (0.378 * huss + 0.622);
+vpd=_esat - _es;' >"${EQN_FILE}"
+    dbg cdo -O -L \
+        -exprf,"${EQN_FILE}" \
+        -merge "${FILE_SH}" "${FILE_PS}" "${FILE_TAS}" \
+        "${FILE_VPD}"
+    rm "${EQN_FILE}"
+    dbg ncatted -O -a units,vpd,o,c,kPa "${FILE_VPD}" "${FILE_VPD}"
+
+    # Merge all variables into a single file.
+    log "Merging variables..."
+    OUT_FILE="${OUT_DIR}/ISMIP3b_${SCENARIO}.nc"
+    dbg cdo -O merge "${OUT_DIR}"/*${SCENARIO}*.nc "${OUT_FILE}"
+
+    # Restructure files for LPJ-Guess.
+
+    # LPJ-Guess runs fastest with time as last dimension.
+    log "Reordering dimensions..."
+    dbg ncpdq -O -a lat,lon,time "${OUT_FILE}" "${OUT_FILE}"
+
+    fi # end debug
+    OUT_FILE="${OUT_DIR}/ISMIP3b_${SCENARIO}.nc" # also debg code
+
+    # LPJ-Guess runs fastest with each chunk holding 1 year of 1 gridcell.
+    # We can also enable compression here. Sadly, nccopy doesn't seem to support
+    # overwriting an existing file.
+    log "Improving chunking..."
+    FAST="${OUT_FILE/.nc/}_rechunked.nc"
+    if [ -f "${FAST}" ]; then rm -f "${FAST}"; fi
+    dbg nccopy -d 5 -c lat/1,lon/1,time/365 "${OUT_FILE}" "${FAST}"
+    mv "${FAST}" "${OUT_FILE}"
+done
