@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+
+# Exit immediately if:
+# - Any command fails
+# - Any part of a pipeline fails
+# - We reference any unbound variables
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+  echo "Running in debug mode. Set DEBUG to 0 to disable."
+  set -x
+fi
+
+# Input directory.
+BARRA2_IN=/g/data/vl59/barra2
+
+# Output directory.
+BARRA2_OUT=/g/data/pr09/dh7190/barra2
+
+# Output directories.
+OUT_DIR="${BARRA2_OUT}/unpacked/vpd"
+
+# Create output directories if they don't already exist.
+mkdir -p "${OUT_DIR}"
+
+# Variable names in the barra2 dataset.
+VAR_SH=huss
+VAR_TAS=tas
+VAR_PATM=ps
+
+get_file_name() {
+    local VAR="${1}"
+    local YEAR="${2}"
+    local MONTH="${3}"
+    local DATESTR="$(printf "%04d%02d" "${YEAR}" "${MONTH}")"
+    echo "${VAR}_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_1hr_${DATESTR}-${DATESTR}.nc"
+}
+
+get_input_file() {
+    local VAR="${1}"
+    echo "${BARRA2_IN}/unpacked/${VAR}/$(get_file_name "${VAR}" "${2}" "${3}")"
+}
+
+# This script requires 1 argument: the year of data to be processed.
+YEAR="${1}"
+
+LAST_MONTH=12
+if [ ${YEAR} -eq 2023 ]
+then
+    LAST_MONTH=8
+fi
+
+for MONTH in $(seq 1 ${LAST_MONTH})
+do
+    FILE_TAS="$(get_input_file "${VAR_TAS}" "${YEAR}" "${MONTH}")"
+    FILE_SH="$(get_input_file "${VAR_SH}" "${YEAR}" "${MONTH}")"
+    FILE_PATM="$(get_input_file "${VAR_PATM}" "${YEAR}" "${MONTH}")"
+    OUT_FILE="${OUT_DIR}/$(get_file_name vpd "${YEAR}" "${MONTH}")"
+
+    /home/590/dh7190/code/lpj-guess/scripts/input_processing/calc_vpd \
+        -o "${OUT_FILE}" \
+        -t "${FILE_TAS}" -T "${VAR_TAS}" \
+        -s "${FILE_SH}" -S "${VAR_SH}" \
+        -p "${FILE_PATM}" -P "${VAR_PATM}"
+
+    echo "----- DEBUG: break -----"
+    break
+done

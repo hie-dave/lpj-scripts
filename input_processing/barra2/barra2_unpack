@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+
+# BARRA2 processing script (v2).
+# The aim here is to create lots of small jobs in PBS, rather than creating
+# a couple of large jobs which either timeout or run out of memory.
+
+# Exit immediately if any command fails.
+set -euo pipefail
+
+module purge
+module load pbs netcdf cdo nco moreutils python3
+
+# Path to the BARRA2 dataset on gadi..
+BARRA2_IN="/g/data/ob53/BARRA2/output/reanalysis/AUS-11/BOM/ERA5"
+
+# Output path.
+BARRA2_OUT="/g/data/vl59/barra2"
+
+# Could be 1hr, 3hr, day, fx, mon
+TIMESTEP="1hr"
+
+# Directory into which output files will be saved.
+OUT_DIR="${BARRA2_OUT}/processed/${VAR}"
+
+# Directory in which log files will be written.
+LOG_DIR="${BARRA2_OUT}/logs"
+
+# Directory in which wrapper scripts will be written.
+SCRIPT_DIR="${BARRA2_OUT}/scripts"
+
+# Job status updates for the mergetime job will be sent to this email address.
+EMAIL="d.holzworth@westernsydney.edu.au"
+
+# We need the following variables:
+# - huss
+# - pr
+# - ps
+# - rsds
+# - sfcWind
+# - tas
+# - tasmax
+# - tasmin
+
+# This is only used for display (ie logging) purposes.
+DATASET_NAME="BARRA2"
+
+# Version of data to be processed.
+VERSION="v20231001"
+
+# Storage devices required by PBS.
+STORAGE=gdata/ob53+gdata/vl59
+
+# todo: make this a CLI argument
+SCENARIO=historical
+
+# Names of the variables required by LPJ-GUESS.
+VAR="${1}"
+
+# Directory containing input files.
+IN_DIR="${BARRA2_IN}/${SCENARIO}/hres/BARRA-R2/v1/${TIMESTEP}/${VAR}/${VERSION}"
+
+# Create directory tree.
+mkdir -p "${OUT_DIR}"
+mkdir -p "${LOG_DIR}"
+mkdir -p "${SCRIPT_DIR}"
+
+# Arguments which will be common to all invocations of pbs_wrap.
+PBS_ARGS="-l ${LOG_DIR} -s ${STORAGE}"
+
+# Unpack the specified file.
+# This requires about 10GiB of memory and ~3 minutes walltime for a 1GiB file.
+# All up it's about 0.2 KSUs.
+UNPACK_IDS=
+OUT_FILES=
+unpack() {
+    IN_FILE="${1}"
+    FILE_NAME="$(basename "${IN_FILE}")"
+    FILE_NAME="${FILE_NAME/ /_}"
+    OUT_FILE="${OUT_DIR}/${FILE_NAME}"
+    JOB_NAME="unpack_${FILE_NAME}"
+    SCRIPT="${SCRIPT_DIR}/${JOB_NAME}"
+    UNPACK_ARGS="-c 1 -m 32 -q hugemem -o ${SCRIPT} -n ${JOB_NAME} ${PBS_ARGS}"
+    pbs_wrap ${UNPACK_ARGS} -- ncpdq -O --unpack "${IN_FILE}" "${OUT_FILE}"
+    JOB_ID="$(qsub -f "${SCRIPT}")"
+    if [ -z "${UNPACK_IDS}" ]
+    then
+        UNPACK_IDS="${JOB_ID}"
+        OUT_FILES="${OUT_FILE}"
+    else
+        UNPACK_IDS="${UNPACK_IDS}:${JOB_ID}"
+        OUT_FILES="${OUT_FILES} ${OUT_FILE}"
+    fi
+}
+
+mergetime() {
+    JOB_NAME=mergetime
+    SCRIPT="${SCRIPT_DIR}/${JOB_NAME}"
+    RESOURCES="-c 1 -m 32 -q hugemem"
+    MERGE_ARGS="${RESOURCES} -o ${SCRIPT} -n ${JOB_NAME} ${PBS_ARGS}"
+    MERGE_ARGS="${MERGE_ARGS} -e ${EMAIL}"
+    if [ -n "${UNPACK_IDS}" ]
+    then
+        MERGE_ARGS="${MERGE_ARGS} -d ${UNPACK_IDS}"
+    fi
+    OUT_FILE="${OUT_DIR}/${VAR}_AUS-11_ERA5_${SCENARIO}_hres_BOM_BARRA-R2_v1_${TIMESTEP}.nc"
+    pbs_wrap ${MERGE_ARGS} -- cdo -O mergetime $@ "${OUT_FILE}"
+    qsub -f "${SCRIPT}"
+}
+
+for FILE in "${IN_DIR}"/*.nc
+do
+    unpack "${FILE}"
+done
+
+mergetime ${OUT_FILES}

@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+
+VARS="tas
+tasmax
+tasmin"
+
+set_deps() {
+    SCRIPT="${1}"
+    DEPS="${2}"
+    sed -i -e "s/PBS -W depend=.*/PBS -W depend=afterok:${DEPS}/g" "${SCRIPT}"
+}
+
+for VAR in ${VARS}
+do
+    echo "Submitting jobs for ${VAR}..."
+    UNPACK_IDS=
+    for YEAR in {1979..2023}
+    do
+        if [ ${VAR} = tas -a ${YEAR} -le 2013 ]; then continue; fi
+        for MONTH in {1..12}
+        do
+            FILE=$(printf "${VAR}_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_1hr_%04d%02d-%04d%02d.nc" ${YEAR} ${MONTH} ${YEAR} ${MONTH})
+            if [ ! -f ${VAR}/${FILE} ]
+            then
+                # echo "Error: missing data: ${VAR} year ${YEAR} month ${MONTH}"
+                SCRIPT="../scripts/unpack_${VAR}_${YEAR}"
+                SCRIPT="$(readlink -f "${SCRIPT}")"
+                if [ -f "${SCRIPT}" ]
+                then
+                    JOB_ID="$(qsub "${SCRIPT}")"
+                    if [ -z "${UNPACK_IDS}" ]
+                    then
+                        UNPACK_IDS="${JOB_ID}"
+                    else
+                        UNPACK_IDS="${UNPACK_IDS}:${JOB_ID}"
+                    fi
+                    break
+                else
+                    echo "Error: missing data and script: ${VAR} year ${YEAR} month ${MONTH}"
+                fi
+            fi
+            if [ ${YEAR} -eq 2023 -a ${MONTH} -eq 8 ]
+            then
+                break
+            fi
+        done
+    done
+    MERGETIME_SCRIPT=../scripts/mergetime_${VAR}
+    REORDER_SCRIPT=../scripts/reorder_${VAR}
+    RECHUNK_SCRIPT=../scripts/rechunk_${VAR}
+    test -f "${MERGETIME_SCRIPT}"
+    test -f "${REORDER_SCRIPT}"
+    test -f "${RECHUNK_SCRIPT}"
+    if [ -n "${UNPACK_IDS}" ]
+    then
+        set_deps "${MERGETIME_SCRIPT}" "${UNPACK_IDS}"
+    else
+        # no deps
+        set_deps "${MERGETIME_SCRIPT}" " "
+    fi
+
+    MERGE_ID="$(qsub "${MERGETIME_SCRIPT}")"
+    # set_deps "${REORDER_SCRIPT}" "${MERGE_ID}"
+    # REORDER_ID="$(qsub "${REORDER_SCRIPT}")"
+    # set_deps "${RECHUNK_SCRIPT}" "${REORDER_ID}"
+    # RECHUNK_ID="$(qsub "${RECHUNK_SCRIPT}")"
+done
+
+echo "All jobs submitted successfully."

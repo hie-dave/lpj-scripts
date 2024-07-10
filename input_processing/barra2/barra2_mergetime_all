@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+
+# Exit immediately if:
+# - Any command fails
+# - Any part of a pipeline fails
+# - We reference any unbound variables
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+  echo "Running in debug mode. Set DEBUG to 0 to disable."
+  set -x
+fi
+
+VARS="huss
+pr
+ps
+rsds
+sfcWind
+tas
+tasmax
+tasmin"
+
+VARS="tas tasmax tasmin"
+
+BARRA2_IN=/g/data/vl59/barra2/unpacked
+BARRA2_OUT=/scratch/hw83/dh7190/barra2
+
+SCRIPT_DIR="${BARRA2_OUT}/scripts"
+LOG_DIR="${BARRA2_OUT}/logs"
+OUT_DIR="${BARRA2_OUT}/mergetime"
+mkdir -p "${SCRIPT_DIR}" "${LOG_DIR}" "${OUT_DIR}"
+
+CMD=/home/590/dh7190/code/lpj-guess/scripts/ozflux-lpjg/ncmergetime
+
+# Storage devices required by PBS.
+STORAGE=gdata/vl59+gdata/pr09
+
+# Arguments which will be common to all invocations of pbs_wrap.
+RESOURCES="-c 1 -m 16 -q normal -w 48:00:00 -M python3/3.12.1"
+EMAIL="d.holzworth@westernsydney.edu.au"
+
+PBS_ARGS="${RESOURCES} -e ${EMAIL} -l ${LOG_DIR} -s ${STORAGE}"
+
+for VAR in ${VARS}
+    do
+    JOB_NAME="mergetime_${VAR}"
+    SCRIPT="${SCRIPT_DIR}/${JOB_NAME}"
+
+    PROGRESS_FILE="${LOG_DIR}/${JOB_NAME}.progress.log"
+    IN_FILES="${BARRA2_IN}/${VAR}"/*.nc
+    OUT_FILE="${OUT_DIR}/${VAR}_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_1hr_197901-202308.nc"
+
+    # todo: verify handling of variable names containing whitespace.
+    CMD_ARGS="-pv3 -c256 --units degC -o ${OUT_FILE} ${IN_FILES} | tee ${PROGRESS_FILE}"
+    pbs_wrap ${PBS_ARGS} -n ${JOB_NAME} -o ${SCRIPT} "${CMD}" ${CMD_ARGS}
+    # qsub "${SCRIPT}"
+done

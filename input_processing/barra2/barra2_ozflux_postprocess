@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+################################################################################
+# Rename variables/dimensions                                                  #
+################################################################################
+
+# IN_DIR=/scratch/hw83/dh7190/barra2/ozflux/v1
+# OUT_DIR=/scratch/hw83/dh7190/barra2/ozflux/v2
+
+# mkdir -p "${OUT_DIR}"
+
+# # Note: this will break for file paths containing newline characters. The script
+# # should still work in that case, but progress reporting will be incorrect.
+# NFILE=$(find "${IN_DIR}" -maxdepth 1 -type f -name '*.nc' | wc -l)
+
+# ITER=0
+# for IN_FILE in "${IN_DIR}"/*.nc
+# do
+# 	OUT_FILE="${OUT_DIR}/$(basename "${IN_FILE}")"
+
+# 	ncrename -O \
+# 	-v lon,longitude -d lon,longitude \
+# 	-v lat,latitude -d lat,latitude \
+# 	-v tas,tav \
+# 	-v rsds,insol \
+# 	-v pr,prec \
+# 	-v sfcWind,wind \
+# 	"${IN_FILE}" "${OUT_FILE}"
+
+# 	ITER=$((ITER + 1))
+# 	PROGRESS=$(echo "100.0 * ITER / NFILE" | bc -l)
+# 	printf "Working: %.2f\r" ${PROGRESS}
+# done
+
+################################################################################
+# Units corrections                                                            #
+################################################################################
+
+# Must convert
+# tav:  K          -> degC
+# prec: kg m-2 s-1 -> kg m-2
+
+IN_DIR=/scratch/hw83/dh7190/barra2/ozflux/v2
+OUT_DIR=/scratch/hw83/dh7190/barra2/ozflux/v3
+
+mkdir -p "${OUT_DIR}"
+
+# Note: this will break for file paths containing newline characters. The script
+# should still work in that case, but progress reporting will be incorrect.
+NFILE=$(find "${IN_DIR}" -maxdepth 1 -type f -name '*.nc' | wc -l)
+
+ITER=0
+for IN_FILE in "${IN_DIR}"/*.nc
+do
+	OUT_FILE="${OUT_DIR}/$(basename "${IN_FILE}")"
+
+	ncpdq -O -a time,lat,lon "${IN_FILE}" "${OUT_FILE}"
+	cdo -L -O -z zip5 -setattribute,tav@units="degC",prec@units="kg m-2" -expr,"tav=tav-273.15;prec=prec*3600" "${OUT_FILE}" "${OUT_FILE}2"
+	mv "${OUT_FILE}2" "${OUT_FILE}"
+	ncpdq -O -a lat,lon,time --cnk_dmn lat,1 --cnk_dmn lon,1 --cnk_dmn time,8760 -L5 "${OUT_FILE}" "${OUT_FILE}"
+
+	ITER=$((ITER + 1))
+	PROGRESS=$(echo "100.0 * ITER / NFILE" | bc -l)
+	printf "Working: %.2f\r" ${PROGRESS}
+done

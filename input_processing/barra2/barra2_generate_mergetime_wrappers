@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+VPD_IN=/g/data/vl59/dh7190/barra2
+BARRA2_IN=/scratch/hw83/dh7190/barra2
+BARRA2_OUT=/g/data/vl59/dh7190/barra2
+LOG_DIR="${BARRA2_OUT}/logs"
+SCRIPT_DIR="${BARRA2_OUT}/scripts"
+RESTART_DIR="${BARRA2_OUT}/logs/restart"
+OUT_DIR="${BARRA2_OUT}/mergetime"
+
+VARS="pr rsds sfcWind tas vpd"
+
+# Path to the ncreshape script.
+NCMERGETIME=/home/590/dh7190/code/lpj-guess/scripts/ozflux-lpjg/ncmergetime
+
+mkdir -p "${RESTART_DIR}" "${SCRIPT_DIR}" "${LOG_DIR}" "${OUT_DIR}"
+
+WALLTIME="48:00:00"
+
+for VAR in ${VARS}
+do
+    JOB_NAME="mergetime_${VAR}"
+    SCRIPT="${SCRIPT_DIR}/${JOB_NAME}"
+    LOG_FILE="${LOG_DIR}/${JOB_NAME}.progress.log"
+    IN_DIR="${BARRA2_IN}/reshaped/${VAR}"
+    if [ ${VAR} = vpd ]; then IN_DIR="/g/data/vl59/dh7190/barra2/reshaped/vpd"; fi
+    OUT_FILE="${OUT_DIR}/${VAR}_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_1hr_197901-202308.nc"
+    RESTART_FILE="${RESTART_DIR}/mergetime_${VAR}.restart"
+
+    cat <<EOF > "${SCRIPT}"
+#!/usr/bin/env bash
+#PBS -l ncpus=1
+#PBS -l mem=4GB
+#PBS -q normal
+#PBS -l walltime=${WALLTIME}
+#PBS -l storage=scratch/pt17+scratch/hw83+gdata/hw83+gdata/vl59
+#PBS -l wd
+#PBS -l iointensive=1
+#PBS -j oe
+#PBS -ry
+#PBS -p 0
+#PBS -P pt17
+#PBS -m abe
+#PBS -M d.holzworth@westernsydney.edu.au
+#PBS -o "${LOG_DIR}/${JOB_NAME}.log"
+#PBS -N ${JOB_NAME}
+
+# Exit immediately if any command fails.
+set -euo pipefail
+
+# Load modules.
+module purge
+module load use.own
+module load netcdf cdo nco moreutils python3/3.12.1 openmpi
+
+# Run job.
+${NCMERGETIME} -pv4 --out-file "${OUT_FILE}" --chunk-sizes 'lat/1,lon/1,time/8760' --min-chunk-size 4 --compression-level 0 --work-dir /iointensive --restart-file "${RESTART_FILE}" --walltime-limit "${WALLTIME}" ${IN_DIR}/${VAR}_*.nc | tee "${LOG_FILE}"
+
+# Success!
+echo "Command finished successfully."
+EOF
+    chmod ug+x "${SCRIPT}"
+
+    # qsub "${SCRIPT}"
+done

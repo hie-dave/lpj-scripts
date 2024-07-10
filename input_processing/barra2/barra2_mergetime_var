@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+
+# Exit immediately if:
+# - Any command fails
+# - Any part of a pipeline fails
+# - We reference any unbound variables
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+  echo "Running in debug mode. Set DEBUG to 0 to disable."
+  set -x
+fi
+
+# The variable to be processed.
+VAR="${1}"
+
+# Input timestep.
+TIMESTEP="1hr"
+
+# The input directory.
+IN_DIR="/g/data/vl59/barra2/unpacked/${VAR}"
+
+# Output directory.
+BARRA2_OUT="/scratch/hw83/dh7190/barra2"
+
+# Directory into which output files will be saved.
+OUT_DIR="${BARRA2_OUT}/mergetime/${VAR}"
+
+# Directory into which progress files will be saved.
+PROGRESS_DIR="${BARRA2_OUT}/progress"
+
+# Log file directory.
+LOG_DIR="${BARRA2_OUT}/logs"
+
+# Create output directories.
+mkdir -p "${PROGRESS_DIR}" "${OUT_DIR}" "${LOG_DIR}"
+
+# Progress log file.
+PROGRESS_FILE="${PROGRESS_DIR}/${VAR}.progress"
+
+# The log file.
+LOG_FILE="${LOG_DIR}/barra2_mergetime_${VAR}.progress.log"
+
+FIRST_YEAR=1979
+FIRST_MONTH=1
+LAST_YEAR=2023
+LAST_MONTH=8
+
+WALLTIME_HOURS=48
+
+get_file_name() {
+    local YEAR_FIRST="${1}"
+    local MONTH_FIRST="${2}"
+    local YEAR_LAST="${3}"
+    local MONTH_LAST="${4}"
+
+    local START="$(printf "%04d%02d" ${YEAR_FIRST} ${MONTH_FIRST})"
+    local END="$(printf "%04d%02d" ${YEAR_LAST} ${MONTH_LAST})"
+    echo "${VAR}_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_${TIMESTEP}_${START}-${END}.nc"
+}
+
+get_prev_file_name() {
+    YEAR="${1}"
+    MONTH="${2}"
+
+    PREV_MONTH=$((MONTH - 1))
+    PREV_YEAR=${YEAR}
+    if [ ${PREV_MONTH} -eq 0 ]
+    then
+        PREV_MONTH=12
+        PREV_YEAR=$((YEAR - 1))
+    fi
+    get_file_name ${FIRST_YEAR} ${FIRST_MONTH} ${PREV_YEAR} ${PREV_MONTH}
+}
+
+rm -f "${LOG_FILE}"
+log() {
+    echo "[`date`] $*" | tee -a "${LOG_FILE}"
+}
+
+get_time_str() {
+    local TIME="${1}"
+	local HOURS=$(echo "${TIME} / 3600" | bc)
+	local MINUTES=$(echo "(${TIME} - ${HOURS} * 3600) / 60" | bc)
+	local SECONDS=$(echo "${TIME} - ${HOURS} * 3600 - ${MINUTES} * 60" | bc)
+
+	# If input is fractional, then SECONDS is likely to be fractional too.
+	# Therefore we need to use a floating point format string in printf.
+	printf "%02d:%02d:%02.0f" ${HOURS} ${MINUTES} ${SECONDS}
+}
+
+EXISTING_FILE=
+START_YEAR=${FIRST_YEAR}
+START_MONTH=${FIRST_MONTH}
+END_YEAR=${LAST_YEAR}
+END_MONTH=12
+
+# Attempt to pick up where we left off.
+if [ -f "${PROGRESS_FILE}" ]
+then
+    START_YEAR="$(cut -d' ' -f1 "${PROGRESS_FILE}")"
+    START_MONTH="$(cut -d' ' -f2 "${PROGRESS_FILE}")"
+
+    if [ ${START_YEAR} -gt ${FIRST_YEAR} -o ${START_MONTH} -gt ${FIRST_MONTH} ]
+    then
+        EXISTING_FILE="${OUT_DIR}/$(get_prev_file_name ${START_YEAR} ${START_MONTH})"
+    fi
+fi
+
+# Get number of files to be processed.
+NFILE=$(((END_YEAR - START_YEAR + 1) * 12 - (START_MONTH - 1) - (12 - END_MONTH) - 1))
+
+# Get start time.
+START_TIME=$(date +%s)
+
+# Number of files which have been successfully processed.
+NCOMPLETE=0
+
+# Duration of the previous iteration in seconds.
+ITERATION_DURATION=
+
+for YEAR in $(seq ${START_YEAR} ${END_YEAR})
+do
+    for MONTH in $(seq ${START_MONTH} ${END_MONTH})
+    do
+        ITERATION_START=$(date +%s)
+
+        # Exit early if final year of data is incomplete.
+        if [ ${YEAR} -eq ${LAST_YEAR} -a ${MONTH} -gt ${LAST_MONTH} ]
+        then
+            break
+        fi
+
+        # Update progress file.
+        echo "${YEAR} ${MONTH}" >"${PROGRESS_FILE}"
+
+        # Calculate the amount of walltime remaining to the job.
+        ELAPSED_TIME=$(echo "$(date +%s) - ${START_TIME}" | bc -l)
+        WALLTIME_REMAINING=$(( (WALLTIME_HOURS * 3600) - ELAPSED_TIME))
+
+        if [ -n ${ITERATION_DURATION} -a $((ITERATION_DURATION * 4)) -lt ${WALLTIME_REMAINING}]
+        then
+            # Walltime is almost exhausted. Resubmit as new PBS job.
+            log "Walltime is exhausted (remaining=${WALLTIME_REMAINING}, iteration=${ITERATION_DURATION}). Resubmitting as new job..."
+            qrerun "${PBS_JOBID}"
+        fi
+
+        # Get path to the file containing this year/month of data.
+        IN_FILE="${IN_DIR}/$(get_file_name ${YEAR} ${MONTH} ${YEAR} ${MONTH})"
+
+        # The existing file is the result of all previous mergetime commands.
+        # In the first month of the first year, there will be no existing file.
+        # In that case, the first input file can be treated as the existing
+        # file.
+        if [ -z "${EXISTING_FILE}" ]
+        then
+            EXISTING_FILE="${IN_FILE}"
+            continue
+        fi
+
+        # Get the output file name.
+        OUT_FILE="${OUT_DIR}/$(get_file_name ${FIRST_YEAR} ${FIRST_MONTH} ${YEAR} ${MONTH})"
+
+        cdo -O mergetime "${EXISTING_FILE}" "${IN_FILE}" "${OUT_FILE}"
+
+        # Each mergetime command writes to a separate output file. Therefore we
+        # should remove the previous merged file after each mergetime command.
+        # The exception is after the very first mergetime command, in which case
+        # the "existing file" will be the first input barra2 input file.
+        if [ ${YEAR} -ne ${FIRST_YEAR} -o ${MONTH} -gt $((FIRST_MONTH + 1)) ]
+        then
+            if echo "${EXISTING_FILE}" | grep hw83 >/dev/null 2>&1
+            then
+                rm "${EXISTING_FILE}"
+            fi
+        fi
+
+        # The mergetime output is now the existing file for the next iteration.
+        EXISTING_FILE="${OUT_FILE}"
+
+        NCOMPLETE=$((NCOMPLETE + 1))
+
+        PROGRESS=$(echo "1.0 * ${NCOMPLETE} / ${NFILE}" | bc -l)
+        PROGRESS_PERCENT="$(echo "100.0 * ${PROGRESS}" | bc -l | xargs printf "%.2f")"
+        ELAPSED_TIME=$(echo "$(date +%s) - ${START_TIME}" | bc -l)
+
+        # Calculate remaining time (in seconds).
+        TOTAL_TIME=$(echo "${ELAPSED_TIME} / ${PROGRESS}" | bc -l)
+        REMAINING_TIME=$(echo "${TOTAL_TIME} - ${ELAPSED_TIME}" | bc -l)
+
+        # Format as hh:mm:ss
+        ELAPSED="$(get_time_str ${ELAPSED_TIME})"
+        REMAINING="$(get_time_str ${REMAINING_TIME})"
+
+        log "Working: ${PROGRESS_PERCENT}%; elapsed: ${ELAPSED}; remaining: ${REMAINING}; file=${EXISTING_FILE}"
+
+        ITERATION_END=$(date +%s)
+        ITERATION_DURATION=$((ITERATION_END - ITERATION_START))
+    done
+done
