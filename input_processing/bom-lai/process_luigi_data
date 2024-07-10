@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+#PBS -l ncpus=480
+#PBS -l walltime=01:00:00
+#PBS -l mem=1920GB
+#PBS -q normal
+#PBS -l wd
+#PBS -j oe
+#PBS -m abe
+#PBS -M d.holzworth@westernsydney.edu.au
+#PBS -l storage=scratch/pt17
+#PBS -N bom_processing
+
+set -euo pipefail
+
+# Get directory containing this script.
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+
+DATA_DIR=/scratch/pt17/dh7190/bom_lai
+
+IN_DIR="${DATA_DIR}/raw"
+OUT_DIR="${DATA_DIR}/processed"
+
+mkdir -p "${OUT_DIR}"
+
+module load openmpi
+
+mpirun -n 480 "/home/590/dh7190/code/lpj-guess/scripts/input_processing/bom-lai/bom_wrapper" "${IN_DIR}" "${OUT_DIR}" 480

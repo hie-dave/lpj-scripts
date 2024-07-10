@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+#
+# This script takes an input .nc file and extracts only the first timestep of
+# the specified variable. This output file may be used as the grid file for a
+# cdo remapping command.
+#
+
+set -euo pipefail
+
+VAR=total_mean
+IN_FILE=/scratch/pt17/dh7190/simulations/output/dave_1deg_dormancy_12/dave_lai.nc
+OUT_FILE=/home/590/dh7190/code/lpj-guess/scripts/input_processing/bom-lai/grid.nc
+
+ncks -O -d time,0,0 -v "${VAR},lat,lon" "${IN_FILE}" "${OUT_FILE}"

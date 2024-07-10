@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#PBS -l ncpus=1
+#PBS -l walltime=04:00:00
+#PBS -l mem=16GB
+#PBS -q normal
+#PBS -l wd
+#PBS -j oe
+#PBS -m abe
+#PBS -M d.holzworth@westernsydney.edu.au
+#PBS -l storage=scratch/pt17
+#PBS -N bom_mergetime
+#PBS -o /home/590/dh7190/code/lpj-guess/scripts/input_processing/bom-lai/logs
+
+set -euo pipefail
+
+module purge
+module load openmpi netcdf nco cdo python3/3.12.1
+
+BOM_DIR=/scratch/pt17/dh7190/bom_lai
+IN_DIR="${BOM_DIR}/1deg/unmerged"
+TYPES="tot rec per"
+
+for TYPE in ${TYPES}
+do
+    OUT_FILE="${BOM_DIR}/1deg/lai_${TYPE}.nc"
+    cdo -O mergetime "${IN_DIR}/lai_${TYPE}_"*.nc "${OUT_FILE}"
+    ncks -O -L5 "${OUT_FILE}" "${OUT_FILE}"
+done

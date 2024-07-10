@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+
+# Exit immediately if any command fails.
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+  echo "Running in debug mode. Set DEBUG to 0 to disable."
+  set -x
+fi
+
+die() {
+    echo $* >&2
+    exit 1
+}
+
+if [ $# -ne 3 ]
+then
+    die "Usage: ${0} <input directory> <output directory> <nchunk>"
+fi
+
+# Get directory containing this script.
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+
+# Input/output directories should be passed as CLI arguments.
+IN_DIR="${1}"
+OUT_DIR="${2}"
+NCHUNK=${3}
+
+# Get MPI rank.
+RANK=$(mpirank 2>/dev/null)
+
+# Helper function which writes a log message.
+log() {
+    echo "[slave ${RANK}]" $*
+}
+
+# Get list of all files to be processed by all jobs.
+FILE_LIST="$(mktemp)"
+for FILE in "${IN_DIR}"/*.nc; do echo "${FILE}" >>"${FILE_LIST}"; done
+
+# Split this list of files into evenly-sized chunks.
+WORK_DIR="$(mktemp -d)"
+split -a3 -dn r/${NCHUNK} "${FILE_LIST}" "${WORK_DIR}/chunk_"
+FILES="$(cat "${WORK_DIR}/chunk_$(printf %03d ${RANK})")"
+
+# Delete temporary files.
+rm -rf "${WORK_DIR}"
+rm -f "${FILE_LIST}"
+
+for FILE in ${FILES}
+do
+    log "Processing $(basename "${FILE}")..."
+
+    OUT_FILE="${OUT_DIR}/$(basename "${FILE}")"
+    "${DIR}/add_time_axis.py" "${FILE}" "${OUT_FILE}"
+done

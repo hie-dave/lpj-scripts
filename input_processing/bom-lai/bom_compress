@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+#PBS -l ncpus=1
+#PBS -l walltime=04:00:00
+#PBS -l mem=16GB
+#PBS -q normal
+#PBS -l wd
+#PBS -j oe
+#PBS -m abe
+#PBS -M d.holzworth@westernsydney.edu.au
+#PBS -l storage=scratch/pt17
+#PBS -N bom_mergetime
+
+set -euo pipefail
+
+module purge
+module load openmpi netcdf nco cdo python3/3.12.1
+
+BOM_DIR=/scratch/pt17/dh7190/bom_lai
+IN_DIR="${BOM_DIR}/1deg"
+
+for IN_FILE in "${IN_DIR}"/*.nc
+do
+    ncks -O -L5 "${IN_FILE}" "${IN_FILE}"
+done
