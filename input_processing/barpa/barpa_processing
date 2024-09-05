@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+# Exit immediately if:
+# - Any command fails
+# - Any part of a pipeline fails
+# - We reference any unbound variables
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+  echo "Running in debug mode. Set DEBUG to 0 to disable."
+  set -x
+fi
+
+# Get directory containing this script.
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+
+# Just run the processing script for each variable.
+# Don't forget to modify barpa_config as required.
+
+"${DIR}/barpa_processing_tas"
+"${DIR}/barpa_processing_pr"
+"${DIR}/barpa_processing_std"
