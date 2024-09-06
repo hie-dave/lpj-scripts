@@ -320,7 +320,7 @@ generate_unpack_scripts() {
 		cat <<EOF > "${SCRIPT_FILE}"
 #!/usr/bin/env bash
 #PBS -l ncpus=1
-#PBS -l walltime=02:00:00
+#PBS -l walltime=${PBS_WALLTIME_UNPACK}
 #PBS -l mem=4GB
 #PBS -q normal
 #PBS -l wd
@@ -398,7 +398,7 @@ generate_mergetime_script() {
 	cat <<EOF >"${SCRIPT_FILE}"
 #!/usr/bin/env bash
 #PBS -l ncpus=1
-#PBS -l walltime=48:00:00
+#PBS -l walltime=${PBS_WALLTIME_MERGETIME}
 #PBS -l mem=64GB
 #PBS -q normal
 #PBS -l wd
@@ -454,7 +454,7 @@ generate_rechunk_script() {
 	cat <<EOF >"${SCRIPT_FILE}"
 #!/usr/bin/env bash
 #PBS -l ncpus=1
-#PBS -l walltime=48:00:00
+#PBS -l walltime=${PBS_WALLTIME_RECHUNK}
 #PBS -l mem=64GB
 #PBS -q normal
 #PBS -l wd

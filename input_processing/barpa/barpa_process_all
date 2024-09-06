@@ -19,18 +19,66 @@ DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
 source "${DIR}/barpa_config"
 source "${DIR}/barpa_helpers"
 
+# The models to be processed.
 MODELS="ACCESS-CM2 ACCESS-ESM1-5 CESM2 CMCC-ESM2 EC-Earth3 ERA5 MPI-ESM1-2-HR NorESM2-MM"
-MODELS="ACCESS-ESM1-5"
 
+# The scenarios to be processed.
 SCENARIOS="historical ssp126 ssp370"
-SCENARIOS=historical
-SCENARIOS="ssp126"
 
 for MODEL in ${MODELS}
 do
     for SCENARIO in ${SCENARIOS}
     do
-        DRIVING_EXPERIMENT_ID="${SCENARIO}"
-        "${DIR}/barpa_processing"
+        D="/g/data/py18/BARPA/output/CMIP6/DD/AUS-15/BOM/${MODEL}/${SCENARIO}"
+        if [ ! -d "${D}" ]
+        then
+            echo "Warning: model/scenario combination not found: ${MODEL}/${SCENARIO}: ${D}"
+            continue
+        fi
+
+        JOB_NAME="barpa_submit_${MODEL}_${SCENARIO}"
+        SCRIPT="${SCRIPT_DIR}/${JOB_NAME}"
+        LOG_FILE="${LOG_DIR}/${JOB_NAME}"
+
+        cat <<EOF >"${SCRIPT}"
+#!/usr/bin/env bash
+#PBS -l ncpus=1
+#PBS -l walltime=01:00:00
+#PBS -l mem=4GB
+#PBS -q normal
+#PBS -l wd
+#PBS -j oe
+#PBS -m a
+#PBS -M ${PBS_EMAIL}
+#PBS -P ${PBS_PROJECT}
+#PBS -p ${PBS_PRIORITY}
+#PBS -l storage=${PBS_STORAGE}
+#PBS -N ${JOB_NAME}
+#PBS -o ${LOG_DIR}/${JOB_NAME}.log
+
+set -euo pipefail
+
+module purge
+module load netcdf cdo nco
+
+source "${DIR}/barpa_config"
+source "${DIR}/barpa_helpers"
+
+DRIVING_EXPERIMENT_ID="${SCENARIO}"
+DRIVING_SOURCE_ID="${MODEL}"
+
+JOB_ID="\$("${DIR}/barpa_processing")"
+EOF
+
+        # This job will run the job from the previous script after it finishes.
+        if [ -n "${SCRIPT_PREV:-}" ]
+        then
+            echo "qsub -W depend=afterok:\${JOB_ID} ${SCRIPT_PREV}" >>"${SCRIPT}"
+        fi
+        SCRIPT_PREV="${SCRIPT}"
+
+        chmod u+x "${SCRIPT}"
     done
 done
+
+echo "qsub ${SCRIPT}"

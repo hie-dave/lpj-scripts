@@ -120,10 +120,21 @@ PBS_STORAGE=gdata/py18+scratch/pt17
 # Email address used by PBS to send email notifications.
 PBS_EMAIL=d.holzworth@westernsydney.edu.au
 
-# Grid file used with cdo remapcon for downscaling to 1-degree resolution.
-# Ensure this is in the home directory; otherwise it may not be accessible from
-# the compute nodes.
-GRID_FILE="${DIR}/barpa_1deg.grid"
+# Walltime limit for the unpacking/regridding of each input file.
+# This takes about 40-60 minutes on a 1-degree grid.
+PBS_WALLTIME_UNPACK="02:00:00"
+
+# Walltime limit for the cdo mergetime operation.
+# This takes about 1 minute on a 1-degree grid.
+PBS_WALLTIME_MERGETIME="48:00:00"
+
+# Walltime limit for the rechunking operation.
+# This takes about 2 minutes on a 1-degree grid.
+PBS_WALLTIME_RECHUNK="48:00:00"
+
+# Walltime limit for the estimation of VPD for each input file.
+# This takes about 2 seconds on a 1-degree grid.
+PBS_WALLTIME_VPD="01:00:00"
 
 ################################################################################
 # Variables controlling output paths, processing, etc.                         #
@@ -152,6 +163,11 @@ TIME_CHUNK_SIZE=8760
 DEFLATE_LEVEL=1
 
 # Set to 1 to prevent qsub from running. Set to 0 to actually submit jobs.
-DRY_RUN=0
+DRY_RUN=1
+
+# Grid file used with cdo remapcon for downscaling to 1-degree resolution.
+# Ensure this is in the home directory; otherwise it may not be accessible from
+# the compute nodes.
+GRID_FILE="${DIR}/barpa_1deg.grid"
 
 fi
