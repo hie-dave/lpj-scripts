@@ -28,38 +28,7 @@ VARS="tas"
 
 for VAR in ${VARS}
 do
-	# VARIABLE_ID is required by the barpa_helpers functions.
-	VARIABLE_ID="${VAR}"
-
-	# Generate scripts which unpack, convert units (and, depending on config,
-	# remap) all input files for this variable.
-
-	DEPS="$(generate_unpack_scripts "subc,273.15" "degC")"
-
-	# Now we generate a job which runs mergetime on all of the unpacked files.
-	# This job will not run until all previous jobs have finished successfully.
-
-	JOB_NAME="barpa_mergetime_${VAR}"
-	WORK_DIR="$(get_unpack_dir "${VAR}")"
-	OUT_FILE="$(get_mergetime_file_name)"
-
-	# Create output directory if it doesn't already exist.
-	mkdir -p "$(dirname "${OUT_FILE}")"
-
-	# Submit the mergetime job with a dependency on all previous jobs.
-	JOB_ID="$(generate_mergetime_script "${WORK_DIR}" "${OUT_FILE}" "${JOB_NAME}" "${DEPS}")"
-
-	# Now we generate a job which rechunks the file, reorders dimensions, etc.
-	# This job will not run until the mergetime job finishes successfully.
-
-	# The input file for this job is the output file for the previous job.
-	IN_FILE="${OUT_FILE}"
-	OUT_FILE="$(get_rechunk_dir)/$(basename "${IN_FILE}")"
-	JOB_NAME="barpa_rechunk_${VAR}"
-
-	# Create output directory if it doesn't already exist.
-	mkdir -p "$(dirname "${OUT_FILE}")"
-
-	# Submit the rechunk job with a dependency on the mergetime job.
-	generate_rechunk_script "${IN_FILE}" "${OUT_FILE}" "${JOB_NAME}" "${JOB_ID}"
+	JOB_ID="$(barpa_process_var "${VAR}" "subc,273.15" "degC")"
+	DEPS="$(append_deps "${DEPS:-}" "${JOB_ID}")"
 done
+echo "${DEPS}"

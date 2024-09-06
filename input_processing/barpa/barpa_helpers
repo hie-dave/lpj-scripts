@@ -209,6 +209,26 @@ submit() {
 }
 
 #
+# Append the given Job ID to an existing list of job IDs, using a colon as a
+# delimiter. If the existing list of dependencies is empty, the output will
+# simply be the new job ID.
+#
+# Requires two positional arguments:
+# 1. The existing colon-delimited dependency list.
+# 2. The new job ID.
+#
+append_deps() {
+	DEPS="${1}"
+	NEW="${2}"
+	if [ -z "${DEPS}" ]
+	then
+		echo "${NEW}"
+	else
+		echo "${DEPS}:${NEW}"
+	fi
+}
+
+#
 # This function generates (and calls submit on) scripts which unpack all .nc
 # files in the specified input directory in parallel.
 #
@@ -321,12 +341,7 @@ EOF
 		JOB_ID="$(submit "${SCRIPT_FILE}")"
 
 		# Append Job ID to dependency list.
-		if [ -z "${DEPS:-}" ]
-		then
-			DEPS="${JOB_ID}"
-		else
-			DEPS="${DEPS}:${JOB_ID}"
-		fi
+		DEPS="$(append_deps "${DEPS:-}" "${JOB_ID}")"
 	done # End of loop generating unpack jobs
 	echo "${DEPS}"
 }
@@ -438,4 +453,70 @@ ncpdq -O -a lat,lon,time --cnk_dmn time,${TIME_CHUNK_SIZE} --cnk_dmn lat,1 --cnk
 EOF
 	chmod u+x "${SCRIPT_FILE}"
 	submit "${SCRIPT_FILE}"
+}
+
+#
+# Perform all BARPA processing for the specified variable.
+#
+# This script will:
+#
+# - Unpack all input files
+# - Optionally regrid all input files if GRID_FILE variable is set. If set, this
+#   variable must contain the path to a valid regridding file for a cdo remapcon
+#   command
+# - Optionally perform units conversions
+# - Merge all input files into a single timeseries
+# - Reorder dimensions, modify chunking, and compress the output file such that
+#   it is optimised for use with LPJ-Guess
+#
+# Requires 1 positional argument, in addition to two optional arguments.
+#
+# 1. Variable ID (e.g. "tas")
+# 2. (Optional) units conversion operator for cdo, without leading hypen. E.g.
+#    "subc,273.15"
+# 3. (Optional) new unit for the output file. If set, the output files' units
+#    attribute will be set to this value.
+#
+# Furthermore, all variables set by barpa_config are also required.
+#
+barpa_process_var() {
+
+	VAR="${1}"
+	UNIT_CONVERSION="${2:-}"
+	NEW_UNITS="${3:-}"
+
+	# VARIABLE_ID is required by the barpa_helpers functions.
+	VARIABLE_ID="${VAR}"
+
+	# Generate scripts which unpack, convert units (and, depending on config,
+	# remap) all input files for this variable.
+
+	DEPS="$(generate_unpack_scripts "${UNIT_CONVERSION}" "${NEW_UNITS}")"
+
+	# Now we generate a job which runs mergetime on all of the unpacked files.
+	# This job will not run until all previous jobs have finished successfully.
+
+	JOB_NAME="barpa_mergetime_${VAR}"
+	WORK_DIR="$(get_unpack_dir "${VAR}")"
+	OUT_FILE="$(get_mergetime_file_name)"
+
+	# Create output directory if it doesn't already exist.
+	mkdir -p "$(dirname "${OUT_FILE}")"
+
+	# Submit the mergetime job with a dependency on all previous jobs.
+	JOB_ID="$(generate_mergetime_script "${WORK_DIR}" "${OUT_FILE}" "${JOB_NAME}" "${DEPS}")"
+
+	# Now we generate a job which rechunks the file, reorders dimensions, etc.
+	# This job will not run until the mergetime job finishes successfully.
+
+	# The input file for this job is the output file for the previous job.
+	IN_FILE="${OUT_FILE}"
+	OUT_FILE="$(get_rechunk_dir)/$(basename "${IN_FILE}")"
+	JOB_NAME="barpa_rechunk_${VAR}"
+
+	# Create output directory if it doesn't already exist.
+	mkdir -p "$(dirname "${OUT_FILE}")"
+
+	# Submit the rechunk job with a dependency on the mergetime job.
+	generate_rechunk_script "${IN_FILE}" "${OUT_FILE}" "${JOB_NAME}" "${JOB_ID}"
 }
