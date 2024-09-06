@@ -2,6 +2,11 @@
 # BARPA configuration variables.                                               #
 ################################################################################
 
+if [ -z "${DRIVING_EXPERIMENT_ID:-}" ]
+then
+
+# Prevent this from being sourced multiple times in one environment.
+
 # FILE ORGANISATION
 #
 #    /g/data/py18
@@ -147,4 +152,6 @@ TIME_CHUNK_SIZE=8760
 DEFLATE_LEVEL=1
 
 # Set to 1 to prevent qsub from running. Set to 0 to actually submit jobs.
-DRY_RUN=1
+DRY_RUN=0
+
+fi

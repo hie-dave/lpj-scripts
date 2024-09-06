@@ -72,4 +72,4 @@ do
     DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
 done
 
-echo "${DEPS}"
+"${DIR}/barpa_processing_vpd" "${DEPS}"

@@ -26,47 +26,32 @@ BARPA_BASE_PATH=/g/data/py18
 #
 # Enumerate all input files for the given configuration.
 #
+# Requires 1 positional argument:
+#
+# 1. The name of the variable.
+#
 # This uses all of the variables set in barpa_config, and, additionally, the
 # following variables: VARIABLE_ID
 #
 enumerate_files() {
+	VAR="${1}"
 	BPATH="${BARPA_BASE_PATH}/${PRODUCT}/${PROJECT}/${MIP_ERA}/${ACTIVITY_ID}"
 	BPATH="${BPATH}/${DOMAIN_ID}/${RCM_INSTITUTION}/${DRIVING_SOURCE_ID}"
 	BPATH="${BPATH}/${DRIVING_EXPERIMENT_ID}/${DRIVING_VARIANT_LABEL}"
-	BPATH="${BPATH}/${SOURCE_ID}/${VERSION_REALISATION}/${FREQ}/${VARIABLE_ID}"
+	BPATH="${BPATH}/${SOURCE_ID}/${VERSION_REALISATION}/${FREQ}/${VAR}"
 	BPATH="${BPATH}/${VERSION}"
 	echo "${BPATH}"/*.nc
 }
 
 #
-# Get a filename for a specific start/end date in the BARPA format.
+# Get the output directory corresponding to the current configuration defined
+# in barpa_config.
 #
-# Requires two arguments:
-# 1. Start date in YYYYMM format
-# 2. End   date in YYYYMM format
+# Requires no positional arguments, but all variables set by the barpa_config
+# script must be set.
 #
-# This also uses all of the variables set in barpa_config.
-#
-get_barpa_file_name() {
-	DATE_START="${1}"
-	DATE_END="${2}"
-
-	# tas_AUS-15_ACCESS-ESM1-5_historical_r6i1p1f1_BOM_BARPA-R_v1-r1_1hr_197901-197912.nc
-	echo "${VARIABLE_ID}_${DOMAIN_ID}_${DRIVING_SOURCE_ID}_${DRIVING_EXPERIMENT_ID}_${DRIVING_VARIANT_LABEL}_${RCM_INSTITUTION}_${SOURCE_ID}_${VERSION_REALISATION}_${FREQ}_${DATE_START}_${DATE_END}.nc"
-}
-
-#
-# Get a suitable filename for the file output by the cdo mergetime command based
-# on the current configuration defined by the environment variables set by
-# barpa_config.
-#
-# The output of this function is an absolute path defined by the variables in
-# barpa_config.
-#
-get_mergetime_file_name() {
-	START_DATE="$(get_timeseries_start)"
-	END_DATE="$(get_timeseries_end)"
-	echo "$(get_work_dir)/mergetime/$(get_barpa_file_name "${START_DATE}" "${END_DATE}")"
+get_mergetime_dir() {
+	echo "$(get_work_dir)/mergetime"
 }
 
 #
@@ -116,6 +101,39 @@ get_unpack_dir() {
 #
 get_rechunk_dir() {
 	echo "$(get_out_dir)/output"
+}
+
+#
+# Get a filename for a specific start/end date in the BARPA format.
+#
+# Requires 3 arguments:
+# 1. Variable name.
+# 2. Start date in YYYYMM format
+# 3. End   date in YYYYMM format
+#
+# This also uses all of the variables set in barpa_config.
+#
+get_barpa_file_name() {
+	VAR="${1}"
+	DATE_START="${2}"
+	DATE_END="${3}"
+
+	# tas_AUS-15_ACCESS-ESM1-5_historical_r6i1p1f1_BOM_BARPA-R_v1-r1_1hr_197901-197912.nc
+	echo "${VAR}_${DOMAIN_ID}_${DRIVING_SOURCE_ID}_${DRIVING_EXPERIMENT_ID}_${DRIVING_VARIANT_LABEL}_${RCM_INSTITUTION}_${SOURCE_ID}_${VERSION_REALISATION}_${FREQ}_${DATE_START}-${DATE_END}.nc"
+}
+
+#
+# Get a suitable filename for the file output by the cdo mergetime command based
+# on the current configuration defined by the environment variables set by
+# barpa_config.
+#
+# The output of this function is an absolute path defined by the variables in
+# barpa_config.
+#
+get_mergetime_file_name() {
+	START_DATE="$(get_timeseries_start "${VARIABLE_ID}")"
+	END_DATE="$(get_timeseries_end "${VARIABLE_ID}")"
+	echo "$(get_mergetime_dir)/$(get_barpa_file_name "${VARIABLE_ID}" "${START_DATE}" "${END_DATE}")"
 }
 
 # Return the smaller of two numbers. Requires 2 arguments (the two numbers).
@@ -168,11 +186,16 @@ get_end_date() {
 # Get the start date of the entire timeseries for the specified dataset, in
 # YYYYMM format.
 #
+# Requires 1 positional argument:
+#
+# 1. Variable name
+#
 # This requires all variables set by barpa_config.
 #
 get_timeseries_start() {
+	VAR="${1}"
 	START_DATE=""
-	for FILE in $(enumerate_files)
+	for FILE in $(enumerate_files "${VAR}")
 	do
 		# Get the start date and end date of this input file.
 		FILE_NAME="$(basename "${FILE}")"
@@ -185,11 +208,16 @@ get_timeseries_start() {
 # Get the end date of the entire timeseries for the specified dataset, in
 # YYYYMM format.
 #
+# Requires 1 positional argument:
+#
+# 1. Variable name
+#
 # This requires all variables set by barpa_config.
 #
 get_timeseries_end() {
+	VAR="${1}"
 	END_DATE=""
-	for FILE in $(enumerate_files)
+	for FILE in $(enumerate_files "${VAR}")
 	do
 		FILE_NAME="$(basename "${FILE}")"
 		END_DATE="$(max "${END_DATE}" "$(get_end_date "${FILE_NAME}")")"
@@ -266,7 +294,7 @@ generate_unpack_scripts() {
 	# own separate PBS job, which will all run in parallel. There are about 55
 	# input files per variable, so this shouldn't be an issue (max jobs in queue
 	# per user is 1000).
-	for INPUT_FILE in $(enumerate_files)
+	for INPUT_FILE in $(enumerate_files "${VARIABLE_ID}")
 	do
 		if [ ! -f "${INPUT_FILE}" ]
 		then
@@ -496,9 +524,9 @@ barpa_process_var() {
 	# Now we generate a job which runs mergetime on all of the unpacked files.
 	# This job will not run until all previous jobs have finished successfully.
 
-	JOB_NAME="barpa_mergetime_${VAR}"
 	WORK_DIR="$(get_unpack_dir "${VAR}")"
 	OUT_FILE="$(get_mergetime_file_name)"
+	JOB_NAME="barpa_mergetime_$(basename "${OUT_FILE}")"
 
 	# Create output directory if it doesn't already exist.
 	mkdir -p "$(dirname "${OUT_FILE}")"
