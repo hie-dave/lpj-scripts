@@ -56,25 +56,66 @@ get_barpa_file_name() {
 }
 
 #
-# Get the start date of the given input file, in YYYYMM format, by parsing the
-# filename with a regular expression. Requires one argument:
+# Get a suitable filename for the file output by the cdo mergetime command based
+# on the current configuration defined by the environment variables set by
+# barpa_config.
 #
-# 1. The file name.
+# The output of this function is an absolute path defined by the variables in
+# barpa_config.
 #
-get_start_date() {
-	FILE_NAME="$(basename "${1}")"
-	echo "${FILE_NAME}" | sed -r 's/.*([0-9]{6})-[0-9]{6}\.nc/\1/g'
+get_mergetime_file_name() {
+	START_DATE="$(get_timeseries_start)"
+	END_DATE="$(get_timeseries_end)"
+	echo "$(get_work_dir)/mergetime/$(get_barpa_file_name "${START_DATE}" "${END_DATE}")"
 }
 
 #
-# Get the end date of the given input file, in YYYYMM format, by parsing the
-# filename with a regular expression. Requires one argument:
+# Get the output directory corresponding to the current configuration defined
+# in barpa_config.
 #
-# 1. The file name.
+# Requires no positional arguments, but all variables set by the barpa_config
+# script must be set.
 #
-get_end_date() {
-	FILE_NAME="$(basename "${1}")"
-	echo "${FILE_NAME}" | sed -r 's/.*([0-9]{6})\.nc/\1/g'
+get_out_dir() {
+	echo "${BARPA_DIR}/${DRIVING_SOURCE_ID}/${DRIVING_EXPERIMENT_ID}"
+}
+
+#
+# Get the directory into which all intermediate files for the current
+# model/scenario will be written.
+#
+# Requires no positional arguments, but all variables set by the barpa_config
+# script must be set.
+#
+get_work_dir() {
+	echo "$(get_out_dir)/working"
+}
+
+#
+# Get the directory into which all input files for the specified variable will
+# be unpacked.
+#
+# Requires 1 argument:
+#
+# 1. The name of the variable.
+#
+# This also requires all variables set by the barpa_config script.
+#
+get_unpack_dir() {
+	VAR="${1}"
+	echo "$(get_work_dir)/unpacked/${VAR}"
+}
+
+#
+# Get a suitable filename for the file output by the cdo mergetime command based
+# on the current configuration defined by the environment variables set by
+# barpa_config.
+#
+# The output of this function is an absolute path defined by the variables in
+# barpa_config.
+#
+get_rechunk_dir() {
+	echo "$(get_out_dir)/output"
 }
 
 # Return the smaller of two numbers. Requires 2 arguments (the two numbers).
@@ -101,6 +142,61 @@ max() {
 	echo "$((X > Y ? X : Y))"
 }
 
+#
+# Get the start date of the given input file, in YYYYMM format, by parsing the
+# filename with a regular expression. Requires one argument:
+#
+# 1. The file name.
+#
+get_start_date() {
+	FILE_NAME="$(basename "${1}")"
+	echo "${FILE_NAME}" | sed -r 's/.*([0-9]{6})-[0-9]{6}\.nc/\1/g'
+}
+
+#
+# Get the end date of the given input file, in YYYYMM format, by parsing the
+# filename with a regular expression. Requires one argument:
+#
+# 1. The file name.
+#
+get_end_date() {
+	FILE_NAME="$(basename "${1}")"
+	echo "${FILE_NAME}" | sed -r 's/.*([0-9]{6})\.nc/\1/g'
+}
+
+#
+# Get the start date of the entire timeseries for the specified dataset, in
+# YYYYMM format.
+#
+# This requires all variables set by barpa_config.
+#
+get_timeseries_start() {
+	START_DATE=""
+	for FILE in $(enumerate_files)
+	do
+		# Get the start date and end date of this input file.
+		FILE_NAME="$(basename "${FILE}")"
+		START_DATE="$(min "${START_DATE}" "$(get_start_date "${FILE_NAME}")")"
+	done
+	echo "${START_DATE}"
+}
+
+#
+# Get the end date of the entire timeseries for the specified dataset, in
+# YYYYMM format.
+#
+# This requires all variables set by barpa_config.
+#
+get_timeseries_end() {
+	END_DATE=""
+	for FILE in $(enumerate_files)
+	do
+		FILE_NAME="$(basename "${FILE}")"
+		END_DATE="$(max "${END_DATE}" "$(get_end_date "${FILE_NAME}")")"
+	done
+	echo "${END_DATE}"
+}
+
 # Submit a script via qsub iff DRY_RUN is not 1. Requires 1 argument (the
 # script).
 submit() {
@@ -113,10 +209,133 @@ submit() {
 }
 
 #
+# This function generates (and calls submit on) scripts which unpack all .nc
+# files in the specified input directory in parallel.
+#
+# This function accepts two positional arguments, both of which are optional:
+#
+# 1. CDO operators to perform any required unit conversions. This must be
+#    specified without the leading-hyphen syntax.
+# 2. Units of the variable in the output file. If set, an ncatted command will
+#    be run to modify the .nc files' metadata accordingly.
+#
+# This function also requires all other variables defined in barpa_config.
+#
+# This function will generate one PBS job for each input file, and submit them
+# all to run in parallel, and will print a colon-separated list of the submitted
+# jobs' IDs.
+#
+# Each model/scenario combination contains ~55 input files per variable, and
+# the maximum number of queued jobs is 1000 per user, so this approach seems
+# reasonable.
+#
+generate_unpack_scripts() {
+
+	CDO_OPS="${1:-}"
+	NEW_UNITS="${2:-}"
+
+	# The directory into which all unpacked files will be saved.
+	UNPACK_DIR="$(get_unpack_dir "${VARIABLE_ID}")"
+	mkdir -p "${UNPACK_DIR}"
+
+	UNPACK_OP="unpack"
+	if [ -n "${CDO_OPS}" ]; then UNPACK_OP="-${UNPACK_OP}"; fi
+
+	# First we need to unpack all input files and perform a units conversion.
+	# The unpacking and units conversion of each input file will occur in its
+	# own separate PBS job, which will all run in parallel. There are about 55
+	# input files per variable, so this shouldn't be an issue (max jobs in queue
+	# per user is 1000).
+	for INPUT_FILE in $(enumerate_files)
+	do
+		if [ ! -f "${INPUT_FILE}" ]
+		then
+			die "Input file does not exist: ${INPUT_FILE}"
+		fi
+
+		# File name (without path) of this input file.
+		FILE_NAME="$(basename "${INPUT_FILE}")"
+
+		# Full path to the output file corresponding to this input file.
+		OUT_FILE="${UNPACK_DIR}/${FILE_NAME}"
+
+		# Name of the processing job for this particular input file.
+		JOB_NAME="barpa_unpack_${FILE_NAME/.nc/}"
+
+		# Processing script for this job.
+		SCRIPT_FILE="${SCRIPT_DIR}/${JOB_NAME}"
+
+		# Log file for this job.
+		LOG_FILE="${LOG_DIR}/${JOB_NAME}.log"
+
+		# Generate script for this file.
+		cat <<EOF > "${SCRIPT_FILE}"
+#!/usr/bin/env bash
+#PBS -l ncpus=1
+#PBS -l walltime=02:00:00
+#PBS -l mem=4GB
+#PBS -q normal
+#PBS -l wd
+#PBS -j oe
+#PBS -m a
+#PBS -M ${PBS_EMAIL}
+#PBS -P ${PBS_PROJECT}
+#PBS -p ${PBS_PRIORITY}
+#PBS -l storage=${PBS_STORAGE}
+#PBS -N ${JOB_NAME}
+#PBS -o ${LOG_FILE}
+
+set -euo pipefail
+
+module purge
+module load netcdf cdo nco
+
+IN_FILE="${INPUT_FILE}"
+OUT_FILE="${OUT_FILE}"
+EOF
+
+		REMAP_OP=""
+		if [ -n "${GRID_FILE}" ]
+		then
+			# User has provided a grid file. Therefore we add a conservative
+			# remapping operation to the cdo command.
+			REMAP_OP="-remapcon,\"\${GRID_FILE}\""
+			echo "GRID_FILE=\"${GRID_FILE}\"" >>"${SCRIPT_FILE}"
+		fi
+
+			cat <<EOF >>"${SCRIPT_FILE}"
+
+cdo -L -O -v ${CDO_OPS} ${UNPACK_OP} ${REMAP_OP} "\${IN_FILE}" "\${OUT_FILE}"
+
+EOF
+
+		if [ -n "${NEW_UNITS}" ]
+		then
+			# User has requested a units conversion.
+			# Emit ncatted command to modify units attribute.
+			cat <<EOF >>"${SCRIPT_FILE}"
+ncatted -O -a "units,${VARIABLE_ID},o,c,${NEW_UNITS}" "\${OUT_FILE}" "\${OUT_FILE}"
+EOF
+		fi
+		chmod u+x "${SCRIPT_FILE}"
+		JOB_ID="$(submit "${SCRIPT_FILE}")"
+
+		# Append Job ID to dependency list.
+		if [ -z "${DEPS:-}" ]
+		then
+			DEPS="${JOB_ID}"
+		else
+			DEPS="${DEPS}:${JOB_ID}"
+		fi
+	done # End of loop generating unpack jobs
+	echo "${DEPS}"
+}
+
+#
 # This function generates (and calls submit on) a script which does a cdo
 # mergetime operation on all .nc files in the specified input directory.
 #
-# Requires $N arguments:
+# Requires 4 arguments:
 #
 # 1. Input directory path.
 # 2. Output file name and path.
@@ -173,7 +392,7 @@ EOF
 # This function generates (and calls submit on) a script which does a cdo
 # mergetime operation on all .nc files in the specified input directory.
 #
-# Requires $N arguments:
+# Requires 4 arguments:
 #
 # 1. Input file path.
 # 2. Output file path.

@@ -22,14 +22,6 @@ DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
 source "${DIR}/barpa_config"
 source "${DIR}/barpa_helpers"
 
-OUT_DIR="${OUT_DIR}/1deg"
-mkdir -p "${OUT_DIR}"
-
-# Grid file used with cdo remapcon for downscaling to 1-degree resolution.
-# Ensure this is in the home directory; otherwise it may not be accessible from
-# the compute nodes.
-GRID_FILE="${DIR}/barpa_1deg.grid"
-
 VAR="pr"
 
 # Precipitation requires a units conversion from kg m-2 s-1 (ie millimeters per
@@ -59,106 +51,30 @@ fi
 # VARIABLE_ID is required by the barpa_helpers functions.
 VARIABLE_ID="${VAR}"
 
-# The directory into which intermediate output files will be written.
-WORK_DIR="${OUT_DIR}/working/${VAR}"
-mkdir -p "${WORK_DIR}"
+# Generate scripts which unpack, convert units (and, depending on config,
+# remap) all input files for this variable.
 
-# Colon-separated IDs of all PBS jobs for unpacking this variable's files.
-DEPS=""
-
-# Start and end date of the entire timeseries in YYYYMM format.
-START_DATE=""
-END_DATE=""
-
-# First we need to unpack all input files and perform a units conversion.
-# The unpacking and units conversion of each input file will occur in its
-# own separate PBS job, which will all run in parallel. There are about 55
-# input files per variable, so this shouldn't be an issue (max jobs in queue
-# per user is 1000).
-for INPUT_FILE in $(enumerate_files)
-do
-	if [ ! -f "${INPUT_FILE}" ]
-	then
-		die "Input file does not exist: ${INPUT_FILE}"
-	fi
-
-	# File name (without path) of this input file.
-	FILE_NAME="$(basename "${INPUT_FILE}")"
-
-	# Full path to the output file corresponding to this input file.
-	OUT_FILE="${WORK_DIR}/${FILE_NAME}"
-
-	# Name of the processing job for this particular input file.
-	JOB_NAME="barpa_unpack_${FILE_NAME/.nc/}"
-
-	# Processing script for this job.
-	SCRIPT_FILE="${SCRIPT_DIR}/${JOB_NAME}"
-
-	# Log file for this job.
-	LOG_FILE="${LOG_DIR}/${JOB_NAME}.log"
-
-	# Get the start date and end date of this input file.
-	START_DATE="$(min "${START_DATE}" "$(get_start_date "${FILE_NAME}")")"
-	END_DATE="$(max "${END_DATE}" "$(get_end_date "${FILE_NAME}")")"
-
-	# Generate script for this file.
-	cat <<EOF > "${SCRIPT_FILE}"
-#!/usr/bin/env bash
-#PBS -l ncpus=1
-#PBS -l walltime=02:00:00
-#PBS -l mem=4GB
-#PBS -q normal
-#PBS -l wd
-#PBS -j oe
-#PBS -m a
-#PBS -M ${PBS_EMAIL}
-#PBS -P ${PBS_PROJECT}
-#PBS -p ${PBS_PRIORITY}
-#PBS -l storage=${PBS_STORAGE}
-#PBS -N ${JOB_NAME}
-#PBS -o ${LOG_FILE}
-
-set -euo pipefail
-
-module purge
-module load netcdf cdo nco
-
-IN_FILE="${INPUT_FILE}"
-OUT_FILE="${OUT_FILE}"
-GRID_FILE="${GRID_FILE}"
-
-cdo -L -O -v mulc,${SECONDS_PER_TIMESTEP} -unpack -remapcon,"\${GRID_FILE}" "\${IN_FILE}" "\${OUT_FILE}"
-
-# Alternate version without spatial downscaling:
-# cdo -L -O -v mulc,${SECONDS_PER_TIMESTEP} -unpack "\${IN_FILE}" "\${OUT_FILE}"
-
-# Convert to mm.
-ncatted -O -a "units,${VAR},o,c,mm" "${OUT_FILE}" "${OUT_FILE}"
-
-EOF
-	chmod u+x "${SCRIPT_FILE}"
-	JOB_ID="$(submit "${SCRIPT_FILE}")"
-	if [ -z "${DEPS}" ]
-	then
-		DEPS="${JOB_ID}"
-	else
-		DEPS="${DEPS}:${JOB_ID}"
-	fi
-done # End of loop generating unpack jobs
+DEPS="$(generate_unpack_scripts "mulc,${SECONDS_PER_TIMESTEP}" "mm")"
 
 # Now we generate a job which runs mergetime on all of the unpacked files.
+# This job will not run until all previous jobs have finished successfully.
 
 JOB_NAME="barpa_mergetime_${VAR}"
-OUT_FILE="${WORK_DIR}/$(get_barpa_file_name "${START_DATE}" "${END_DATE}")"
+WORK_DIR="$(get_unpack_dir "${VAR}")"
+OUT_FILE="$(get_mergetime_file_name)"
+
+# Create output directory if it doesn't already exist.
+mkdir -p "$(dirname "${OUT_FILE}")"
 
 # Submit the mergetime job with a dependency on all previous jobs.
 JOB_ID="$(generate_mergetime_script "${WORK_DIR}" "${OUT_FILE}" "${JOB_NAME}" "${DEPS}")"
 
 # Now we generate a job which rechunks the file, reorders dimensions, etc.
+# This job will not run until the mergetime job finishes successfully.
 
 # The input file for this job is the output file for the previous job.
 IN_FILE="${OUT_FILE}"
-OUT_FILE="${OUT_DIR}/$(basename "${IN_FILE}")"
+OUT_FILE="$(get_rechunk_dir)/$(basename "${IN_FILE}")"
 JOB_NAME="barpa_rechunk_${VAR}"
 
 # Submit the rechunk job with a dependency on the mergetime job.
