@@ -61,11 +61,18 @@ set -euo pipefail
 module purge
 module load netcdf cdo nco
 
+# Ensure that any variable assignments are stored in this process' environment,
+# so that they are inherited by child processes.
+set -a
+
 source "${DIR}/barpa_config"
 source "${DIR}/barpa_helpers"
 
-DRIVING_EXPERIMENT_ID="${SCENARIO}"
-DRIVING_SOURCE_ID="${MODEL}"
+# Disable set -a behaviour.
+set +a
+
+export DRIVING_EXPERIMENT_ID="${SCENARIO}"
+export DRIVING_SOURCE_ID="${MODEL}"
 
 JOB_ID="\$("${DIR}/barpa_processing")"
 EOF
@@ -81,4 +88,6 @@ EOF
     done
 done
 
-echo "qsub ${SCRIPT}"
+# All scripts have been written. Now we submit the last script, which will,
+# upon successful completion, submit the script before it, and so on.
+submit "${SCRIPT}"

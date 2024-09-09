@@ -24,6 +24,29 @@ BARPA_BASE_PATH=/g/data/py18
 #
 
 #
+# Get the driving variant label for the given config defined by the variables
+# set in barpa_config.
+#
+# Requires no positional arguments, but requires all variables set by
+# barpa_config.
+#
+get_driving_variant_label() {
+	D="${BARPA_BASE_PATH}/${PRODUCT}/${PROJECT}/${MIP_ERA}/${ACTIVITY_ID}"
+	D="${D}/${DOMAIN_ID}/${RCM_INSTITUTION}/${DRIVING_SOURCE_ID}"
+	D="${D}/${DRIVING_EXPERIMENT_ID}"
+
+	for SUBDIR in "${D}"/*
+	do
+		if [ -d "${SUBDIR}" ]
+		then
+			echo "$(basename "${SUBDIR}")"
+			return
+		fi
+	done
+	die "Unknown driving variant label for ${DRIVING_SOURCE_ID} ${DRIVING_EXPERIMENT_ID}: ${D}"
+}
+
+#
 # Enumerate all input files for the given configuration.
 #
 # Requires 1 positional argument:
@@ -37,7 +60,7 @@ enumerate_files() {
 	VAR="${1}"
 	BPATH="${BARPA_BASE_PATH}/${PRODUCT}/${PROJECT}/${MIP_ERA}/${ACTIVITY_ID}"
 	BPATH="${BPATH}/${DOMAIN_ID}/${RCM_INSTITUTION}/${DRIVING_SOURCE_ID}"
-	BPATH="${BPATH}/${DRIVING_EXPERIMENT_ID}/${DRIVING_VARIANT_LABEL}"
+	BPATH="${BPATH}/${DRIVING_EXPERIMENT_ID}/$(get_driving_variant_label)"
 	BPATH="${BPATH}/${SOURCE_ID}/${VERSION_REALISATION}/${FREQ}/${VAR}"
 	BPATH="${BPATH}/${VERSION}"
 	echo "${BPATH}"/*.nc
@@ -119,7 +142,7 @@ get_barpa_file_name() {
 	DATE_END="${3}"
 
 	# tas_AUS-15_ACCESS-ESM1-5_historical_r6i1p1f1_BOM_BARPA-R_v1-r1_1hr_197901-197912.nc
-	echo "${VAR}_${DOMAIN_ID}_${DRIVING_SOURCE_ID}_${DRIVING_EXPERIMENT_ID}_${DRIVING_VARIANT_LABEL}_${RCM_INSTITUTION}_${SOURCE_ID}_${VERSION_REALISATION}_${FREQ}_${DATE_START}-${DATE_END}.nc"
+	echo "${VAR}_${DOMAIN_ID}_${DRIVING_SOURCE_ID}_${DRIVING_EXPERIMENT_ID}_$(get_driving_variant_label)_${RCM_INSTITUTION}_${SOURCE_ID}_${VERSION_REALISATION}_${FREQ}_${DATE_START}-${DATE_END}.nc"
 }
 
 #
@@ -403,7 +426,7 @@ generate_mergetime_script() {
 #PBS -q normal
 #PBS -l wd
 #PBS -j oe
-#PBS -m abe
+#PBS -m a
 #PBS -M ${PBS_EMAIL}
 #PBS -P ${PBS_PROJECT}
 #PBS -p ${PBS_PRIORITY}
@@ -459,7 +482,7 @@ generate_rechunk_script() {
 #PBS -q normal
 #PBS -l wd
 #PBS -j oe
-#PBS -m abe
+#PBS -m a
 #PBS -M ${PBS_EMAIL}
 #PBS -P ${PBS_PROJECT}
 #PBS -p ${PBS_PRIORITY}
@@ -521,6 +544,14 @@ barpa_process_var() {
 
 	DEPS="$(generate_unpack_scripts "${UNIT_CONVERSION}" "${NEW_UNITS}")"
 
+	# The interaction between nested subshells and set -e is convoluted and not
+	# to be relied upon. We need to manually verify here that the script
+	# generation was successful, and abort now if it failed.
+	if [ -z "${DEPS}" ]
+	then
+		die "Failed to generate unpack scripts for ${VAR}"
+	fi
+
 	# Now we generate a job which runs mergetime on all of the unpacked files.
 	# This job will not run until all previous jobs have finished successfully.
 
@@ -533,6 +564,13 @@ barpa_process_var() {
 
 	# Submit the mergetime job with a dependency on all previous jobs.
 	JOB_ID="$(generate_mergetime_script "${WORK_DIR}" "${OUT_FILE}" "${JOB_NAME}" "${DEPS}")"
+
+	# Manually check for subshell failure...just in case. This is not a 100%
+	# solution.
+	if [ -z "${JOB_ID}" ]
+	then
+		die "Failed to generate mergetime script for ${VAR}"
+	fi
 
 	# Now we generate a job which rechunks the file, reorders dimensions, etc.
 	# This job will not run until the mergetime job finishes successfully.

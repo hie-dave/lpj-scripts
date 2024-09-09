@@ -163,11 +163,11 @@ TIME_CHUNK_SIZE=8760
 DEFLATE_LEVEL=1
 
 # Set to 1 to prevent qsub from running. Set to 0 to actually submit jobs.
-DRY_RUN=1
+DRY_RUN=0
 
 # Grid file used with cdo remapcon for downscaling to 1-degree resolution.
 # Ensure this is in the home directory; otherwise it may not be accessible from
 # the compute nodes.
-GRID_FILE="${DIR}/barpa_1deg.grid"
+GRID_FILE="/home/590/dh7190/code/lpj-guess/scripts/input_processing/barpa/barpa_1deg.grid"
 
 fi
