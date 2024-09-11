@@ -126,11 +126,11 @@ PBS_WALLTIME_UNPACK="02:00:00"
 
 # Walltime limit for the cdo mergetime operation.
 # This takes about 1 minute on a 1-degree grid.
-PBS_WALLTIME_MERGETIME="48:00:00"
+PBS_WALLTIME_MERGETIME="02:00:00"
 
 # Walltime limit for the rechunking operation.
 # This takes about 2 minutes on a 1-degree grid.
-PBS_WALLTIME_RECHUNK="48:00:00"
+PBS_WALLTIME_RECHUNK="02:00:00"
 
 # Walltime limit for the estimation of VPD for each input file.
 # This takes about 2 seconds on a 1-degree grid.
