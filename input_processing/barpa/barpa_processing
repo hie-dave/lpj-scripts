@@ -1,4 +1,19 @@
 #!/usr/bin/env bash
+#
+# This script processes a single scenario of a single model of BARPA into a
+# format ideally-suited for use with LPJ-Guess.
+#
+# This script takes no positional arguments, but it expects that barpa_config
+# and barpa_helpers have already been sourced, and the model and scenario to be
+# processed should be specified via the following environment variables
+# respectively:
+#
+# - DRIVING_SOURCE_ID (the model)
+# - DRIVING_EXPERIMENT_ID (the scenario)
+#
+# This script will generate many scripts and submit them to PBS. The output of
+# this script will be the ID of the final job in the execution pipeline.
+#
 
 # Exit immediately if:
 # - Any command fails

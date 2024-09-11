@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+#
+# This script generates a self-submitting PBS job which will process BARPA data
+# into a format ideally-suited for use with LPJ-Guess.
+#
+# This script takes no positional arguments, and most parameters are located in
+# barpa_config.
+#
 
 # Exit immediately if:
 # - Any command fails
