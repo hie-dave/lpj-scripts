@@ -557,7 +557,8 @@ barpa_process_var() {
 
 	WORK_DIR="$(get_unpack_dir "${VAR}")"
 	OUT_FILE="$(get_mergetime_file_name)"
-	JOB_NAME="barpa_mergetime_$(basename "${OUT_FILE}")"
+	FILE_NAME="$(basename "${OUT_FILE}")"
+	JOB_NAME="barpa_mergetime_$(basename "${FILE_NAME/.nc/}")"
 
 	# Create output directory if it doesn't already exist.
 	mkdir -p "$(dirname "${OUT_FILE}")"
@@ -578,7 +579,7 @@ barpa_process_var() {
 	# The input file for this job is the output file for the previous job.
 	IN_FILE="${OUT_FILE}"
 	OUT_FILE="$(get_rechunk_dir)/$(basename "${IN_FILE}")"
-	JOB_NAME="barpa_rechunk_${VAR}"
+	JOB_NAME="barpa_rechunk_${FILE_NAME/.nc/}"
 
 	# Create output directory if it doesn't already exist.
 	mkdir -p "$(dirname "${OUT_FILE}")"
