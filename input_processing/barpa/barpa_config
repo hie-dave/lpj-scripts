@@ -136,6 +136,14 @@ PBS_WALLTIME_RECHUNK="02:00:00"
 # This takes about 2 seconds on a 1-degree grid.
 PBS_WALLTIME_VPD="01:00:00"
 
+# Amount of memory allocated to the per-variable mergetime PBS jobs, in GiB.
+# These seem to require <1GiB on a 1° grid.
+PBS_MEMORY_MERGETIME=4
+
+# Amount of memory allocated to the per-variable rechunk PBS jobs, in GiB.
+# These seem to require ~12GiB on a 1° grid.
+PBS_MEMORY_RECHUNK=32
+
 ################################################################################
 # Variables controlling output paths, processing, etc.                         #
 ################################################################################

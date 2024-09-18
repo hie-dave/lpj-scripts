@@ -87,7 +87,14 @@ EOF
         # This job will run the job from the previous script after it finishes.
         if [ -n "${SCRIPT_PREV:-}" ]
         then
-            echo "qsub -W depend=afterok:\${JOB_ID} ${SCRIPT_PREV}" >>"${SCRIPT}"
+            cat <<EOF >>"${SCRIPT}"
+DEPEND=
+if [ -n "\${JOB_ID}" ]
+then
+    DEPEND="-W depend=afterok:\${JOB_ID}"
+fi
+qsub \${DEPEND} ${SCRIPT_PREV}
+EOF
         fi
         SCRIPT_PREV="${SCRIPT}"
 

@@ -87,6 +87,8 @@ do
     JOB_NAME="barpa_estimate_$(basename "${FILE_NAME/.nc/}")"
     SCRIPT_FILE="${SCRIPT_DIR}/${JOB_NAME}"
 
+    if [ -f "${OUT_FILE}" ]; then continue; fi
+
 	# Generate script for this file.
 	cat <<EOF > "${SCRIPT_FILE}"
 #!/usr/bin/env bash
@@ -144,11 +146,15 @@ START_DATE="$(get_timeseries_start "${VAR_TAS}")"
 END_DATE="$(get_timeseries_end "${VAR_TAS}")"
 FILE_NAME="$(get_barpa_file_name "${VAR_VPD}" "${START_DATE}" "${END_DATE}")"
 
-JOB_NAME="barpa_mergetime_${VAR_VPD}"
+JOB_NAME="barpa_mergetime_$(basename "${FILE_NAME/.nc/}")"
 OUT_FILE="$(get_mergetime_dir)/${FILE_NAME}"
 
-# Submit the mergetime job with a dependency on all previous jobs.
-JOB_ID="$(generate_mergetime_script "${VPD_DIR}" "${OUT_FILE}" "${JOB_NAME}" "${DEPS}")"
+JOB_ID=
+if [ ! -f "${OUT_FILE}" ]
+then
+    # Submit the mergetime job with a dependency on all previous jobs.
+    JOB_ID="$(generate_mergetime_script "${VPD_DIR}" "${OUT_FILE}" "${JOB_NAME}" "${DEPS}")"
+fi
 
 # Now we generate a job which rechunks the file, reorders dimensions, etc.
 # This job will not run until the mergetime job finishes successfully.
@@ -156,7 +162,10 @@ JOB_ID="$(generate_mergetime_script "${VPD_DIR}" "${OUT_FILE}" "${JOB_NAME}" "${
 # The input file for this job is the output file for the previous job.
 IN_FILE="${OUT_FILE}"
 OUT_FILE="$(get_rechunk_dir)/$(basename "${IN_FILE}")"
-JOB_NAME="barpa_rechunk_${VAR_VPD}"
+JOB_NAME="barpa_rechunk_$(basename "${IN_FILE/.nc/}")"
 
-# Submit the rechunk job with a dependency on the mergetime job.
-generate_rechunk_script "${IN_FILE}" "${OUT_FILE}" "${JOB_NAME}" "${JOB_ID}"
+if [ ! -f "${OUT_FILE}" ]
+then
+    # Submit the rechunk job with a dependency on the mergetime job.
+    generate_rechunk_script "${IN_FILE}" "${OUT_FILE}" "${JOB_NAME}" "${JOB_ID}"
+fi

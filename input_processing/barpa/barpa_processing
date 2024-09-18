@@ -87,4 +87,10 @@ do
     DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
 done
 
-"${DIR}/barpa_processing_vpd" "${DEPS}"
+JOB_ID="$("${DIR}/barpa_processing_vpd" "${DEPS}")"
+if [ -n "${JOB_ID}" ]
+then
+    echo "${JOB_ID}"
+else
+    echo "${DEPS}"
+fi

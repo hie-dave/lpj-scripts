@@ -273,8 +273,14 @@ append_deps() {
 	NEW="${2}"
 	if [ -z "${DEPS}" ]
 	then
+		# DEPS is empty string. Emit only the new dependency.
 		echo "${NEW}"
+	elif [ -z "${NEW}" ]
+	then
+		# NEW is empty, but DEPS is nonempty.
+		echo "${DEPS}"
 	else
+		# NEW and DEPS both nonempty.
 		echo "${DEPS}:${NEW}"
 	fi
 }
@@ -301,6 +307,10 @@ append_deps() {
 # reasonable.
 #
 generate_unpack_scripts() {
+
+	# WARNING: this function is not used for procsesing of VPD data; therefore
+	# any changes to this function may necessitate an equivalent change to
+	# the barpa_processing_vpd script.
 
 	CDO_OPS="${1:-}"
 	NEW_UNITS="${2:-}"
@@ -329,6 +339,8 @@ generate_unpack_scripts() {
 
 		# Full path to the output file corresponding to this input file.
 		OUT_FILE="${UNPACK_DIR}/${FILE_NAME}"
+
+		if [ -f "${OUT_FILE}" ]; then continue; fi
 
 		# Name of the processing job for this particular input file.
 		JOB_NAME="barpa_unpack_${FILE_NAME/.nc/}"
@@ -397,6 +409,16 @@ EOF
 	echo "${DEPS}"
 }
 
+get_dependency_str() {
+	DEPS="${1}"
+	if [ -z "${DEPS}" ]
+	then
+		echo ""
+	else
+		echo "#PBS -W depend=afterok:${DEPS}"
+	fi
+}
+
 #
 # This function generates (and calls submit on) a script which does a cdo
 # mergetime operation on all .nc files in the specified input directory.
@@ -414,15 +436,16 @@ generate_mergetime_script() {
 	IN_DIR="${1}"
 	OUT_FILE="${2}"
 	JOB_NAME="${3}"
-	DEPS="${4}"
+	DEPS="${4:-}"
 
 	SCRIPT_FILE="${SCRIPT_DIR}/${JOB_NAME}"
+	DEPEND="$(get_dependency_str "${DEPS}")"
 
 	cat <<EOF >"${SCRIPT_FILE}"
 #!/usr/bin/env bash
 #PBS -l ncpus=1
 #PBS -l walltime=${PBS_WALLTIME_MERGETIME}
-#PBS -l mem=64GB
+#PBS -l mem=${PBS_MEMORY_MERGETIME}GB
 #PBS -q normal
 #PBS -l wd
 #PBS -j oe
@@ -433,7 +456,7 @@ generate_mergetime_script() {
 #PBS -l storage=${PBS_STORAGE}
 #PBS -N ${JOB_NAME}
 #PBS -o ${LOG_DIR}/${JOB_NAME}.log
-#PBS -W depend=afterok:${DEPS}
+${DEPEND}
 
 set -euo pipefail
 
@@ -471,14 +494,15 @@ generate_rechunk_script() {
 	IN_FILE="${1}"
 	OUT_FILE="${2}"
 	JOB_NAME="${3}"
-	DEPS="${4}"
+	DEPS="${4:-}"
+	DEPEND="$(get_dependency_str "${DEPS}")"
 
 	SCRIPT_FILE="${SCRIPT_DIR}/${JOB_NAME}"
 	cat <<EOF >"${SCRIPT_FILE}"
 #!/usr/bin/env bash
 #PBS -l ncpus=1
 #PBS -l walltime=${PBS_WALLTIME_RECHUNK}
-#PBS -l mem=64GB
+#PBS -l mem=${PBS_MEMORY_RECHUNK}GB
 #PBS -q normal
 #PBS -l wd
 #PBS -j oe
@@ -489,7 +513,7 @@ generate_rechunk_script() {
 #PBS -l storage=${PBS_STORAGE}
 #PBS -N ${JOB_NAME}
 #PBS -o ${LOG_DIR}/${JOB_NAME}.log
-#PBS -W depend=afterok:${DEPS}
+${DEPEND}
 
 set -euo pipefail
 
@@ -539,6 +563,13 @@ barpa_process_var() {
 	# VARIABLE_ID is required by the barpa_helpers functions.
 	VARIABLE_ID="${VAR}"
 
+	ULTIMATE_OUT_FILE="$(get_mergetime_file_name)"
+	ULTIMATE_OUT_FILE="$(get_rechunk_dir)/$(basename "${ULTIMATE_OUT_FILE}")"
+	if [ -f "${ULTIMATE_OUT_FILE}" ]
+	then
+		return 0
+	fi
+
 	# Generate scripts which unpack, convert units (and, depending on config,
 	# remap) all input files for this variable.
 
@@ -547,10 +578,10 @@ barpa_process_var() {
 	# The interaction between nested subshells and set -e is convoluted and not
 	# to be relied upon. We need to manually verify here that the script
 	# generation was successful, and abort now if it failed.
-	if [ -z "${DEPS}" ]
-	then
-		die "Failed to generate unpack scripts for ${VAR}"
-	fi
+	# if [ -z "${DEPS}" ]
+	# then
+	# 	die "Failed to generate unpack scripts for ${VAR}"
+	# fi
 
 	# Now we generate a job which runs mergetime on all of the unpacked files.
 	# This job will not run until all previous jobs have finished successfully.
@@ -560,17 +591,20 @@ barpa_process_var() {
 	FILE_NAME="$(basename "${OUT_FILE}")"
 	JOB_NAME="barpa_mergetime_$(basename "${FILE_NAME/.nc/}")"
 
-	# Create output directory if it doesn't already exist.
-	mkdir -p "$(dirname "${OUT_FILE}")"
-
-	# Submit the mergetime job with a dependency on all previous jobs.
-	JOB_ID="$(generate_mergetime_script "${WORK_DIR}" "${OUT_FILE}" "${JOB_NAME}" "${DEPS}")"
-
-	# Manually check for subshell failure...just in case. This is not a 100%
-	# solution.
-	if [ -z "${JOB_ID}" ]
+	if [ ! -f "${OUT_FILE}" ]
 	then
-		die "Failed to generate mergetime script for ${VAR}"
+		# Create output directory if it doesn't already exist.
+		mkdir -p "$(dirname "${OUT_FILE}")"
+
+		# Submit the mergetime job with a dependency on all previous jobs.
+		JOB_ID="$(generate_mergetime_script "${WORK_DIR}" "${OUT_FILE}" "${JOB_NAME}" "${DEPS}")"
+
+		# Manually check for subshell failure...just in case. This is not a 100%
+		# solution.
+		if [ -z "${JOB_ID}" ]
+		then
+			die "Failed to generate mergetime script for ${VAR}"
+		fi
 	fi
 
 	# Now we generate a job which rechunks the file, reorders dimensions, etc.
