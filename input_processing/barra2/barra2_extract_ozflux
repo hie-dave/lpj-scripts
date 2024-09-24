@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+#PBS -l ncpus=1
+#PBS -l walltime=06:00:00
+#PBS -l mem=4GB
+#PBS -q normal
+#PBS -l wd
+#PBS -j oe
+#PBS -m abe
+#PBS -M d.holzworth@westernsydney.edu.au
+#PBS -W umask=0022
+#PBS -l storage=scratch/pt17+scratch/hw83
+#PBS -N barra2_extract_ozflux
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+  echo "Running in debug mode. Set DEBUG to 0 to disable."
+  set -x
+fi
+
+GRIDLIST="/home/590/dh7190/code/lpj-guess/scripts/othersites.grid"
+OUT_DIR=/scratch/hw83/dh7190/barra2/ozflux
+IN_DIR=/scratch/hw83/dh7190/barra2/mergetime
+
+module purge
+module load cdo nco python3/3.12.1 netcdf
+
+# Create output directory if it doesn't already exist.
+mkdir -p "${OUT_DIR}"
+
+export PATH="${PATH}:/home/590/dh7190/code/gadi-scripts"
+
+# Number of sites.
+NSITE=`wc -l "${GRIDLIST}" | cut -d' ' -f1`
+
+# Current iteration.
+ITER=0
+
+# This function writes a progress report to the screen.
+function progress_reporting() {
+	local PROGRESS="$(echo "100.0 * ${ITER} / ${NSITE}" | bc -l)"
+	printf "Working: %.2f%%\r" ${PROGRESS}
+}
+
+while read LINE
+do
+	if [ -z "${LINE}" ]; then continue; fi
+
+	LON="$(echo "${LINE}" | cut -d' ' -f1)"
+	LAT="$(echo "${LINE}" | cut -d' ' -f2)"
+	SITE="$(echo "${LINE}" | cut -d' ' -f3)"
+
+	echo "Processing site ${SITE} (${LON}, ${LAT})..."
+	progress_reporting
+
+	SITE_DIR="${OUT_DIR}/working/${SITE}"
+	mkdir -p "${SITE_DIR}"
+
+	# Extract data for this site for each variable.
+	for IN_FILE in "${IN_DIR}"/*.nc
+	do
+		FILENAME="$(basename "${IN_FILE}")"
+		OUT_FILE="${SITE_DIR}/$(basename "${IN_FILE}")"
+
+		# Extract this single grid cell from the input file.
+		ncks -O -d lat,${LAT} -d lon,${LON} "${IN_FILE}" "${OUT_FILE}"
+
+		# Modify the single value in the lat/lon dimensions in this file.
+		ncmc --latitude ${LAT} --longitude ${LON} --file "${OUT_FILE}"
+
+		# Reorder the dimensions - CDO requires time first.
+		ncpdq -O -a time,lat,lon "${OUT_FILE}" "${OUT_FILE}"
+	done
+
+	# Units conversions.
+	PR_FILE="${SITE_DIR}"/pr_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_1hr_197901-202308.nc
+	TAS_FILE="${SITE_DIR}"/tas_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_1hr_197901-202308.nc
+
+	# TAS_UNITS="$(ncdump -sh "${TAS_FILE}" | grep tas:units | cut -d= -f2 | sed 's/;//g' | xargs)"
+	# PR_UNITS="$(ncdump -sh "${PR_FILE}" | grep pr:units | cut -d= -f2 | sed 's/;//g' | xargs)"
+
+	cdo -s -L -O -z zip_5 expr,"tas=tas-273.15" "${TAS_FILE}" "${TAS_FILE}2"
+	cdo -s -L -O -z zip_5 expr,"pr=pr*3600" "${PR_FILE}" "${PR_FILE}2"
+
+	mv "${TAS_FILE}2" "${TAS_FILE}"
+	mv "${PR_FILE}2" "${PR_FILE}"
+
+	ncatted -O -a units,tas,o,c,degC "${TAS_FILE}" "${TAS_FILE}"
+	ncatted -O -a units,pr,o,c,"kg m-2" "${PR_FILE}" "${PR_FILE}"
+
+	OUT_FILE="${OUT_DIR}/${SITE}.nc"
+
+	# Merge files for each variable into a single file for this site.
+	cdo -s -O -z zip_5 merge "${SITE_DIR}"/*.nc "${OUT_FILE}"
+
+	# Rename variables.
+	ncrename -O \
+	-v lon,longitude -d lon,longitude \
+	-v lat,latitude -d lat,latitude \
+	-v tas,tav \
+	-v rsds,insol \
+	-v pr,prec \
+	-v sfcWind,wind \
+	"${OUT_FILE}" "${OUT_FILE}"
+
+	# For some reason, renaming the variables sets the coordinates to 0.
+	# We can workaround this by manually setting them (with ncmc).
+	ncmc --latitude ${LAT} --longitude ${LON} --file "${OUT_FILE}"
+
+	# Reorder dimensions within this file.
+	ncpdq -O -a latitude,longitude,time --cnk_dmn latitude,1 --cnk_dmn longitude,1 --cnk_dmn time,8760 -L5 "${OUT_FILE}" "${OUT_FILE}"
+
+	# Progress reporting.
+	ITER=$((ITER + 1))
+	progress_reporting
+done <"${GRIDLIST}"
+
+echo
+echo "Success!"

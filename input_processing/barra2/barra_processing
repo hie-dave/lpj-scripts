@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+
+# BARRA2 processing script (v2).
+# The aim here is to create lots of small jobs in PBS, rather than creating
+# a couple of large jobs which either timeout or run out of memory.
+
+# Exit immediately if any command fails.
+set -euo pipefail
+
+module purge
+module load pbs netcdf cdo nco moreutils python3
+
+# Path to the BARRA2 dataset on gadi..
+BARRA2_IN="/g/data/ob53/BARRA2/output/reanalysis/AUS-11/BOM/ERA5"
+
+# Output path.
+BARRA2_OUT="/scratch/hw83/dh7190/barra2"
+
+# Could be 1hr, 3hr, day, fx, mon
+TIMESTEP="1hr"
+
+# Directory in which log files will be written.
+LOG_DIR="${BARRA2_OUT}/logs"
+
+# Directory in which wrapper scripts will be written.
+SCRIPT_DIR="${BARRA2_OUT}/scripts"
+
+# Job status updates for the mergetime job will be sent to this email address.
+EMAIL="d.holzworth@westernsydney.edu.au"
+
+# Variables to be processed.
+VARS="sfcWind
+tas
+tasmax
+tasmin"
+
+# This is only used for display (ie logging) purposes.
+DATASET_NAME="BARRA2"
+
+# Version of data to be processed.
+VERSION="v20231001"
+
+# Storage devices required by PBS.
+STORAGE=gdata/ob53+gdata/vl59+gdata/pr09
+
+# todo: make this a CLI argument
+SCENARIO=historical
+
+# Create directory tree.
+mkdir -p "${LOG_DIR}"
+mkdir -p "${SCRIPT_DIR}"
+
+# Arguments which will be common to all invocations of pbs_wrap.
+PBS_ARGS="-l ${LOG_DIR} -s ${STORAGE}"
+
+mergetime() {
+    VAR="${1}"
+    OUT_FILE="${2}"
+
+    JOB_NAME="mergetime_${VAR}"
+    SCRIPT="${SCRIPT_DIR}/${JOB_NAME}"
+    RESOURCES="-c 1 -m 32 -q hugemem -w 48:00:00"
+    MERGE_ARGS="${RESOURCES} ${PBS_ARGS} -o ${SCRIPT} -n ${JOB_NAME} -e ${EMAIL}"
+
+    # Directory into which output files will be saved.
+    IN_DIR="/g/data/vl59/barra2/processed/${VAR}"
+    
+    rm -f "${OUT_FILE}"
+    pbs_wrap ${MERGE_ARGS} -- cdo -O mergetime "${IN_DIR}"/*.nc "${OUT_FILE}"
+    qsub "${SCRIPT}"
+}
+
+reorder() {
+    IN_FILE="${1}"
+    OUT_FILE="${2}"
+    DEPENDENCIES="${3}"
+
+    FILE_NAME="$(basename "${IN_FILE}")"
+    VAR="$(echo "${FILE_NAME}" | cut -d_ -f1)"
+
+    JOB_NAME="reorder_${VAR}"
+    SCRIPT="${SCRIPT_DIR}/${JOB_NAME}"
+
+    RESOURCES="-c 1 -m 128 -q hugemem -w 48:00:00"
+    ARGS="${RESOURCES} ${PBS_ARGS} -o ${SCRIPT} -n ${JOB_NAME} -e ${EMAIL} -d ${DEPENDENCIES}"
+
+    rm -f "${OUT_FILE}"
+    pbs_wrap ${ARGS} -- ncpdq -O -a lon,lat,time "${IN_FILE}" "${OUT_FILE}"
+    qsub "${SCRIPT}"
+}
+
+rechunk() {
+    IN_FILE="${1}"
+    OUT_FILE="${2}"
+    DEPENDENCIES="${3}"
+
+    FILE_NAME="$(basename "${IN_FILE}")"
+    VAR="$(echo "${FILE_NAME}" | cut -d_ -f1)"
+
+    JOB_NAME="rechunk_${VAR}"
+    SCRIPT="${SCRIPT_DIR}/${JOB_NAME}"
+
+    RESOURCES="-c 1 -m 128 -q hugemem -w 48:00:00"
+    ARGS="${RESOURCES} ${PBS_ARGS} -o ${SCRIPT} -n ${JOB_NAME} -e ${EMAIL} -d ${DEPENDENCIES}"
+
+    rm -f "${OUT_FILE}"
+    pbs_wrap ${ARGS} -- nccopy -c lon/1,lat/1,time/365 "${IN_FILE}" "${OUT_FILE}"
+    qsub "${SCRIPT}"
+}
+
+for VAR in ${VARS}
+do
+    OUT_FILE="${BARRA2_OUT}/processed/${VAR}_AUS-11_ERA5_${SCENARIO}_hres_BOM_BARRA-R2_v1_${TIMESTEP}.nc"
+    MERGE_ID="$(mergetime "${VAR}" "${OUT_FILE}")"
+
+    REORDER_OUT="${OUT_FILE/.nc/_reorder.nc}"
+    REORDER_ID="$(reorder "${OUT_FILE}" "${REORDER_OUT}" "${MERGE_ID}")"
+
+    RECHUNK_OUT="${REORDER_OUT/.nc/_rechunk.nc}"
+    RECHUNK_ID="$(rechunk "${REORDER_OUT}" "${RECHUNK_OUT}" "${REORDER_ID}")"
+done

@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+#
+# This script generates a self-submitting PBS job which will process BARPA data
+# into a format ideally-suited for use with LPJ-Guess.
+#
+# This script takes no positional arguments, and most parameters are located in
+# barpa_config.
+#
+
+# Exit immediately if:
+# - Any command fails
+# - Any part of a pipeline fails
+# - We reference any unbound variables
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+    echo "Running in debug mode. Set DEBUG to 0 to disable."
+    set -x
+fi
+
+# Get directory containing this script.
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+
+source "${DIR}/barpa_config"
+source "${DIR}/barpa_helpers"
+
+# The models to be processed.
+MODELS="ACCESS-CM2 ACCESS-ESM1-5 CESM2 CMCC-ESM2 EC-Earth3 ERA5 MPI-ESM1-2-HR NorESM2-MM"
+
+# The scenarios to be processed.
+SCENARIOS="historical ssp126 ssp370"
+
+for MODEL in ${MODELS}
+do
+    for SCENARIO in ${SCENARIOS}
+    do
+        D="/g/data/py18/BARPA/output/CMIP6/DD/AUS-15/BOM/${MODEL}/${SCENARIO}"
+        if [ ! -d "${D}" ]
+        then
+            echo "Warning: model/scenario combination not found: ${MODEL}/${SCENARIO}: ${D}"
+            continue
+        fi
+
+        JOB_NAME="barpa_submit_${MODEL}_${SCENARIO}"
+        SCRIPT="${SCRIPT_DIR}/${JOB_NAME}"
+        LOG_FILE="${LOG_DIR}/${JOB_NAME}"
+
+        cat <<EOF >"${SCRIPT}"
+#!/usr/bin/env bash
+#PBS -l ncpus=1
+#PBS -l walltime=01:00:00
+#PBS -l mem=4GB
+#PBS -q normal
+#PBS -l wd
+#PBS -j oe
+#PBS -m a
+#PBS -M ${PBS_EMAIL}
+#PBS -P ${PBS_PROJECT}
+#PBS -p ${PBS_PRIORITY}
+#PBS -l storage=${PBS_STORAGE}
+#PBS -N ${JOB_NAME}
+#PBS -o ${LOG_DIR}/${JOB_NAME}.log
+
+set -euo pipefail
+
+module purge
+module load netcdf cdo nco
+
+# Ensure that any variable assignments are stored in this process' environment,
+# so that they are inherited by child processes.
+set -a
+
+source "${DIR}/barpa_config"
+source "${DIR}/barpa_helpers"
+
+# Disable set -a behaviour.
+set +a
+
+export DRIVING_EXPERIMENT_ID="${SCENARIO}"
+export DRIVING_SOURCE_ID="${MODEL}"
+
+JOB_ID="\$("${DIR}/barpa_processing")"
+EOF
+
+        # This job will run the job from the previous script after it finishes.
+        if [ -n "${SCRIPT_PREV:-}" ]
+        then
+            cat <<EOF >>"${SCRIPT}"
+DEPEND=
+if [ -n "\${JOB_ID}" ]
+then
+    DEPEND="-W depend=afterok:\${JOB_ID}"
+fi
+qsub \${DEPEND} ${SCRIPT_PREV}
+EOF
+        fi
+        SCRIPT_PREV="${SCRIPT}"
+
+        chmod u+x "${SCRIPT}"
+    done
+done
+
+# All scripts have been written. Now we submit the last script, which will,
+# upon successful completion, submit the script before it, and so on.
+submit "${SCRIPT}"

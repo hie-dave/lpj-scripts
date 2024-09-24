@@ -1,0 +1,623 @@
+# Helper functions for BARPA processing scripts. This file should be sourced.
+
+die() { echo "$*" >&2; exit 1; }
+
+BARPA_BASE_PATH=/g/data/py18
+
+# BARPA directory structure:
+#
+#    /g/data/py18
+#    |-- <product>
+#      |-- <nature of data> or <project_id>
+#         |-- <MIP-era>
+#              |-- <activity_id>
+#                   |-- <domain_id>
+#                        |-- <RCM-institution_id>
+#                             |-- <driving_source_id>
+#                                  |-- <driving_experiment_id>
+#                                       |-- <driving_variant_label>
+#                                            |-- <source_id>
+#                                                 |-- <version_realisation>
+#                                                      |-- <freq>
+#                                                           |-- <variable_id>
+#                                                               |-- <version>
+#
+
+#
+# Get the driving variant label for the given config defined by the variables
+# set in barpa_config.
+#
+# Requires no positional arguments, but requires all variables set by
+# barpa_config.
+#
+get_driving_variant_label() {
+	D="${BARPA_BASE_PATH}/${PRODUCT}/${PROJECT}/${MIP_ERA}/${ACTIVITY_ID}"
+	D="${D}/${DOMAIN_ID}/${RCM_INSTITUTION}/${DRIVING_SOURCE_ID}"
+	D="${D}/${DRIVING_EXPERIMENT_ID}"
+
+	for SUBDIR in "${D}"/*
+	do
+		if [ -d "${SUBDIR}" ]
+		then
+			echo "$(basename "${SUBDIR}")"
+			return
+		fi
+	done
+	die "Unknown driving variant label for ${DRIVING_SOURCE_ID} ${DRIVING_EXPERIMENT_ID}: ${D}"
+}
+
+#
+# Enumerate all input files for the given configuration.
+#
+# Requires 1 positional argument:
+#
+# 1. The name of the variable.
+#
+# This uses all of the variables set in barpa_config, and, additionally, the
+# following variables: VARIABLE_ID
+#
+enumerate_files() {
+	VAR="${1}"
+	BPATH="${BARPA_BASE_PATH}/${PRODUCT}/${PROJECT}/${MIP_ERA}/${ACTIVITY_ID}"
+	BPATH="${BPATH}/${DOMAIN_ID}/${RCM_INSTITUTION}/${DRIVING_SOURCE_ID}"
+	BPATH="${BPATH}/${DRIVING_EXPERIMENT_ID}/$(get_driving_variant_label)"
+	BPATH="${BPATH}/${SOURCE_ID}/${VERSION_REALISATION}/${FREQ}/${VAR}"
+	BPATH="${BPATH}/${VERSION}"
+	echo "${BPATH}"/*.nc
+}
+
+#
+# Get the output directory corresponding to the current configuration defined
+# in barpa_config.
+#
+# Requires no positional arguments, but all variables set by the barpa_config
+# script must be set.
+#
+get_mergetime_dir() {
+	echo "$(get_work_dir)/mergetime"
+}
+
+#
+# Get the output directory corresponding to the current configuration defined
+# in barpa_config.
+#
+# Requires no positional arguments, but all variables set by the barpa_config
+# script must be set.
+#
+get_out_dir() {
+	echo "${BARPA_DIR}/${DRIVING_SOURCE_ID}/${DRIVING_EXPERIMENT_ID}"
+}
+
+#
+# Get the directory into which all intermediate files for the current
+# model/scenario will be written.
+#
+# Requires no positional arguments, but all variables set by the barpa_config
+# script must be set.
+#
+get_work_dir() {
+	echo "$(get_out_dir)/working"
+}
+
+#
+# Get the directory into which all input files for the specified variable will
+# be unpacked.
+#
+# Requires 1 argument:
+#
+# 1. The name of the variable.
+#
+# This also requires all variables set by the barpa_config script.
+#
+get_unpack_dir() {
+	VAR="${1}"
+	echo "$(get_work_dir)/unpacked/${VAR}"
+}
+
+#
+# Get a suitable filename for the file output by the cdo mergetime command based
+# on the current configuration defined by the environment variables set by
+# barpa_config.
+#
+# The output of this function is an absolute path defined by the variables in
+# barpa_config.
+#
+get_rechunk_dir() {
+	echo "$(get_out_dir)/output"
+}
+
+#
+# Get a filename for a specific start/end date in the BARPA format.
+#
+# Requires 3 arguments:
+# 1. Variable name.
+# 2. Start date in YYYYMM format
+# 3. End   date in YYYYMM format
+#
+# This also uses all of the variables set in barpa_config.
+#
+get_barpa_file_name() {
+	VAR="${1}"
+	DATE_START="${2}"
+	DATE_END="${3}"
+
+	# tas_AUS-15_ACCESS-ESM1-5_historical_r6i1p1f1_BOM_BARPA-R_v1-r1_1hr_197901-197912.nc
+	echo "${VAR}_${DOMAIN_ID}_${DRIVING_SOURCE_ID}_${DRIVING_EXPERIMENT_ID}_$(get_driving_variant_label)_${RCM_INSTITUTION}_${SOURCE_ID}_${VERSION_REALISATION}_${FREQ}_${DATE_START}-${DATE_END}.nc"
+}
+
+#
+# Get a suitable filename for the file output by the cdo mergetime command based
+# on the current configuration defined by the environment variables set by
+# barpa_config.
+#
+# The output of this function is an absolute path defined by the variables in
+# barpa_config.
+#
+get_mergetime_file_name() {
+	START_DATE="$(get_timeseries_start "${VARIABLE_ID}")"
+	END_DATE="$(get_timeseries_end "${VARIABLE_ID}")"
+	echo "$(get_mergetime_dir)/$(get_barpa_file_name "${VARIABLE_ID}" "${START_DATE}" "${END_DATE}")"
+}
+
+# Return the smaller of two numbers. Requires 2 arguments (the two numbers).
+min() {
+	X="${1:-}"
+	Y="${2:-}"
+
+	if [ -z "${X}" -a -z "${Y}" ]; then die "X and Y are both zero"; fi
+
+	if [ -z "${X}" ]; then echo "${Y}"; return; fi
+	if [ -z "${Y}" ]; then echo "${X}"; return; fi
+	echo "$((X < Y ? X : Y))"
+}
+
+# Return the smaller of two numbers. Requires 2 arguments (the two numbers).
+max() {
+	X="${1:-}"
+	Y="${2:-}"
+
+	if [ -z "${X}" -a -z "${Y}" ]; then die "X and Y are both zero"; fi
+
+	if [ -z "${X}" ]; then echo "${Y}"; return; fi
+	if [ -z "${Y}" ]; then echo "${X}"; return; fi
+	echo "$((X > Y ? X : Y))"
+}
+
+#
+# Get the start date of the given input file, in YYYYMM format, by parsing the
+# filename with a regular expression. Requires one argument:
+#
+# 1. The file name.
+#
+get_start_date() {
+	FILE_NAME="$(basename "${1}")"
+	echo "${FILE_NAME}" | sed -r 's/.*([0-9]{6})-[0-9]{6}\.nc/\1/g'
+}
+
+#
+# Get the end date of the given input file, in YYYYMM format, by parsing the
+# filename with a regular expression. Requires one argument:
+#
+# 1. The file name.
+#
+get_end_date() {
+	FILE_NAME="$(basename "${1}")"
+	echo "${FILE_NAME}" | sed -r 's/.*([0-9]{6})\.nc/\1/g'
+}
+
+#
+# Get the start date of the entire timeseries for the specified dataset, in
+# YYYYMM format.
+#
+# Requires 1 positional argument:
+#
+# 1. Variable name
+#
+# This requires all variables set by barpa_config.
+#
+get_timeseries_start() {
+	VAR="${1}"
+	START_DATE=""
+	for FILE in $(enumerate_files "${VAR}")
+	do
+		# Get the start date and end date of this input file.
+		FILE_NAME="$(basename "${FILE}")"
+		START_DATE="$(min "${START_DATE}" "$(get_start_date "${FILE_NAME}")")"
+	done
+	echo "${START_DATE}"
+}
+
+#
+# Get the end date of the entire timeseries for the specified dataset, in
+# YYYYMM format.
+#
+# Requires 1 positional argument:
+#
+# 1. Variable name
+#
+# This requires all variables set by barpa_config.
+#
+get_timeseries_end() {
+	VAR="${1}"
+	END_DATE=""
+	for FILE in $(enumerate_files "${VAR}")
+	do
+		FILE_NAME="$(basename "${FILE}")"
+		END_DATE="$(max "${END_DATE}" "$(get_end_date "${FILE_NAME}")")"
+	done
+	echo "${END_DATE}"
+}
+
+# Submit a script via qsub iff DRY_RUN is not 1. Requires 1 argument (the
+# script).
+submit() {
+	if [ ${DRY_RUN} = 1 ]
+	then
+		echo 1
+	else
+		qsub "${1}"
+	fi
+}
+
+#
+# Append the given Job ID to an existing list of job IDs, using a colon as a
+# delimiter. If the existing list of dependencies is empty, the output will
+# simply be the new job ID.
+#
+# Requires two positional arguments:
+# 1. The existing colon-delimited dependency list.
+# 2. The new job ID.
+#
+append_deps() {
+	DEPS="${1}"
+	NEW="${2}"
+	if [ -z "${DEPS}" ]
+	then
+		# DEPS is empty string. Emit only the new dependency.
+		echo "${NEW}"
+	elif [ -z "${NEW}" ]
+	then
+		# NEW is empty, but DEPS is nonempty.
+		echo "${DEPS}"
+	else
+		# NEW and DEPS both nonempty.
+		echo "${DEPS}:${NEW}"
+	fi
+}
+
+#
+# This function generates (and calls submit on) scripts which unpack all .nc
+# files in the specified input directory in parallel.
+#
+# This function accepts two positional arguments, both of which are optional:
+#
+# 1. CDO operators to perform any required unit conversions. This must be
+#    specified without the leading-hyphen syntax.
+# 2. Units of the variable in the output file. If set, an ncatted command will
+#    be run to modify the .nc files' metadata accordingly.
+#
+# This function also requires all other variables defined in barpa_config.
+#
+# This function will generate one PBS job for each input file, and submit them
+# all to run in parallel, and will print a colon-separated list of the submitted
+# jobs' IDs.
+#
+# Each model/scenario combination contains ~55 input files per variable, and
+# the maximum number of queued jobs is 1000 per user, so this approach seems
+# reasonable.
+#
+generate_unpack_scripts() {
+
+	# WARNING: this function is not used for procsesing of VPD data; therefore
+	# any changes to this function may necessitate an equivalent change to
+	# the barpa_processing_vpd script.
+
+	CDO_OPS="${1:-}"
+	NEW_UNITS="${2:-}"
+
+	# The directory into which all unpacked files will be saved.
+	UNPACK_DIR="$(get_unpack_dir "${VARIABLE_ID}")"
+	mkdir -p "${UNPACK_DIR}"
+
+	UNPACK_OP="unpack"
+	if [ -n "${CDO_OPS}" ]; then UNPACK_OP="-${UNPACK_OP}"; fi
+
+	# First we need to unpack all input files and perform a units conversion.
+	# The unpacking and units conversion of each input file will occur in its
+	# own separate PBS job, which will all run in parallel. There are about 55
+	# input files per variable, so this shouldn't be an issue (max jobs in queue
+	# per user is 1000).
+	for INPUT_FILE in $(enumerate_files "${VARIABLE_ID}")
+	do
+		if [ ! -f "${INPUT_FILE}" ]
+		then
+			die "Input file does not exist: ${INPUT_FILE}"
+		fi
+
+		# File name (without path) of this input file.
+		FILE_NAME="$(basename "${INPUT_FILE}")"
+
+		# Full path to the output file corresponding to this input file.
+		OUT_FILE="${UNPACK_DIR}/${FILE_NAME}"
+
+		if [ -f "${OUT_FILE}" ]; then continue; fi
+
+		# Name of the processing job for this particular input file.
+		JOB_NAME="barpa_unpack_${FILE_NAME/.nc/}"
+
+		# Processing script for this job.
+		SCRIPT_FILE="${SCRIPT_DIR}/${JOB_NAME}"
+
+		# Log file for this job.
+		LOG_FILE="${LOG_DIR}/${JOB_NAME}.log"
+
+		# Generate script for this file.
+		cat <<EOF > "${SCRIPT_FILE}"
+#!/usr/bin/env bash
+#PBS -l ncpus=1
+#PBS -l walltime=${PBS_WALLTIME_UNPACK}
+#PBS -l mem=4GB
+#PBS -q normal
+#PBS -l wd
+#PBS -j oe
+#PBS -m a
+#PBS -M ${PBS_EMAIL}
+#PBS -P ${PBS_PROJECT}
+#PBS -p ${PBS_PRIORITY}
+#PBS -l storage=${PBS_STORAGE}
+#PBS -N ${JOB_NAME}
+#PBS -o ${LOG_FILE}
+
+set -euo pipefail
+
+module purge
+module load netcdf cdo nco
+
+IN_FILE="${INPUT_FILE}"
+OUT_FILE="${OUT_FILE}"
+EOF
+
+		REMAP_OP=""
+		if [ -n "${GRID_FILE}" ]
+		then
+			# User has provided a grid file. Therefore we add a conservative
+			# remapping operation to the cdo command.
+			REMAP_OP="-remapcon,\"\${GRID_FILE}\""
+			echo "GRID_FILE=\"${GRID_FILE}\"" >>"${SCRIPT_FILE}"
+		fi
+
+			cat <<EOF >>"${SCRIPT_FILE}"
+
+cdo -L -O -v ${CDO_OPS} ${UNPACK_OP} ${REMAP_OP} "\${IN_FILE}" "\${OUT_FILE}"
+
+EOF
+
+		if [ -n "${NEW_UNITS}" ]
+		then
+			# User has requested a units conversion.
+			# Emit ncatted command to modify units attribute.
+			cat <<EOF >>"${SCRIPT_FILE}"
+ncatted -O -a "units,${VARIABLE_ID},o,c,${NEW_UNITS}" "\${OUT_FILE}" "\${OUT_FILE}"
+EOF
+		fi
+		chmod u+x "${SCRIPT_FILE}"
+		JOB_ID="$(submit "${SCRIPT_FILE}")"
+
+		# Append Job ID to dependency list.
+		DEPS="$(append_deps "${DEPS:-}" "${JOB_ID}")"
+	done # End of loop generating unpack jobs
+	echo "${DEPS}"
+}
+
+get_dependency_str() {
+	DEPS="${1}"
+	if [ -z "${DEPS}" ]
+	then
+		echo ""
+	else
+		echo "#PBS -W depend=afterok:${DEPS}"
+	fi
+}
+
+#
+# This function generates (and calls submit on) a script which does a cdo
+# mergetime operation on all .nc files in the specified input directory.
+#
+# Requires 4 arguments:
+#
+# 1. Input directory path.
+# 2. Output file name and path.
+# 3. Job name.
+# 4. Dependencies specified as a colon-delimited list of PBS job IDs.
+#
+# This function also requires some other variables defined in barpa_config.
+#
+generate_mergetime_script() {
+	IN_DIR="${1}"
+	OUT_FILE="${2}"
+	JOB_NAME="${3}"
+	DEPS="${4:-}"
+
+	SCRIPT_FILE="${SCRIPT_DIR}/${JOB_NAME}"
+	DEPEND="$(get_dependency_str "${DEPS}")"
+
+	cat <<EOF >"${SCRIPT_FILE}"
+#!/usr/bin/env bash
+#PBS -l ncpus=1
+#PBS -l walltime=${PBS_WALLTIME_MERGETIME}
+#PBS -l mem=${PBS_MEMORY_MERGETIME}GB
+#PBS -q normal
+#PBS -l wd
+#PBS -j oe
+#PBS -m a
+#PBS -M ${PBS_EMAIL}
+#PBS -P ${PBS_PROJECT}
+#PBS -p ${PBS_PRIORITY}
+#PBS -l storage=${PBS_STORAGE}
+#PBS -N ${JOB_NAME}
+#PBS -o ${LOG_DIR}/${JOB_NAME}.log
+${DEPEND}
+
+set -euo pipefail
+
+module purge
+module load netcdf cdo nco
+
+IN_DIR="${IN_DIR}"
+LOG_DIR="${LOG_DIR}"
+
+IN_FILES="\${IN_DIR}"/*.nc
+OUT_FILE="${OUT_FILE}"
+PROGRESS_LOG="\${LOG_DIR}/${JOB_NAME}.progress.log"
+
+cdo -O -L -v mergetime "\${IN_DIR}"/*.nc "\${OUT_FILE}" | tee "\${PROGRESS_LOG}"
+
+EOF
+	chmod u+x "${SCRIPT_FILE}"
+	submit "${SCRIPT_FILE}"
+}
+
+#
+# This function generates (and calls submit on) a script which does a cdo
+# mergetime operation on all .nc files in the specified input directory.
+#
+# Requires 4 arguments:
+#
+# 1. Input file path.
+# 2. Output file path.
+# 3. Job name.
+# 4. Dependencies specified as a colon-delimited list of PBS job IDs.
+#
+# This function also requires some other variables defined in barpa_config.
+#
+generate_rechunk_script() {
+	IN_FILE="${1}"
+	OUT_FILE="${2}"
+	JOB_NAME="${3}"
+	DEPS="${4:-}"
+	DEPEND="$(get_dependency_str "${DEPS}")"
+
+	SCRIPT_FILE="${SCRIPT_DIR}/${JOB_NAME}"
+	cat <<EOF >"${SCRIPT_FILE}"
+#!/usr/bin/env bash
+#PBS -l ncpus=1
+#PBS -l walltime=${PBS_WALLTIME_RECHUNK}
+#PBS -l mem=${PBS_MEMORY_RECHUNK}GB
+#PBS -q normal
+#PBS -l wd
+#PBS -j oe
+#PBS -m a
+#PBS -M ${PBS_EMAIL}
+#PBS -P ${PBS_PROJECT}
+#PBS -p ${PBS_PRIORITY}
+#PBS -l storage=${PBS_STORAGE}
+#PBS -N ${JOB_NAME}
+#PBS -o ${LOG_DIR}/${JOB_NAME}.log
+${DEPEND}
+
+set -euo pipefail
+
+module purge
+module load netcdf cdo nco
+
+IN_FILE="${IN_FILE}"
+OUT_FILE="${OUT_FILE}"
+
+ncpdq -O -a lat,lon,time --cnk_dmn time,${TIME_CHUNK_SIZE} --cnk_dmn lat,1 --cnk_dmn lon,1 -L${DEFLATE_LEVEL} "\${IN_FILE}" "\${OUT_FILE}"
+
+EOF
+	chmod u+x "${SCRIPT_FILE}"
+	submit "${SCRIPT_FILE}"
+}
+
+#
+# Perform all BARPA processing for the specified variable.
+#
+# This script will:
+#
+# - Unpack all input files
+# - Optionally regrid all input files if GRID_FILE variable is set. If set, this
+#   variable must contain the path to a valid regridding file for a cdo remapcon
+#   command
+# - Optionally perform units conversions
+# - Merge all input files into a single timeseries
+# - Reorder dimensions, modify chunking, and compress the output file such that
+#   it is optimised for use with LPJ-Guess
+#
+# Requires 1 positional argument, in addition to two optional arguments.
+#
+# 1. Variable ID (e.g. "tas")
+# 2. (Optional) units conversion operator for cdo, without leading hypen. E.g.
+#    "subc,273.15"
+# 3. (Optional) new unit for the output file. If set, the output files' units
+#    attribute will be set to this value.
+#
+# Furthermore, all variables set by barpa_config are also required.
+#
+barpa_process_var() {
+
+	VAR="${1}"
+	UNIT_CONVERSION="${2:-}"
+	NEW_UNITS="${3:-}"
+
+	# VARIABLE_ID is required by the barpa_helpers functions.
+	VARIABLE_ID="${VAR}"
+
+	ULTIMATE_OUT_FILE="$(get_mergetime_file_name)"
+	ULTIMATE_OUT_FILE="$(get_rechunk_dir)/$(basename "${ULTIMATE_OUT_FILE}")"
+	if [ -f "${ULTIMATE_OUT_FILE}" ]
+	then
+		return 0
+	fi
+
+	# Generate scripts which unpack, convert units (and, depending on config,
+	# remap) all input files for this variable.
+
+	DEPS="$(generate_unpack_scripts "${UNIT_CONVERSION}" "${NEW_UNITS}")"
+
+	# The interaction between nested subshells and set -e is convoluted and not
+	# to be relied upon. We need to manually verify here that the script
+	# generation was successful, and abort now if it failed.
+	# if [ -z "${DEPS}" ]
+	# then
+	# 	die "Failed to generate unpack scripts for ${VAR}"
+	# fi
+
+	# Now we generate a job which runs mergetime on all of the unpacked files.
+	# This job will not run until all previous jobs have finished successfully.
+
+	WORK_DIR="$(get_unpack_dir "${VAR}")"
+	OUT_FILE="$(get_mergetime_file_name)"
+	FILE_NAME="$(basename "${OUT_FILE}")"
+	JOB_NAME="barpa_mergetime_$(basename "${FILE_NAME/.nc/}")"
+
+	if [ ! -f "${OUT_FILE}" ]
+	then
+		# Create output directory if it doesn't already exist.
+		mkdir -p "$(dirname "${OUT_FILE}")"
+
+		# Submit the mergetime job with a dependency on all previous jobs.
+		JOB_ID="$(generate_mergetime_script "${WORK_DIR}" "${OUT_FILE}" "${JOB_NAME}" "${DEPS}")"
+
+		# Manually check for subshell failure...just in case. This is not a 100%
+		# solution.
+		if [ -z "${JOB_ID}" ]
+		then
+			die "Failed to generate mergetime script for ${VAR}"
+		fi
+	fi
+
+	# Now we generate a job which rechunks the file, reorders dimensions, etc.
+	# This job will not run until the mergetime job finishes successfully.
+
+	# The input file for this job is the output file for the previous job.
+	IN_FILE="${OUT_FILE}"
+	OUT_FILE="$(get_rechunk_dir)/$(basename "${IN_FILE}")"
+	JOB_NAME="barpa_rechunk_${FILE_NAME/.nc/}"
+
+	# Create output directory if it doesn't already exist.
+	mkdir -p "$(dirname "${OUT_FILE}")"
+
+	# Submit the rechunk job with a dependency on the mergetime job.
+	generate_rechunk_script "${IN_FILE}" "${OUT_FILE}" "${JOB_NAME}" "${JOB_ID}"
+}

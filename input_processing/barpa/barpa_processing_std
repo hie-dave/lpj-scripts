@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+#
+# BARPA processing script for variables which don't require unit conversions.
+#
+
+# Exit immediately if:
+# - Any command fails
+# - Any part of a pipeline fails
+# - We reference any unbound variables
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+  echo "Running in debug mode. Set DEBUG to 0 to disable."
+  set -x
+fi
+
+# Get directory containing this script.
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+
+source "${DIR}/barpa_config"
+source "${DIR}/barpa_helpers"
+
+# Min/max temperature only required for trunk.
+VARS="huss ps rsds sfcWind"
+
+for VAR in ${VARS}
+do
+	JOB_ID="$(barpa_process_var "${VAR}")"
+	DEPS="$(append_deps "${DEPS:-}" "${JOB_ID}")"
+done
+echo "${DEPS}"

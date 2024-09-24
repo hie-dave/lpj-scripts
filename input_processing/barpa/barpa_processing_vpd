@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+#
+# BARPA processing script for VPD data.
+#
+# This script estimates VPD from temperature, air pressure and specific humidity
+# variables.
+#
+# This script accepts 1 optional CLI argument:
+#
+# 1. Colon-separated list of PBS job IDs. No PBS job from this script will run
+#    until all of these jobs have finished successfully.
+#
+
+# Exit immediately if:
+# - Any command fails
+# - Any part of a pipeline fails
+# - We reference any unbound variables
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+  echo "Running in debug mode. Set DEBUG to 0 to disable."
+  set -x
+fi
+
+# Get directory containing this script.
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+
+# Job dependencies as CLI argument.
+JOB_DEPS=
+if [ -n "${1:-}" ]; then JOB_DEPS="#PBS -W depend=afterok:${1}"; fi
+
+# Source config if this script is run directly.
+source "${DIR}/barpa_config"
+source "${DIR}/barpa_helpers"
+
+# Name of the specific humidity variable.
+VAR_SH=huss
+
+# Name of the air temperature variable.
+VAR_TAS=tas
+
+# Name of the air pressure variable.
+VAR_PS=ps
+
+# Name of the vpd variable (this is an output so can be anything we want).
+VAR_VPD=vpd
+
+# The strategy employed here is to calculate VPD for each individual input file
+# (each of which contains 1 year of data) in parallel. After that, we do the
+# mergetime and rechunking.
+
+TAS_DIR="$(get_unpack_dir "${VAR_TAS}")"
+SH_DIR="$(get_unpack_dir "${VAR_SH}")"
+PS_DIR="$(get_unpack_dir "${VAR_PS}")"
+VPD_DIR="$(get_unpack_dir "${VAR_VPD}")"
+
+# Create VPD working directory if it doesn't already exist.
+mkdir -p "${VPD_DIR}"
+
+# This assumes air temperature in °C, air pressure in Pa, and unitless specific
+# humidity.
+EQN_FILE="${SCRIPT_DIR}/vpd.eqn"
+cat <<EOF >"${EQN_FILE}"
+_esat=0.001*611.2*exp((17.62*${VAR_TAS})/(${VAR_TAS} + 243.04));
+_es=${VAR_SH} * (${VAR_PS} / 1000) / (0.378 * ${VAR_SH} + 0.622);
+${VAR_VPD}=_esat - _es;
+
+EOF
+
+for IN_FILE in $(enumerate_files tas)
+do
+    START_DATE="$(get_start_date "${IN_FILE}")"
+    END_DATE="$(get_end_date "${IN_FILE}")"
+
+    TAS_FILE="$(get_barpa_file_name "${VAR_TAS}" "${START_DATE}" "${END_DATE}")"
+    SH_FILE="$(get_barpa_file_name "${VAR_SH}" "${START_DATE}" "${END_DATE}")"
+    PS_FILE="$(get_barpa_file_name "${VAR_PS}" "${START_DATE}" "${END_DATE}")"
+
+    TAS_FILE="${TAS_DIR}/${TAS_FILE}"
+    SH_FILE="${SH_DIR}/${SH_FILE}"
+    PS_FILE="${PS_DIR}/${PS_FILE}"
+
+    FILE_NAME="$(get_barpa_file_name "${VAR_VPD}" "${START_DATE}" "${END_DATE}")"
+    OUT_FILE="${VPD_DIR}/${FILE_NAME}"
+    JOB_NAME="barpa_estimate_$(basename "${FILE_NAME/.nc/}")"
+    SCRIPT_FILE="${SCRIPT_DIR}/${JOB_NAME}"
+
+    if [ -f "${OUT_FILE}" ]; then continue; fi
+
+	# Generate script for this file.
+	cat <<EOF > "${SCRIPT_FILE}"
+#!/usr/bin/env bash
+#PBS -l ncpus=1
+#PBS -l walltime=${PBS_WALLTIME_VPD}
+#PBS -l mem=4GB
+#PBS -q normal
+#PBS -l wd
+#PBS -j oe
+#PBS -m a
+#PBS -M ${PBS_EMAIL}
+#PBS -P ${PBS_PROJECT}
+#PBS -p ${PBS_PRIORITY}
+#PBS -l storage=${PBS_STORAGE}
+#PBS -N ${JOB_NAME}
+#PBS -o ${LOG_DIR}/${JOB_NAME}.log
+${JOB_DEPS}
+
+set -euo pipefail
+
+module purge
+module load netcdf cdo nco
+
+FILE_TAS="${TAS_FILE}"
+FILE_SH="${SH_FILE}"
+FILE_PS="${PS_FILE}"
+
+EQN_FILE="${EQN_FILE}"
+OUT_FILE="${OUT_FILE}"
+
+# Estimate VPD from air temperature, specific humidity and air pressure.
+cdo -O -L \\
+    -exprf,"\${EQN_FILE}" \\
+    -merge "\${FILE_SH}" "\${FILE_PS}" "\${FILE_TAS}" \\
+    "\${OUT_FILE}"
+
+# Set metadata.
+ncatted -O -a "units,${VAR_VPD},o,c,kPa" "\${OUT_FILE}" "\${OUT_FILE}"
+ncatted -O -a "standard_name,${VAR_VPD},o,c,water_vapor_saturation_deficit_in_air" "\${OUT_FILE}" "\${OUT_FILE}"
+ncatted -O -a "long_name,${VAR_VPD},o,c,Vapour pressure deficit" "\${OUT_FILE}" "\${OUT_FILE}"
+EOF
+    chmod u+x "${SCRIPT_FILE}"
+    JOB_ID="$(submit "${SCRIPT_FILE}")"
+    DEPS="$(append_deps "${DEPS:-}" "${JOB_ID}")"
+done # End of loop generating unpack jobs
+
+# Now we generate a job which runs mergetime on all of the unpacked files.
+# This job will not run until all previous jobs have finished successfully.
+
+# VARIABLE_ID is required by some of the barpa_helpers functions.
+# VARIABLE_ID="${VAR}"
+
+# Generate a filename for the merged file.
+START_DATE="$(get_timeseries_start "${VAR_TAS}")"
+END_DATE="$(get_timeseries_end "${VAR_TAS}")"
+FILE_NAME="$(get_barpa_file_name "${VAR_VPD}" "${START_DATE}" "${END_DATE}")"
+
+JOB_NAME="barpa_mergetime_$(basename "${FILE_NAME/.nc/}")"
+OUT_FILE="$(get_mergetime_dir)/${FILE_NAME}"
+
+JOB_ID=
+if [ ! -f "${OUT_FILE}" ]
+then
+    # Submit the mergetime job with a dependency on all previous jobs.
+    JOB_ID="$(generate_mergetime_script "${VPD_DIR}" "${OUT_FILE}" "${JOB_NAME}" "${DEPS}")"
+fi
+
+# Now we generate a job which rechunks the file, reorders dimensions, etc.
+# This job will not run until the mergetime job finishes successfully.
+
+# The input file for this job is the output file for the previous job.
+IN_FILE="${OUT_FILE}"
+OUT_FILE="$(get_rechunk_dir)/$(basename "${IN_FILE}")"
+JOB_NAME="barpa_rechunk_$(basename "${IN_FILE/.nc/}")"
+
+if [ ! -f "${OUT_FILE}" ]
+then
+    # Submit the rechunk job with a dependency on the mergetime job.
+    generate_rechunk_script "${IN_FILE}" "${OUT_FILE}" "${JOB_NAME}" "${JOB_ID}"
+fi

@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+#
+# BARPA processing script for precipitation data.
+#
+
+# Exit immediately if:
+# - Any command fails
+# - Any part of a pipeline fails
+# - We reference any unbound variables
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+  echo "Running in debug mode. Set DEBUG to 0 to disable."
+  set -x
+fi
+
+# Get directory containing this script.
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+
+source "${DIR}/barpa_config"
+source "${DIR}/barpa_helpers"
+
+VAR="pr"
+
+# Precipitation requires a units conversion from kg m-2 s-1 (ie millimeters per
+# second) to mm. This requires us to multiply by the timestep size in seconds,
+# which is a parameter defined in barpa_config.
+SECONDS_PER_MINUTE=60
+MINUTES_PER_HOUR=60
+SECONDS_PER_HOUR=$((SECONDS_PER_MINUTE * MINUTES_PER_HOUR))
+SECONDS_PER_TIMESTEP=
+if [ ${FREQ} = 1hr ]
+then
+	SECONDS_PER_TIMESTEP=${SECONDS_PER_HOUR}
+elif [ ${FREQ} = 3hr ]
+then
+	SECONDS_PER_TIMESTEP=$((SECONDS_PER_HOUR * 3))
+elif [ ${FREQ} = 6hr ]
+then
+	SECONDS_PER_TIMESTEP=$((SECONDS_PER_HOUR * 6))
+elif [ ${FREQ} = day ]
+then
+	SECONDS_PER_TIMESTEP=$((SECONDS_PER_HOUR * 24))
+else
+	# Monthly input not supported.
+	die "Unknown/unsupported timestep frequency: ${FREQ}. Need to add number of seconds per timestep into barpa_processing_pr in order to convert from kg m-2 s-1 to mm"
+fi
+
+barpa_process_var pr "mulc,${SECONDS_PER_TIMESTEP}" "mm"

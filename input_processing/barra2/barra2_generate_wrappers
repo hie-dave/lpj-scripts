@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+UNPACK_DIR=/g/data/vl59/barra2/unpacked
+BARRA2_DIR=/scratch/hw83/dh7190/barra2
+LOG_DIR="${BARRA2_DIR}/logs"
+SCRIPT_DIR="${BARRA2_DIR}/scripts"
+
+RESHAPE_VARS="pr rsds sfcWind tas"
+
+# Path to the ncreshape script.
+NCRESHAPE=/home/590/dh7190/code/lpj-guess/scripts/ozflux-lpjg/ncreshape
+
+NCPU=560
+MEM_GB=5120
+QUEUE=normalbw
+IOINTENSIVE=20
+CHUNK_SIZE=6
+
+for VAR in ${RESHAPE_VARS}
+do
+    JOB_NAME="reshape_${VAR}"
+    SCRIPT="${SCRIPT_DIR}/${JOB_NAME}"
+    LOG_FILE="${LOG_DIR}/${JOB_NAME}.progress.log"
+    OUT_DIR="${BARRA2_DIR}/reshaped/${VAR}"
+    echo "Writing ${SCRIPT}..."
+    cat <<EOF > "${SCRIPT}"
+#!/usr/bin/env bash
+#PBS -l ncpus=${NCPU}
+#PBS -l mem=${MEM_GB}GB
+#PBS -q ${QUEUE}
+#PBS -l walltime=01:00:00
+#PBS -l storage=scratch/pt17+scratch/hw83+gdata/hw83+gdata/vl59
+#PBS -l wd
+#PBS -l iointensive=${IOINTENSIVE}
+#PBS -j oe
+#PBS -ry
+#PBS -p 0
+#PBS -P pt17
+#PBS -m abe
+#PBS -M d.holzworth@westernsydney.edu.au
+#PBS -o "${LOG_DIR}/${JOB_NAME}.log"
+#PBS -N ${JOB_NAME}
+
+# Exit immediately if any command fails.
+set -euo pipefail
+
+# Load modules.
+module purge
+module load use.own
+module load netcdf cdo nco moreutils python3/3.12.1 openmpi
+
+# Run job.
+mpirun -n ${NCPU} ${NCRESHAPE} -pv4 -o "${OUT_DIR}" --chunk-size 'lat/1,lon/1,time/512' --dimension-order 'lat,lon,time' --compression-level 5 --min-chunk-size ${CHUNK_SIZE} --work-dir /iointensive ${UNPACK_DIR}/${VAR}/${VAR}_*.nc | tee "${LOG_FILE}"
+
+# Success!
+echo "Command finished successfully."
+EOF
+    chmod ug+x "${SCRIPT}"
+
+    # qsub "${SCRIPT}"
+done

@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+#PBS -l ncpus=1
+#PBS -l walltime=42:00:00
+#PBS -l mem=4GB
+#PBS -q normal
+#PBS -l wd
+#PBS -j oe
+#PBS -m abe
+#PBS -M d.holzworth@westernsydney.edu.au
+#PBS -l storage=scratch/pt17
+#PBS -N bom_ozflux
+
+set -euo pipefail
+
+IN_DIR=/scratch/pt17/dh7190/bom_lai/processed
+OUT_DIR=/scratch/pt17/dh7190/bom_lai/ozflux
+
+# Get path to grid file. This file must end with a newline character.
+GRID="/home/590/dh7190/code/lpj-guess/scripts/ozflux.grid"
+GRID="/home/590/dh7190/code/lpj-guess/scripts/cup.grid"
+
+# Not sure what these represent, but they overlap temporally.
+TYPES="per rec tot"
+
+# Create the output directory if it doesn't already exist.
+mkdir -p "${OUT_DIR}"
+
+SEP=" "
+
+while read LINE
+do
+    LON="$(echo "${LINE}" | cut -d$"${SEP}" -f1)"
+    LAT="$(echo "${LINE}" | cut -d$"${SEP}" -f2)"
+    SITE="$(echo "${LINE}" | cut -d$"${SEP}" -f3)"
+    echo "Extracing BOM LAI data for ${SITE} (${LON}, ${LAT})..."
+
+    BOX="${LON},${LON},${LAT},${LAT}"
+
+    for PFX in ${TYPES}
+    do
+        # Extract this gridcell from all files.
+        WORK_DIR="${OUT_DIR}/work/${PFX}"
+        mkdir -p "${WORK_DIR}"
+
+        for FILE in "${IN_DIR}"/lai_${PFX}_*.nc
+        do
+            # cdo sellonlatbox,${BOX} "${FILE}" "${WORK_DIR}/$(basename "${FILE}")"
+            ncks -O -d lon,${LON} -d lat,${LAT} "${FILE}" "${WORK_DIR}/$(basename "${FILE}")"
+        done
+
+        # Merge into a single file in the output directory.
+        mkdir -p "${OUT_DIR}/${PFX}"
+        echo "Merging ${SITE} files..."
+        cdo -O mergetime "${WORK_DIR}"/*.nc "${OUT_DIR}/${PFX}/${SITE}.nc"
+        rm -rf "${WORK_DIR}"
+    done
+done <"${GRID}"
+
+rmdir "${OUT_DIR}/work"

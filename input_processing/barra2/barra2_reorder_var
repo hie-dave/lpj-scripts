@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+VAR="${1}"
+OUT_DIR="${2}"
+
+mkdir -p "${OUT_DIR}"
+
+BARRA2=/g/data/vl59/barra2
+
+IN_DIR="${BARRA2}/unpacked/${VAR}"
+
+LOG_DIR="/scratch/hw83/dh7190/barra2/logs"
+LOG_FILE="${LOG_DIR}/reorder_${VAR}.log"
+
+mkdir -p "${LOG_DIR}"
+rm -f "${LOG_FILE}"
+
+log() {
+    echo "[`date`] $*" | tee -a "${LOG_FILE}"
+}
+
+get_time_str() {
+    TIME="${1}"
+	local HOURS=$(echo "${TIME} / 3600" | bc)
+	local MINUTES=$(echo "(${TIME} - ${HOURS} * 3600) / 60" | bc)
+	local SECONDS=$(echo "${TIME} - ${HOURS} * 3600 - ${MINUTES} * 60" | bc)
+
+	# If input is fractional, then SECONDS is likely to be fractional too.
+	# Therefore we need to use a floating point format string in printf.
+	printf "%02d:%02d:%02.0f" ${HOURS} ${MINUTES} ${SECONDS}
+}
+
+NFILE=$(find "${IN_DIR}" -maxdepth 1 -type f -name '*.nc' 2>/dev/null | wc -l)
+START_TIME=$(date +%s)
+I=0
+for IN_FILE in "${IN_DIR}"/*.nc
+do
+    if [ ${I} -gt 0 ]
+    then
+        PROGRESS=$(echo "1.0 * ${I} / ${NFILE}" | bc -l)
+        PROGRESS_PERCENT="$(echo "100.0 * ${PROGRESS}" | bc -l | xargs printf "%.2f")"
+        ELAPSED_TIME=$(echo "$(date +%s) - ${START_TIME}" | bc -l)
+
+        # Calculate remaining time (in seconds).
+        TOTAL_TIME=$(echo "${ELAPSED_TIME} / ${PROGRESS}" | bc -l)
+        REMAINING_TIME=$(echo "${TOTAL_TIME} - ${ELAPSED_TIME}" | bc -l)
+
+        # Format as hh:mm:ss
+        ELAPSED="$(get_time_str ${ELAPSED_TIME})"
+        REMAINING="$(get_time_str ${REMAINING_TIME})"
+
+        log "Working: ${PROGRESS_PERCENT}%; elapsed: ${ELAPSED}; remaining: ${REMAINING}; file=${IN_FILE}"
+    fi
+
+    OUT_FILE="${OUT_DIR}/$(basename "${IN_FILE}")"
+    ncpdq -O -a lon,lat,time "${IN_FILE}" "${OUT_FILE}"
+
+    I=$((I + 1))
+done

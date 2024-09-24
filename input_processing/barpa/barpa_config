@@ -1,0 +1,181 @@
+################################################################################
+# BARPA configuration variables.                                               #
+################################################################################
+
+if [ -z "${DRIVING_EXPERIMENT_ID:-}" ]
+then
+
+# Prevent this from being sourced multiple times in one environment.
+
+# FILE ORGANISATION
+#
+#    /g/data/py18
+#    |-- <product>
+#      |-- <nature of data> or <project_id>
+#         |-- <MIP-era>
+#              |-- <activity_id>
+#                   |-- <domain_id>
+#                        |-- <RCM-institution_id>
+#                             |-- <driving_source_id>
+#                                  |-- <driving_experiment_id>
+#                                       |-- <driving_variant_label>
+#                                            |-- <source_id>
+#                                                 |-- <version_realisation>
+#                                                      |-- <freq>
+#                                                           |-- <variable_id>
+#                                                               |-- <version>
+#                                                                    |-- <netcdf filename>
+#    where,
+#      <product> is BARPA
+#      <nature of data> or <project_id> is output or CORDEX for data for
+#                CORDEX-CMIP6.
+#      <MIP-era> is the cycle of CMIP defines experiment and data specifications.
+#                We use CMIP6.
+#      <activity_id> is DD for dynamical downscaling
+#      <domain_id> is spatial domain and grid resolution of the data, namely
+#                AUS-15, AUS-04
+#      <RCM-institution> is BOM
+#      <driving_source_id> is the global driving model downscaled by BARPA. The
+#                models selected are:
+#                ERA5, ACCESS-CM2, ACCESS-ESM1-5, NorESM2-MM, EC-Earth3, CESM2,
+#                CMCC-ESM2, MPI-ESM1-2-HR
+#      <driving_experiment_id> is evaluation (for ERA5), historical or ssp126,
+#                ssp370 for CMIP6 experiments.
+#      <driving_variant_label> labels the ensemble member of the CMIP6 simulation
+#                that produced forcing data.
+#      <source_id> is either BARPA-R or BARPA-C, refer to Extended Documentation
+#      <version_realisation> identifies the modelling version (TBC on identifying
+#                data version)
+#      <freq> is the time frequency of the data: 1hr (1-hourly), 3hr, 6hr,
+#                day (daily), mon (monthly), fx
+#      <variable_id> is the variable name, mostly based on,
+#                https://docs.google.com/spreadsheets/d/1qUauozwXkq7r1g-L4ALMIkCNINIhhCPx/edit#gid=1672965248
+#      <version> denotes the date of data generation or date of data release
+#      <netcdf filename> is
+#                <variable_id>_<domain_id>_<driving_source_id>_<driving_experiment_id>_<driving_variant_label>_<RCM-institution_id>_<source_id>_<version_realisation>_<freq>[_<StartTime>-<EndTime>].nc
+#
+
+# Should always be BARPA.
+PRODUCT=BARPA
+
+# Output or CORDEX for data for CORDEX-CMIP6.
+PROJECT=output
+
+# The cycle of CMIP defines experiment and data specifications. We use CMIP6.
+MIP_ERA=CMIP6
+
+# DD for dynamical downscaling.
+ACTIVITY_ID=DD
+
+# Spatial domain and grid resolution of the data, namely AUS-15, AUS-04.
+DOMAIN_ID="AUS-15"
+
+# BOM.
+RCM_INSTITUTION=BOM
+
+# The global driving model downscaled by BARPA. The models selected are:
+# ERA5, ACCESS-CM2, ACCESS-ESM1-5, NorESM2-MM, EC-Earth3, CESM2, CMCC-ESM2,
+# MPI-ESM1-2-HR.
+DRIVING_SOURCE_ID=ACCESS-ESM1-5
+
+# evaluation for ERA5, historical or ssp126, ssp370 for CMIP6 experiments.
+DRIVING_EXPERIMENT_ID=historical
+
+# The ensemble member of the CMIP6 simulation that produced forcing data.
+#DRIVING_VARIANT_LABEL=r1i1p1f1
+DRIVING_VARIANT_LABEL=r6i1p1f1
+
+# Either BARPA-R or BARPA-C, refer to Extended Documentation.
+SOURCE_ID=BARPA-R
+
+# The modelling version (TBC on identifying data version).
+VERSION_REALISATION=v1-r1
+
+# The time frequency of the data: 1hr (1-hourly), 3hr, 6hr, day (daily), mon
+# (monthly), fx
+FREQ="1hr"
+
+# The variable name, mostly based on,
+# https://docs.google.com/spreadsheets/d/1qUauozwXkq7r1g-L4ALMIkCNINIhhCPx/edit#gid=1672965248
+# VARIABLE_ID=tas
+
+# The date of data generation or date of data release.
+# VERSION=v20231001
+VERSION=latest
+
+################################################################################
+# PBS Parameters                                                               #
+################################################################################
+
+# Project against which PBS jobs will be debited.
+PBS_PROJECT=pt17
+
+# PBS priority in range -1024 - 1023. Higher priority means the job may be
+# sceduled to run sooner.
+PBS_PRIORITY=0
+
+# Storage directive requried by PBS scripts.
+PBS_STORAGE=gdata/py18+scratch/pt17
+
+# Email address used by PBS to send email notifications.
+PBS_EMAIL=d.holzworth@westernsydney.edu.au
+
+# Walltime limit for the unpacking/regridding of each input file.
+# This takes about 40-60 minutes on a 1-degree grid.
+PBS_WALLTIME_UNPACK="02:00:00"
+
+# Walltime limit for the cdo mergetime operation.
+# This takes about 1 minute on a 1-degree grid.
+PBS_WALLTIME_MERGETIME="02:00:00"
+
+# Walltime limit for the rechunking operation.
+# This takes about 2 minutes on a 1-degree grid.
+PBS_WALLTIME_RECHUNK="02:00:00"
+
+# Walltime limit for the estimation of VPD for each input file.
+# This takes about 2 seconds on a 1-degree grid.
+PBS_WALLTIME_VPD="01:00:00"
+
+# Amount of memory allocated to the per-variable mergetime PBS jobs, in GiB.
+# These seem to require <1GiB on a 1° grid.
+PBS_MEMORY_MERGETIME=4
+
+# Amount of memory allocated to the per-variable rechunk PBS jobs, in GiB.
+# These seem to require ~12GiB on a 1° grid.
+PBS_MEMORY_RECHUNK=32
+
+################################################################################
+# Variables controlling output paths, processing, etc.                         #
+################################################################################
+
+BARPA_DIR=/scratch/pt17/dh7190/BARPA/1deg
+
+# # Output path.
+# OUT_DIR="${BARPA_DIR}/1deg/${DRIVING_SOURCE_ID}/${DRIVING_EXPERIMENT_ID}"
+
+# Path to scripts which may be generated by processing scripts.
+SCRIPT_DIR="${BARPA_DIR}/scripts"
+
+# Path to log files which should be written by processing scripts.
+LOG_DIR="${BARPA_DIR}/logs"
+
+# Create output directory tree if it doesn't already exist.
+mkdir -p "${SCRIPT_DIR}" "${LOG_DIR}"
+
+# Chunk size of the time dimension in output files.
+TIME_CHUNK_SIZE=8760
+
+# Compression level to be used in output files (0-9). Higher values will
+# (theoretically) result in smaller files, but will increase processing time.
+# 0 means no compression.
+DEFLATE_LEVEL=1
+
+# Set to 1 to prevent qsub from running. Set to 0 to actually submit jobs.
+DRY_RUN=0
+
+# Grid file used with cdo remapcon for downscaling to 1-degree resolution.
+# Ensure this is in the home directory; otherwise it may not be accessible from
+# the compute nodes.
+GRID_FILE="/home/590/dh7190/code/lpj-guess/scripts/input_processing/barpa/barpa_1deg.grid"
+
+fi

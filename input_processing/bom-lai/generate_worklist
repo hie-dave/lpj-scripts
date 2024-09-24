@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+#
+# Generate file lists to be processed by each CPU. This must be run before
+# bom_regrid.
+#
+set -euo pipefail
+
+NCPU=192
+BASE_DIR=/scratch/pt17/dh7190/luigi_lai
+WORK_DIR="${BASE_DIR}/chunks"
+
+IN_DIR="${BASE_DIR}/processed"
+OUT_DIR="${WORK_DIR}/work${NCPU}"
+
+FILELIST="${WORK_DIR}/filelist.txt"
+rm -f "${FILELIST}"
+
+# Create file containing all files to be processed, one per line.
+for FILE in "${IN_DIR}"/*.nc
+do
+    readlink -f ${FILE} >>"${FILELIST}"
+done
+
+# Split this into N equally-sized chunks.
+split -a3 -dn r/${NCPU} "${FILELIST}" "${OUT_DIR}/chunk_"

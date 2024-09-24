@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Directory paths.
+BARRA2_IN=/scratch/hw83/dh7190/barra2
+IN_DIR="${BARRA2_IN}/reshaped"
+BARRA2_OUT=/g/data/vl59/dh7190/barra2
+LOG_DIR="${BARRA2_OUT}/logs"
+SCRIPT_DIR="${BARRA2_OUT}/scripts"
+OUT_DIR="${BARRA2_OUT}/reshaped"
+
+mkdir -p "${SCRIPT_DIR}" "${LOG_DIR}" "${OUT_DIR}"
+
+# Path to the VPD calculator script.
+CMD=/home/590/dh7190/code/lpj-guess/scripts/ozflux-lpjg/nccalcvpd
+
+# PBS options.
+
+# CPU count, memory, and queue.
+NCPU=560
+MEM_GB=5120
+QUEUE=normalbw
+
+# This must be a multiple of the number of nodes.
+IOINTENSIVE=20
+
+# This should be proportional to amount of memory per CPU. 12 seems to be too
+# high for ~10GB per CPU.
+CHUNK_SIZE=6
+
+JOB_NAME="calc_vpd"
+
+SCRIPT="${SCRIPT_DIR}/${JOB_NAME}"
+LOG_FILE="${LOG_DIR}/${JOB_NAME}.progress.log"
+
+# Generate script.
+echo "Writing ${SCRIPT}..."
+cat <<EOF > "${SCRIPT}"
+#!/usr/bin/env bash
+#PBS -l ncpus=${NCPU}
+#PBS -l mem=${MEM_GB}GB
+#PBS -q ${QUEUE}
+#PBS -l walltime=01:00:00
+#PBS -l storage=scratch/pt17+scratch/hw83+gdata/hw83+gdata/vl59+gdata/pr09
+#PBS -l wd
+#PBS -l iointensive=${IOINTENSIVE}
+#PBS -j oe
+#PBS -ry
+#PBS -p 0
+#PBS -P pt17
+#PBS -m abe
+#PBS -M d.holzworth@westernsydney.edu.au
+#PBS -o "${LOG_DIR}/${JOB_NAME}.log"
+#PBS -N ${JOB_NAME}
+
+# Exit immediately if any command fails.
+set -euo pipefail
+
+# Load modules.
+module purge
+module load use.own
+module load netcdf cdo nco moreutils python3/3.12.1 openmpi
+
+# Run job.
+mpirun -n ${NCPU} ${CMD} -v4 --mpi --in-dir "${IN_DIR}" --out-dir "${OUT_DIR}" --work-dir /iointensive --min-chunk-size ${CHUNK_SIZE} --timestep 1hr --var-humidity huss --var-temperature tas | tee "${LOG_FILE}"
+
+# Success!
+echo "Command finished successfully."
+EOF
+
+chmod ug+x "${SCRIPT}"
+
+# qsub "${SCRIPT}"

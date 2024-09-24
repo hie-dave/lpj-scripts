@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+#PBS -l ncpus=1
+#PBS -l mem=4GB
+#PBS -l walltime=24:00:00
+#PBS -q normal
+#PBS -l wd
+#PBS -j oe
+#PBS -m abe
+#PBS -M d.holzworth@westernsydney.edu.au
+#PBS -l storage=scratch/hw83+scratch/pt17
+#PBS -N migrate_barra2
+
+set -euo pipefail
+
+PROGRESS_FILE=/scratch/pt17/dh7190/transfer.log
+
+rsync -a --partial --info=progress2 --no-i-r /scratch/hw83/dh7190/barra2 /scratch/pt17/dh7190/ | tee "${PROGRESS_FILE}"
+rsync -a --partial --info=progress2 --no-i-r /scratch/hw83/dh7190/ISMIP3b /scratch/pt17/dh7190/ | tee "${PROGRESS_FILE}"
+
+echo "All transfers completed successfully."

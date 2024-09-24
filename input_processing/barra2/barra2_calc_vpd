@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+
+# Exit immediately if:
+# - Any command fails
+# - Any part of a pipeline fails
+# - We reference any unbound variables
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+  echo "Running in debug mode. Set DEBUG to 0 to disable."
+  set -x
+fi
+
+# Input directory.
+BARRA2_IN=/g/data/vl59/barra2
+
+# Output directory.
+BARRA2_OUT=/g/data/pr09/dh7190/barra2
+
+# Output directories.
+SCRIPT_DIR="${BARRA2_OUT}/scripts"
+LOG_DIR="${BARRA2_OUT}/logs"
+OUT_DIR="${BARRA2_OUT}/unpacked/vpd"
+
+# Create output directories if they don't already exist.
+mkdir -p "${SCRIPT_DIR}" "${LOG_DIR}" "${OUT_DIR}"
+
+# Variable names in the barra2 dataset.
+VAR_SH=huss
+VAR_TAS=tas
+VAR_PATM=ps
+
+RESOURCES="-c 1 -m 8 -q normal -w 16:00:00"
+EMAIL="d.holzworth@westernsydney.edu.au"
+STORAGE=gdata/vl59+gdata/pr09
+PBS_ARGS="${RESOURCES} -e ${EMAIL} -l ${LOG_DIR} -s ${STORAGE}"
+
+get_file_name() {
+    local VAR="${1}"
+    local YEAR="${2}"
+    local MONTH="${3}"
+    local DATESTR="$(printf "%04d%02d" "${YEAR}" "${MONTH}")"
+    echo "${VAR}_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_1hr_${DATESTR}-${DATESTR}.nc"
+}
+
+get_input_file() {
+    local VAR="${1}"
+    echo "${BARRA2_IN}/unpacked/${VAR}/$(get_file_name "${VAR}" "${2}" "${3}")"
+}
+
+CMD=/home/590/dh7190/code/lpj-guess/scripts/input_processing/barra2_calc_vpd_year
+
+FIRST_YEAR=1979
+LAST_YEAR=2023
+
+for YEAR in $(seq ${FIRST_YEAR} ${LAST_YEAR})
+do
+    JOB_NAME=barra2_calc_vpd_${YEAR}
+    SCRIPT="${SCRIPT_DIR}/${JOB_NAME}"
+    pbs_wrap ${PBS_ARGS} -n ${JOB_NAME} -o ${SCRIPT} -- "${CMD}" ${YEAR}
+    # qsub "${SCRIPT}"
+done

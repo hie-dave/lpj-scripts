@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Path to NHP data.
+NHP=/scratch/pt17/dh7190/cfa/forcing/NHP
+
+# Path to input directory.
+IN_DIR="${NHP}/raw"
+
+# Path to output directory.
+OUT_DIR="${NHP}/processed"
+
+# Path to which PBS log files will be written.
+LOGS_DIR="${NHP}/logs"
+
+# Path to the script which fixes dimension orders within the NetCDF file.
+FIX_DIMS="${HOME}/code/lpj-guess/scripts/input_processing/fix_dimensions"
+
+# Change directories such that the relative paths outputted by the find command
+# will be relative to this directory.
+cd "${IN_DIR}"
+
+# Locate all files to be processed.
+# FILES=$(find . -name '*.nc' -print0 | xargs -0)
+FILES="/scratch/pt17/dh7190/cfa/forcing/NHP/raw/wind/MIROC-MIROC5_rcp85_r1i1p1_r240x120-MRNBC-AWAP_wind.nc
+/scratch/pt17/dh7190/cfa/forcing/NHP/raw/wind/NOAA-GFDL-GFDL-ESM2M_rcp85_r1i1p1_r240x120-MRNBC-AWAP_wind.nc
+/scratch/pt17/dh7190/cfa/forcing/NHP/raw/tmax/MIROC-MIROC5_rcp85_r1i1p1_r240x120-MRNBC-AWAP_tmax.nc
+/scratch/pt17/dh7190/cfa/forcing/NHP/raw/tmax/CNRM-CERFACS-CNRM-CM5_rcp45_r1i1p1_r240x120-MRNBC-AWAP_tmax.nc
+/scratch/pt17/dh7190/cfa/forcing/NHP/raw/insol/NOAA-GFDL-GFDL-ESM2M_rcp85_r1i1p1_r240x120-MRNBC-AWAP_insol.nc
+/scratch/pt17/dh7190/cfa/forcing/NHP/raw/tmin/NOAA-GFDL-GFDL-ESM2M_rcp85_r1i1p1_r240x120-MRNBC-AWAP_tmin.nc
+/scratch/pt17/dh7190/cfa/forcing/NHP/raw/rh/CSIRO-BOM-ACCESS1-0_rcp85_r1i1p1_r240x120-MRNBC-AWAP_rh.nc
+/scratch/pt17/dh7190/cfa/forcing/NHP/raw/temp/MIROC-MIROC5_rcp45_r1i1p1_r240x120-MRNBC-AWAP_temp.nc
+/scratch/pt17/dh7190/cfa/forcing/NHP/raw/temp/CNRM-CERFACS-CNRM-CM5_rcp45_r1i1p1_r240x120-MRNBC-AWAP_temp.nc
+/scratch/pt17/dh7190/cfa/forcing/NHP/raw/temp/NOAA-GFDL-GFDL-ESM2M_rcp45_r1i1p1_r240x120-MRNBC-AWAP_temp.nc"
+
+# Dimensions in NHP dataset.
+DIMS="DIM_LON=lon,DIM_LAT=lat,YEAR_LEN=366"
+
+mkdir -p "${OUT_DIR}"
+mkdir -p "${LOGS_DIR}"
+
+# Submit a PBS job for each .nc file to be processed.
+for FILE in ${FILES}
+do
+    IN_FILE="$(find . -name "$(basename "${FILE}")")"
+    OUT_FILE="${OUT_DIR}/${IN_FILE}"
+    mkdir -p "$(dirname "${OUT_FILE}")"
+    IN_FILE="$(readlink -f "${FILE}")"
+    VARS="IN_FILE=${IN_FILE},OUT_FILE=${OUT_FILE},${DIMS}"
+    JOB_NAME="$(basename "${FILE/.nc/}")"
+    qsub -o "${LOGS_DIR}" -N "${JOB_NAME}" -v "${VARS}" ${FIX_DIMS}
+done
+

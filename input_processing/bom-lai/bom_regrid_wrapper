@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+BOM_DIR="/scratch/pt17/dh7190/bom_lai"
+OUT_DIR="${BOM_DIR}/1deg/unmerged"
+
+GRID_FILE="/home/590/dh7190/code/lpj-guess/scripts/input_processing/input.grid.1deg"
+GRID_FILE="/home/590/dh7190/code/lpj-guess/scripts/input_processing/bom-lai/grid.nc"
+
+mkdir -p "${OUT_DIR}"
+
+RANK=$(mpirank)
+RANK=$(printf %03d ${RANK})
+CHUNK_FILE="/scratch/pt17/dh7190/bom_lai/chunks/work192/chunk_${RANK}"
+
+# for IN_FILE in "${IN_DIR}"/*.nc
+while read IN_FILE
+do
+    OUT_FILE="${OUT_DIR}/$(basename "${IN_FILE}")"
+    cdo -O -s "remapbil,${GRID_FILE}" "${IN_FILE}" "${OUT_FILE}"
+done <"${CHUNK_FILE}"

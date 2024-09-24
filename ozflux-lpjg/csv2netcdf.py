@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # Convert a csv file to netcdf format.
 #
@@ -64,7 +64,8 @@ class Options:
                  , longitude_column: str, dim_lat: str, dim_lon: str
                  , dim_time: str, chunk_sizes: list[tuple[str, int]]
                  , compression_level: int, missing_value: int
-                 , metadata: list[VariableMetadata], keep_only_metadata: bool):
+                 , metadata: list[VariableMetadata], keep_only_metadata: bool
+                 , year_column: str, day_column: str, separator: str):
 
         self.log_level = log
         self.report_progress = prog
@@ -89,6 +90,11 @@ class Options:
         self.chunk_sizes = chunk_sizes
 
         self.missing_value = missing_value
+
+        self.year_column = year_column
+        self.day_column = day_column
+
+        self.separator = separator
 
         self.compression_level = compression_level
         if compression_level < 0:
@@ -116,8 +122,15 @@ def parse_args(argv: list[str]) -> Options:
     # parser.add_argument("--metadata-line", help = "Character which defines a metadata line. Any lines at the start of the file which start with this character will be treated as metadata lines")
     # parser.add_argument("--metadata-delimiter", help = "Character which separates metadata names from their associated values on metadata lines as defined by the --metadata-delimiter option")
     parser.add_argument("--version", action = "version", version = "%(prog)s " + VERSION)
-    parser.add_argument("--time-column", required = True, help = "Name of the time column")
-    parser.add_argument("--time-format", required = True, help = r"Format of data in the time column. E.g. %d/%m/%y %H:%M:%S).")
+
+    parser.add_argument("-s", "--separator", default = ",", help = "Field separator (default: comma)")
+
+    parser.add_argument("--time-column", help = "Name of the time column")
+    parser.add_argument("--time-format", help = r"Format of data in the time column. E.g. %%d/%%m/%%y %%H:%%M:%%S).")
+
+    parser.add_argument("--year-column", required = True, help = "Name of the year column")
+    parser.add_argument("--day-column", required = True, help = "Name of the year column")
+
     parser.add_argument("--missing-value", help = "Special value used in input file to represent missing values.")
 
     parser.add_argument("--metadata", action = "append", help = "Variable-level metadata which will be written to the output file. This option may be passed multiple times (once per variable). The value should be of the form '--metadata name,std_name,long_name,units[,newname]'. Each part specifies an attribute which will be written. The newname part is optional, and if provided, will rename the variable.")
@@ -143,11 +156,24 @@ def parse_args(argv: list[str]) -> Options:
 
     metadata = None if p.metadata is None else [parse_metadata(m) for m in p.metadata]
 
+    if p.time_column is None:
+        if p.year_column is None or p.day_column is None:
+            raise ValueError(f"Must specify either date column OR year and day columns")
+    else:
+        if p.year_column is not None or p.day_column is not None:
+            raise ValueError(f"Must specify either date column OR year and day columns")
+        if p.time_format is None:
+            raise ValueError(f"--time-format is a required option if --time-column is used")
+
+    if p.separator is None or p.separator == "":
+        raise ValueError("Field separator must be a non-empty string")
+
     return Options(p.verbosity, p.in_file, p.out_file, p.show_progress
                    , p.time_column, p.time_format, p.latitude, p.latitude_column
                    , p.longitude, p.longitude_column, p.dim_lat, p.dim_lon
                    , p.dim_time, chunk_sizes, p.compression_level
-                   , p.missing_value, metadata, p.keep_only_metadata)
+                   , p.missing_value, metadata, p.keep_only_metadata
+                   , p.year_column, p.day_column, p.separator)
 
 def read_input_file(opts: Options) -> pandas.DataFrame:
     """
@@ -156,7 +182,14 @@ def read_input_file(opts: Options) -> pandas.DataFrame:
 
     @param opts: Parsing options.
     """
-    data = pandas.read_csv(opts.in_file, na_values = opts.missing_value)
+    log_information("Reading input file...")
+
+    data: pandas.DataFrame = None
+    if opts.separator == " ":
+        data = pandas.read_fwf(opts.in_file, na_values = opts.missing_value)
+    else:
+        data = pandas.read_csv(opts.in_file, sep = opts.separator
+            , na_values = opts.missing_value)
 
     if opts.latitude_column is None:
         log_debug(f"Latitude column not specified. Using constant latitude: {opts.latitude}")
@@ -178,6 +211,13 @@ def read_input_file(opts: Options) -> pandas.DataFrame:
 
     if not opts.time_column in data.columns:
         raise ValueError(f"Time column '{opts.time_column}' does not exist in input file")
+
+    if opts.time_column is None:
+        opts.time_column = "time"
+        data[opts.time_column] = pandas.to_datetime(
+            data[opts.year_column], format = "%Y") + \
+            pandas.to_timedelta(data[opts.day_column], unit = "D")
+        data.drop(columns = [opts.year_column, opts.day_column], inplace = True)
 
     data = data.rename(columns = {
         opts.longitude_column: opts.dim_lon,
@@ -252,6 +292,8 @@ def get_metadata(name: str, metadata: list[VariableMetadata]) -> Optional[Variab
     @param name: Name of the variable.
     @param metadata: Parsed metadata.
     """
+    if metadata is None:
+        return None
     for meta in metadata:
         if meta.name == name or meta.newname == name:
             return meta
@@ -276,6 +318,7 @@ def init_outfile(opts: Options, data: pandas.DataFrame, nc: Dataset):
     """
     Initialise the output file.
     """
+    log_information("Initialising output file...")
     # Create coordinate variables/dimensions.
     create_coordinate(opts, data, nc, opts.dim_lat, UNITS_LAT, STD_LAT, LONG_LAT)
     create_coordinate(opts, data, nc, opts.dim_lon, UNITS_LON, STD_LON, LONG_LON)
@@ -315,6 +358,8 @@ def copy_data(opts: Options, data: pandas.DataFrame, nc: Dataset):
     """
     Write all data in the dataframe to the netcdf file.
     """
+    log_information("Copying data...")
+
     # Get the dimension order/names in terms of column
     dims = [opts.dim_lon, opts.dim_lat, opts.dim_time]
 

@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+#
+# This script processes a single scenario of a single model of BARPA into a
+# format ideally-suited for use with LPJ-Guess.
+#
+# This script takes no positional arguments, but it expects that barpa_config
+# and barpa_helpers have already been sourced, and the model and scenario to be
+# processed should be specified via the following environment variables
+# respectively:
+#
+# - DRIVING_SOURCE_ID (the model)
+# - DRIVING_EXPERIMENT_ID (the scenario)
+#
+# This script will generate many scripts and submit them to PBS. The output of
+# this script will be the ID of the final job in the execution pipeline.
+#
+
+# Exit immediately if:
+# - Any command fails
+# - Any part of a pipeline fails
+# - We reference any unbound variables
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+    echo "Running in debug mode. Set DEBUG to 0 to disable."
+    set -x
+fi
+
+# Get directory containing this script.
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+
+source "${DIR}/barpa_config"
+source "${DIR}/barpa_helpers"
+
+# Min and max temperature (tasmin/tasmax) are only required when using daily
+# data.
+if [ "${FREQ}" = "day" ]
+then
+    TEMP_VARS="tas tasmax tasmin"
+else
+    TEMP_VARS="tas"
+fi
+
+# Precipitation requires a units conversion from kg m-2 s-1 (ie millimeters per
+# second) to mm. This requires us to multiply by the timestep size in seconds,
+# which is a parameter defined in barpa_config.
+SECONDS_PER_MINUTE=60
+MINUTES_PER_HOUR=60
+SECONDS_PER_HOUR=$((SECONDS_PER_MINUTE * MINUTES_PER_HOUR))
+SECONDS_PER_TIMESTEP=
+if [ ${FREQ} = 1hr ]
+then
+	SECONDS_PER_TIMESTEP=${SECONDS_PER_HOUR}
+elif [ ${FREQ} = 3hr ]
+then
+	SECONDS_PER_TIMESTEP=$((SECONDS_PER_HOUR * 3))
+elif [ ${FREQ} = 6hr ]
+then
+	SECONDS_PER_TIMESTEP=$((SECONDS_PER_HOUR * 6))
+elif [ ${FREQ} = day ]
+then
+	SECONDS_PER_TIMESTEP=$((SECONDS_PER_HOUR * 24))
+else
+	# Monthly input not supported.
+	die "Unknown/unsupported timestep frequency: ${FREQ}. Need to add number of seconds per timestep into barpa_processing_pr in order to convert from kg m-2 s-1 to mm"
+fi
+
+# Variables requiring no unit conversion.
+STD_VARS="huss ps rsds sfcWind"
+
+# Process precipitation, converting from kg m-2 s-1 to mm.
+DEPS="$(barpa_process_var pr "mulc,${SECONDS_PER_TIMESTEP}" "mm")"
+
+# Process air temperature.
+for VAR in ${TEMP_VARS}
+do
+    JOB_ID="$(barpa_process_var "${VAR}" "subc,273.15" "degC")"
+    DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
+done
+
+# Process variables requiring no unit conversion.
+for VAR in ${STD_VARS}
+do
+    JOB_ID="$(barpa_process_var "${VAR}")"
+    DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
+done
+
+JOB_ID="$("${DIR}/barpa_processing_vpd" "${DEPS}")"
+if [ -n "${JOB_ID}" ]
+then
+    echo "${JOB_ID}"
+else
+    echo "${DEPS}"
+fi

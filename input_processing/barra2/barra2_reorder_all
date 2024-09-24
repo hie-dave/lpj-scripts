@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+VARS="huss
+pr
+ps
+rsds
+sfcWind
+tas
+tasmax
+tasmin"
+
+BARRA2=/g/data/vl59/barra2
+
+SCRIPT_DIR="${BARRA2}/scripts"
+LOG_DIR="${BARRA2}/logs"
+
+STORAGE=gdata/vl59
+EMAIL="d.holzworth@westernsydney.edu.au"
+
+# Arguments which will be common to all invocations of pbs_wrap.
+RESOURCES="-c 1 -m 32 -q hugemem -w 48:00:00"
+PBS_ARGS="${RESOURCES} -l ${LOG_DIR} -s ${STORAGE} -e ${EMAIL}"
+
+for VAR in ${VARS}
+do
+    JOB_NAME="reorder_${VAR}"
+    SCRIPT="${SCRIPT_DIR}/${JOB_NAME}"
+    MERGE_ARGS="${PBS_ARGS} -o ${SCRIPT} -n ${JOB_NAME}"
+
+    OUT_DIR=/scratch/hw83/dh7190/barra2/australia/${VAR}
+
+    pbs_wrap ${MERGE_ARGS} -- /home/590/dh7190/code/lpj-guess/scripts/input_processing/barra2_reorder_var "${VAR}" "${OUT_DIR}"
+    echo qsub "${SCRIPT}"
+done

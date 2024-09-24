@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+
+# Exit immediately if:
+# - Any command fails
+# - Any part of a pipeline fails
+# - We reference any unbound variables
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+  echo "Running in debug mode. Set DEBUG to 0 to disable."
+  set -x
+fi
+
+VARS="pr
+rsds
+sfcWind
+tas
+tasmax
+tasmin"
+
+IN_DIR="/g/data/vl59/barra2/unpacked"
+
+BARRA2=/scratch/hw83/dh7190/barra2
+
+SCRIPT_DIR="${BARRA2}/scripts"
+LOG_DIR="${BARRA2}/logs"
+OUT_DIR="${BARRA2}/reshaped"
+
+mkdir -p "${SCRIPT_DIR}" "${LOG_DIR}" "${OUT_DIR}"
+
+CMD=/home/590/dh7190/code/lpj-guess/scripts/ozflux-lpjg/ncreshape
+CMD_ARGS="-pv3 --chunk-size 'lat/1,lon/1,time/512' \
+        --dimension-order 'lat,lon,time' --min-chunk-size 128"
+
+NCPU=528
+MEM=$((NCPU * 8))
+STORAGE="gdata/vl59"
+
+# Arguments which will be common to all invocations of pbs_wrap.
+RESOURCES="-c ${NCPU} -m ${MEM} -q normal -w 01:00:00 -M python3/3.12.1"
+EMAIL="d.holzworth@westernsydney.edu.au"
+
+PBS_ARGS="${RESOURCES} -e ${EMAIL} -l ${LOG_DIR} -s ${STORAGE}"
+
+for VAR in ${VARS}
+do
+    IN_FILES="${IN_DIR}"/${VAR}/*.nc
+    JOB_NAME="reshape_${VAR}"
+    SCRIPT="${SCRIPT_DIR}/${JOB_NAME}"
+    pbs_wrap ${PBS_ARGS} -n ${JOB_NAME} -o ${SCRIPT} mpirun -n ${NCPU} ${CMD} -o "${OUT_DIR}/${VAR}" ${CMD_ARGS} ${IN_FILES}
+done

@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+#PBS -l ncpus=1
+#PBS -l walltime=02:00:00
+#PBS -l mem=4GB
+#PBS -q normal
+#PBS -l wd
+#PBS -j oe
+#PBS -m abe
+#PBS -M d.holzworth@westernsydney.edu.au
+#PBS -l storage=scratch/pt17
+#PBS -N bom_ozflux
+
+set -euo pipefail
+
+IN_DIR=/scratch/pt17/dh7190/bom_lai/ozflux
+
+# Get path to grid file. This file must end with a newline character.
+GRID="/home/590/dh7190/code/lpj-guess/scripts/ozflux.grid"
+
+# Not sure what these represent, but they overlap temporally.
+TYPES="per rec tot"
+
+SEP=" "
+
+while read LINE
+do
+    LON="$(echo "${LINE}" | cut -d$"${SEP}" -f1)"
+    LAT="$(echo "${LINE}" | cut -d$"${SEP}" -f2)"
+    SITE="$(echo "${LINE}" | cut -d$"${SEP}" -f3)"
+    echo "Fixing site ${SITE}..."
+
+    for PFX in ${TYPES}
+    do
+        FILE="${IN_DIR}/${PFX}/${SITE}.nc"
+        ncmc "${LAT}" "${LON}" "${FILE}"
+    done
+done <"${GRID}"
+
