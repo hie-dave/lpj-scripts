@@ -164,6 +164,8 @@ def read_input_file(opts: Options) -> pandas.DataFrame:
             raise ValueError(f"Invalid latitude: {opts.latitude}")
         data[DIM_LAT] = opts.latitude
         opts.latitude_column = DIM_LAT
+    elif not opts.latitude_column in data.columns:
+        raise ValueError(f"User-provided latitude column '{opts.latitude_column}' does not exist in input file")
 
     if opts.longitude_column is None:
         log_debug(f"Longitude column not specified. Using constant longitude: {opts.latitude}")
@@ -171,6 +173,11 @@ def read_input_file(opts: Options) -> pandas.DataFrame:
             raise ValueError(f"Invalid longitude: {opts.longitude}")
         data[DIM_LON] = opts.longitude
         opts.longitude_column = DIM_LON
+    elif not opts.longitude_column in data.columns:
+        raise ValueError(f"User-provided longitude column '{opts.longitude_column}' does not exist in input file")
+
+    if not opts.time_column in data.columns:
+        raise ValueError(f"Time column '{opts.time_column}' does not exist in input file")
 
     data = data.rename(columns = {
         opts.longitude_column: opts.dim_lon,
@@ -314,7 +321,7 @@ def copy_data(opts: Options, data: pandas.DataFrame, nc: Dataset):
     dim_sizes = [nc.dimensions[d].size for d in dims]
     chunk_sizes = [try_get_chunk_size(d, nc.dimensions[d].size, opts.chunk_sizes) for d in dims]
 
-    niter = [size // chunk_size for (size, chunk_size) in zip(dim_sizes, chunk_sizes)]
+    niter = [math.ceil(size / chunk_size) for (size, chunk_size) in zip(dim_sizes, chunk_sizes)]
 
     xds = xarray.Dataset.from_dataframe(data.set_index(dims))
     # xds.to_netcdf(path)
@@ -376,5 +383,6 @@ if __name__ == "__main__":
         print(f"Total duration: {get_walltime()}")
     except Exception as error:
         # Basic error handling.
+        log_error(f"Failed to process file: {opts.in_file}")
         log_error(traceback.format_exc())
         exit(1)
