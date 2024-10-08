@@ -475,7 +475,7 @@ narclim2_ozflux_merge_files() {
     # .../ozflux/CumberlandPlain.nc
     OUT_FILE="${OUT_DIR}/${SITE}.nc"
 
-    JOB_NAME="narclim2_rechunk_${SITE}"
+    JOB_NAME="narclim2_rechunk_${SITE}_${SOURCE_ID}_${DRIVING_SOURCE_ID}_${DRIVING_EXPERIMENT_ID}"
     SCRIPT_FILE="${SCRIPT_PATH}/${JOB_NAME}"
     LOG_FILE="${LOG_PATH}/${JOB_NAME}.log"
 

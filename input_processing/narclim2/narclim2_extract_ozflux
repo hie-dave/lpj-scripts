@@ -120,7 +120,7 @@ submit_sites() {
 
         # Estimate VPD from air temperature, pressure, and specific humidity.
         OUT_DIR="$(get_ozflux_work_dir "${SITE}")"
-        JOB_NAME="narclim2_estimate_vpd_${SITE}"
+        JOB_NAME="narclim2_estimate_vpd_${SITE}_${SOURCE_ID}_${DRIVING_SOURCE_ID}_${DRIVING_EXPERIMENT_ID}"
         JOB_ID="$(narclim_process_vpd "${OUT_DIR}" "${VAR_TAS}" "${VAR_PS}" "${VAR_SH}" "${VAR_VPD}" "${DEPS}" "${JOB_NAME}" "${START_DATE}" "${END_DATE}")"
         DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
 
