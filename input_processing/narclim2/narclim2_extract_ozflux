@@ -72,53 +72,74 @@ else
 	die "Unknown/unsupported timestep frequency: ${FREQUENCY}. Need to add number of seconds per timestep into barpa_processing_pr in order to convert from kg m-2 s-1 to mm"
 fi
 
-# Iterate over sites.
-NSITE=`wc -l "${GRIDLIST}" | cut -d' ' -f1`
-while read LINE
+# Calculate timeseries start and end once, as an optimisation. This could be
+# done on-demand by the helper functions, but it's relatively slow.
+START_DATE="$(get_timeseries_start "${VAR_TAS}")"
+END_DATE="$(get_timeseries_end "${VAR_TAS}")"
+
+MODELS="ACCESS-ESM1-5 EC-Earth3-Veg MPI-ESM1-2-HR NorESM2-MM UKESM1-0-LL"
+SCENARIOS="historical ssp126 ssp370"
+WRF_VERSIONS="NARCliM2-0-WRF412R3 NARCliM2-0-WRF412R5"
+
+submit_sites() {
+    # Iterate over sites.
+    NSITE=`wc -l "${GRIDLIST}" | cut -d' ' -f1`
+    while read LINE
+    do
+        if [ -z "${LINE}" ]; then continue; fi
+
+        LON="$(echo "${LINE}" | cut -d' ' -f1)"
+        LAT="$(echo "${LINE}" | cut -d' ' -f2)"
+        SITE="$(echo "${LINE}" | cut -d' ' -f3)"
+
+        printf "${SITE} (${LON}, ${LAT}) "
+
+        # 1. Variable name.
+        # 2. Longitude of the gridcell.
+        # 3. Latitude of the gridcell.
+        # 4. (Optional) Name of the site.
+        # 5. (Optional) Units conversion as cdo operator without '-' prefix.
+        # 6. (Optional) New units. Required if argument 5 is provided.
+
+        DEPS=""
+        for VAR in ${STD_VARS}
+        do
+            JOB_ID="$(narclim_process_var_ozflux "${VAR}" "${LON}" "${LAT}" "${START_DATE}" "${END_DATE}" "${SITE}")"
+            DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
+        done
+
+        for VAR in ${TEMP_VARS}
+        do
+            JOB_ID="$(narclim_process_var_ozflux "${VAR}" "${LON}" "${LAT}" "${START_DATE}" "${END_DATE}" "${SITE}" "subc,273.15" "degC")"
+            DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
+        done
+
+        # Process precipitation, converting from kg m-2 s-1 to mm.
+        JOB_ID="$(narclim_process_var_ozflux pr "${LON}" "${LAT}" "${START_DATE}" "${END_DATE}" "${SITE}" "mulc,${SECONDS_PER_TIMESTEP}" "mm")"
+        DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
+
+        # Estimate VPD from air temperature, pressure, and specific humidity.
+        OUT_DIR="$(get_ozflux_work_dir "${SITE}")"
+        JOB_NAME="narclim2_estimate_vpd_${SITE}"
+        JOB_ID="$(narclim_process_vpd "${OUT_DIR}" "${VAR_TAS}" "${VAR_PS}" "${VAR_SH}" "${VAR_VPD}" "${DEPS}" "${JOB_NAME}" "${START_DATE}" "${END_DATE}")"
+        DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
+
+        # Merge all variables into a single file for this site. Note: this will also
+        # rechunk the file, compress it, etc.
+        narclim2_ozflux_merge_files "${SITE}" "${DEPS}"
+    done <"${GRIDLIST}"
+}
+
+for MODEL in ${MODELS}
 do
-	if [ -z "${LINE}" ]; then continue; fi
-
-	LON="$(echo "${LINE}" | cut -d' ' -f1)"
-	LAT="$(echo "${LINE}" | cut -d' ' -f2)"
-	SITE="$(echo "${LINE}" | cut -d' ' -f3)"
-
-	echo "site=${SITE}; coords=(${LON}, ${LAT})"
-
-	# 1. Variable name.
-    # 2. Longitude of the gridcell.
-    # 3. Latitude of the gridcell.
-    # 4. (Optional) Name of the site.
-    # 5. (Optional) Units conversion as cdo operator without '-' prefix.
-    # 6. (Optional) New units. Required if argument 5 is provided.
-
-    DEPS=""
-    for VAR in ${STD_VARS}
+    DRIVING_SOURCE_ID=${MODEL}
+    for SCENARIO in ${SCENARIOS}
     do
-        JOB_ID="$(narclim_process_var_ozflux "${VAR}" "${LON}" "${LAT}" "${SITE}")"
-        DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
+        DRIVING_EXPERIMENT_ID=${SCENARIO}
+        for WRF_VERSION in ${WRF_VERSIONS}
+        do
+            SOURCE_ID=${WRF_VERSION}
+            OZFLUX_OUT_PATH="${NARCLIM_OUT_PATH}/ozflux/${WRF_VERSION}/${MODEL}/${SCENARIO}"
+        done
     done
-
-    for VAR in ${TEMP_VARS}
-    do
-        JOB_ID="$(narclim_process_var_ozflux "${VAR}" "${LON}" "${LAT}" "${SITE}" "subc,273.15" "degC")"
-        DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
-    done
-
-    # Process precipitation, converting from kg m-2 s-1 to mm.
-    JOB_ID="$(narclim_process_var_ozflux pr "${LON}" "${LAT}" "${SITE}" "mulc,${SECONDS_PER_TIMESTEP}" "mm")"
-    DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
-
-    # Estimate VPD from air temperature, pressure, and specific humidity.
-    OUT_DIR="$(get_ozflux_work_dir "${SITE}")"
-    JOB_NAME="narclim2_estimate_vpd_${SITE}"
-    JOB_ID="$(narclim_process_vpd "${OUT_DIR}" "${VAR_TAS}" "${VAR_PS}" "${VAR_SH}" "${VAR_VPD}" "${DEPS}" "${JOB_NAME}")"
-    DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
-
-    # Merge all variables into a single file for this site. Note: this will also
-    # rechunk the file, compress it, etc.
-    narclim2_ozflux_merge_files "${SITE}" "${DEPS}"
-
-    # This is a temporary debugging measure which allows us to test the code for
-    # a single site. Remove this and rerun this script to process all sites.
-    break
-done <"${GRIDLIST}"
+done

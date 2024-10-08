@@ -277,9 +277,11 @@ narclim_process_var_ozflux() {
     VAR="${1}"
     LON="${2}"
     LAT="${3}"
-    SITE="${4:-}"
-    UNITS_CONVERSION="${5:-}"
-    NEW_UNITS="${6:-}"
+    START_DATE="${4}"
+    END_DATE="${5}"
+    SITE="${6:-}"
+    UNITS_CONVERSION="${7:-}"
+    NEW_UNITS="${8:-}"
 
     if [ -n "${UNITS_CONVERSION}" -a -z "${NEW_UNITS}" ]
     then
@@ -302,16 +304,14 @@ narclim_process_var_ozflux() {
     # The directory into which the output file for this variable will be saved.
     # .../ozflux/raw/CumberlandPlain
     OUT_DIR="$(get_ozflux_work_dir "${SITE}")"
-    EXTRACT_DIR="${OUT_DIR}/raw"
+    EXTRACT_DIR="${OUT_DIR}/raw/${VAR}"
     mkdir -p "${EXTRACT_DIR}"
 
     IN_DIR="$(get_narclim_file_path "${VAR}")"
-    START_DATE="$(get_timeseries_start "${VAR}")"
-    END_DATE="$(get_timeseries_end "${VAR}")"
     # .../ozflux/raw/CumberlandPlain/
     OUT_FILE="${OUT_DIR}/$(get_file_name "${VAR}" "${START_DATE}" "${END_DATE}")"
 
-    JOB_NAME="narclim2_extract_${SITE}_${VAR}"
+    JOB_NAME="narclim2_extract_${SITE}_${VAR}_${SOURCE_ID}_${DRIVING_SOURCE_ID}_${DRIVING_EXPERIMENT_ID}"
     SCRIPT_FILE="${SCRIPT_PATH}/${JOB_NAME}"
     LOG_FILE="${LOG_PATH}/${JOB_NAME}.log"
 
@@ -382,15 +382,16 @@ narclim_process_vpd() {
     DEPS="${6}"
     JOB_NAME="${7}"
 
+    START_DATE="${8}"
+    END_DATE="${9}"
+
     # .../ozflux/raw/CumberlandPlain/
-    FILE_TAS="${OUT_DIR}/$(get_out_file "${VAR_TAS}")"
-    FILE_PS="${OUT_DIR}/$(get_out_file "${VAR_PS}")"
-    FILE_SH="${OUT_DIR}/$(get_out_file "${VAR_SH}")"
+    FILE_TAS="${OUT_DIR}/$(get_file_name "${VAR_TAS}" "${START_DATE}" "${END_DATE}")"
+    FILE_PS="${OUT_DIR}/$(get_file_name "${VAR_PS}" "${START_DATE}" "${END_DATE}")"
+    FILE_SH="${OUT_DIR}/$(get_file_name "${VAR_SH}" "${START_DATE}" "${END_DATE}")"
 
     # Generate an output file name.
-    START_DATE="$(get_timeseries_start "${VAR_TAS}")"
-    END_DATE="$(get_timeseries_end "${VAR_TAS}")"
-    FILE_VPD="${OUT_DIR}/$(get_file_name "${VAR_TAS}" "${START_DATE}" "${END_DATE}")"
+    FILE_VPD="${OUT_DIR}/$(get_file_name "${VAR_VPD}" "${START_DATE}" "${END_DATE}")"
 
     JOB_DEPS=""
     if [ -n "${DEPS}" ]
