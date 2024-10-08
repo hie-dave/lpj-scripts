@@ -1,0 +1,514 @@
+# Helper functions for the narclim2 processing scripts.
+
+# This function will print the message specified by $* and then exit.
+die() { echo "$*" >&2; exit 1; }
+
+# Return the smaller of two numbers. Requires 2 arguments (the two numbers).
+min() {
+	X="${1:-}"
+	Y="${2:-}"
+
+	if [ -z "${X}" -a -z "${Y}" ]; then die "X and Y are both zero"; fi
+
+	if [ -z "${X}" ]; then echo "${Y}"; return; fi
+	if [ -z "${Y}" ]; then echo "${X}"; return; fi
+	echo "$((X < Y ? X : Y))"
+}
+
+# Return the smaller of two numbers. Requires 2 arguments (the two numbers).
+max() {
+	X="${1:-}"
+	Y="${2:-}"
+
+	if [ -z "${X}" -a -z "${Y}" ]; then die "X and Y are both zero"; fi
+
+	if [ -z "${X}" ]; then echo "${Y}"; return; fi
+	if [ -z "${Y}" ]; then echo "${X}"; return; fi
+	echo "$((X > Y ? X : Y))"
+}
+
+get_ndigit() {
+    FREQ="${1}"
+    if [ "${FREQ}" = "1hr" -o "${FREQ}" = "3hr" ]
+    then
+        echo "10"
+    elif [ "${FREQ}" = "day" ]
+    then
+        echo "8"
+    elif [ "${FREQ}" = "mon" ]
+    then
+        echo "6"
+    else
+        die "Unknown frequency: ${FREQ}"
+    fi
+}
+
+#
+# Get the start date of the given input file, in YYYYMM format, by parsing the
+# filename with a regular expression. Requires one argument:
+#
+# 1. The file name.
+#
+get_start_date() {
+	FILE_NAME="$(basename "${1}")"
+    NDIGIT="$(get_ndigit "${FREQUENCY}")"
+	echo "${FILE_NAME}" | sed -r "s/.*([0-9]{${NDIGIT}})-[0-9]{${NDIGIT}}\.nc/\1/g"
+}
+
+#
+# Get the end date of the given input file, in YYYYMM format, by parsing the
+# filename with a regular expression. Requires one argument:
+#
+# 1. The file name.
+#
+get_end_date() {
+	FILE_NAME="$(basename "${1}")"
+    NDIGIT="$(get_ndigit "${FREQUENCY}")"
+	echo "${FILE_NAME}" | sed -r "s/.*[0-9]{${NDIGIT}}-([0-9]{${NDIGIT}})\.nc/\1/g"
+}
+
+#
+# Get the year component of a date string.
+#
+# Requires 1 positional argument:
+#
+# 1. The date string.
+#
+get_year() {
+    DATE_STR="${1}"
+    echo "${DATE_STR}" | sed -r 's/^([0-9]{4}).*/\1/g'
+}
+
+#
+# Get the start date of the entire timeseries for the specified dataset, in
+# YYYYMM format.
+#
+# Requires 1 positional argument:
+#
+# 1. Variable name
+#
+# This requires all variables set by barpa_config.
+#
+get_timeseries_start() {
+	VAR="${1}"
+	START_DATE=""
+	for FILE in $(enumerate_files "${VAR}")
+	do
+		# Get the start date and end date of this input file.
+		FILE_NAME="$(basename "${FILE}")"
+		START_DATE="$(min "${START_DATE}" "$(get_start_date "${FILE_NAME}")")"
+	done
+	echo "${START_DATE}"
+}
+
+#
+# Get the end date of the entire timeseries for the specified dataset, in
+# YYYYMM format.
+#
+# Requires 1 positional argument:
+#
+# 1. Variable name
+#
+# This requires all variables set by barpa_config.
+#
+get_timeseries_end() {
+	VAR="${1}"
+	END_DATE=""
+	for FILE in $(enumerate_files "${VAR}")
+	do
+		FILE_NAME="$(basename "${FILE}")"
+		END_DATE="$(max "${END_DATE}" "$(get_end_date "${FILE_NAME}")")"
+	done
+	echo "${END_DATE}"
+}
+
+#
+# This function will get a filename for the specified variable in the specified
+# time range.
+#
+# Requires 3 positional arguments:
+#
+# 1. Variable name.
+# 2. Start date.
+# 3. End date.
+#
+# The date format depends on the timestep being used:
+#
+# Start date:
+#   sub-daily: <year>010100
+#   daily:     <year>0101
+#   month:     <year>01
+#
+# End date:
+#  1hr:   <year><day>23
+#  3hr:   <year><day>21
+#  day:   <year><day>
+#  month: <year>12
+#
+get_file_name() {
+    VAR="${1}"
+    START_DATE="${2}"
+    END_DATE="${3}"
+    DRIVING_VARIANT_LABEL="$(get_driving_variant_label "${DRIVING_SOURCE_ID}")"
+    echo "${VAR}_${DOMAIN_ID}_${DRIVING_SOURCE_ID}_${DRIVING_EXPERIMENT_ID}_${DRIVING_VARIANT_LABEL}_${INSTITUTION_ID}_${SOURCE_ID}_${VERSION_REALISATION}_${FREQUENCY}_${START_DATE}-${END_DATE}.nc"
+}
+
+# Get the driving variant used for the specified model.
+#
+# Requires 1 positional argument:
+#
+# 1. The climate model.
+#
+get_driving_variant_label() {
+    MODEL="${1}"
+    if [ ${MODEL} = "ACCESS-ESM1-5" ]
+    then
+        echo "r6i1p1f1"
+    elif [ "${MODEL}" = "EC-Earth3-Veg" ]
+    then
+        echo "r1i1p1f1"
+    elif [ "${MODEL}" = "MPI-ESM1-2-HR" ]
+    then
+        echo "r1i1p1f1"
+    elif [ "${MODEL}" = "NorESM2-MM" ]
+    then
+        echo "r1i1p1f1"
+    elif [ "${MODEL}" = "UKESM1-0-LL" ]
+    then
+        echo "r1i1p1f2"
+    else
+        die "Unknown model: ${MODEL}"
+    fi
+}
+
+#
+# Get the path to the narclim input files specified by the variables set in
+# narclim2_config, and the variable name specified by the first positional
+# argument passed to this function.
+#
+get_narclim_file_path() {
+    VAR="${1}"
+    DRIVING_VARIANT_LABEL="$(get_driving_variant_label "${DRIVING_SOURCE_ID}")"
+    NPATH="${NARCLIM_BASE_PATH}/${MIP_ERA}/${ACTIVITY_ID}/${DOMAIN_ID}"
+    NPATH="${NPATH}/${INSTITUTION_ID}/${DRIVING_SOURCE_ID}"
+    NPATH="${NPATH}/${DRIVING_EXPERIMENT_ID}/${DRIVING_VARIANT_LABEL}"
+    NPATH="${NPATH}/${SOURCE_ID}/${VERSION_REALISATION}/${FREQUENCY}"
+    NPATH="${NPATH}/${VAR}/${VERSION}"
+    echo "${NPATH}"
+}
+
+#
+# Enumerate all input files for the given configuration.
+#
+# Requires 1 positional argument:
+#
+# 1. The name of the variable.
+#
+# This uses all of the variables set in barpa_config.
+#
+enumerate_files() {
+	IN_DIR="$(get_narclim_file_path "${1}")"
+	echo "${IN_DIR}"/*.nc
+}
+
+# Submit a script via qsub iff DRY_RUN is not 1. Requires 1 argument (the
+# script).
+submit() {
+	if [ ${DRY_RUN} = 1 ]
+	then
+		echo 1
+	else
+		qsub "${1}"
+	fi
+}
+
+#
+# Append the given Job ID to an existing list of job IDs, using a colon as a
+# delimiter. If the existing list of dependencies is empty, the output will
+# simply be the new job ID.
+#
+# Requires two positional arguments:
+# 1. The existing colon-delimited dependency list.
+# 2. The new job ID.
+#
+append_deps() {
+	DEPS="${1}"
+	NEW="${2}"
+	if [ -z "${DEPS}" ]
+	then
+		# DEPS is empty string. Emit only the new dependency.
+		echo "${NEW}"
+	elif [ -z "${NEW}" ]
+	then
+		# NEW is empty, but DEPS is nonempty.
+		echo "${DEPS}"
+	else
+		# NEW and DEPS both nonempty.
+		echo "${DEPS}:${NEW}"
+	fi
+}
+
+#
+# Get the directory path into which all files for the specified configuration
+# will be extracted.
+#
+# Requires 1 positional arguments:
+#
+# 1. Name of the site/location.
+#
+get_ozflux_work_dir() {
+    SITE="${1}"
+    echo "${OZFLUX_OUT_PATH}/working/${SITE}"
+}
+
+#
+# Generate scripts to extract the specified gridcell for the specified variable.
+#
+# Requires 3 positional arguments:
+#
+# 1. Variable name.
+# 2. Longitude of the gridcell.
+# 3. Latitude of the gridcell.
+# 4. (Optional) Name of the site.
+# 5. (Optional) Units conversion as cdo operator without '-' prefix.
+# 6. (Optional) New units. Required if argument 5 is provided.
+#
+narclim_process_var_ozflux() {
+    VAR="${1}"
+    LON="${2}"
+    LAT="${3}"
+    SITE="${4:-}"
+    UNITS_CONVERSION="${5:-}"
+    NEW_UNITS="${6:-}"
+
+    if [ -n "${UNITS_CONVERSION}" -a -z "${NEW_UNITS}" ]
+    then
+        die "If performing a units conversion, the new units must be passed as the 3rd argument to narclim_process_var()"
+    fi
+
+    # Use a default name if none is provided: (lon, lat)
+    if [ -z "${SITE}" ]
+    then
+        SITE="(${LON}, ${LAT})"
+    fi
+
+    # Append a whitespace character to the units conversion CDO operator. This
+    # gives us a cleaner command in the generated script.
+    if [ -n "${UNITS_CONVERSION}" ]
+    then
+        UNITS_CONVERSION="-${UNITS_CONVERSION} "
+    fi
+
+    # The directory into which the output file for this variable will be saved.
+    # .../ozflux/raw/CumberlandPlain
+    OUT_DIR="$(get_ozflux_work_dir "${SITE}")"
+    EXTRACT_DIR="${OUT_DIR}/raw"
+    mkdir -p "${EXTRACT_DIR}"
+
+    IN_DIR="$(get_narclim_file_path "${VAR}")"
+    START_DATE="$(get_timeseries_start "${VAR}")"
+    END_DATE="$(get_timeseries_end "${VAR}")"
+    # .../ozflux/raw/CumberlandPlain/
+    OUT_FILE="${OUT_DIR}/$(get_file_name "${VAR}" "${START_DATE}" "${END_DATE}")"
+
+    JOB_NAME="narclim2_extract_${SITE}_${VAR}"
+    SCRIPT_FILE="${SCRIPT_PATH}/${JOB_NAME}"
+    LOG_FILE="${LOG_PATH}/${JOB_NAME}.log"
+
+    cat <<EOF >"${SCRIPT_FILE}"
+#!/usr/bin/env bash
+#PBS -l ncpus=1
+#PBS -l walltime=${PBS_WALLTIME_EXTRACT}
+#PBS -l mem=4GB
+#PBS -q normal
+#PBS -l wd
+#PBS -j oe
+#PBS -m a
+#PBS -M ${PBS_EMAIL}
+#PBS -P ${PBS_PROJECT}
+#PBS -p ${PBS_PRIORITY}
+#PBS -l storage=${PBS_STORAGE}
+#PBS -N ${JOB_NAME}
+#PBS -o ${LOG_FILE}
+
+set -euo pipefail
+
+module purge
+module load netcdf cdo nco
+
+LON="${LON}"
+LAT="${LAT}"
+
+IN_DIR="${IN_DIR}"
+OUT_DIR="${EXTRACT_DIR}"
+OUT_FILE="${OUT_FILE}"
+
+for IN_FILE in "\${IN_DIR}"/*.nc
+do
+    OUT="\${OUT_DIR}/\$(basename "\${IN_FILE}")"
+    cdo -O -L unpack ${UNITS_CONVERSION}"-remapnn,lon=\${LON}/lat=\${LAT}" "\${IN_FILE}" "\${OUT}"
+    ncatted -O -a "units,${VAR},o,c,${NEW_UNITS}" "\${OUT}" "\${OUT}"
+done
+cdo -O -L mergetime "\${OUT_DIR}"/*.nc "\${OUT_FILE}"
+
+EOF
+    chmod u+x "${SCRIPT_FILE}"
+    JOB_ID="$(submit "${SCRIPT_FILE}")"
+    echo "${JOB_ID}"
+}
+
+get_out_file() {
+    VAR="${1}"
+    START_DATE="$(get_timeseries_start "${VAR}")"
+    END_DATE="$(get_timeseries_end "${VAR}")"
+    get_file_name "${VAR}" "${START_DATE}" "${END_DATE}"
+}
+
+#
+# 1. Output directory (input files must be stored in here).
+# 2. Air temperature variable name.
+# 3. Air pressure variable name.
+# 4. Specific humidity variable name.
+# 5. VPD variable name (can theoretically be anything).
+# 6. Job dependencies.
+#
+narclim_process_vpd() {
+    # "${OUT_DIR}" "${FILE_TAS}" "${FILE_PS}" "${FILE_SH}" "${FILE_VPD}" "${DEPS}"
+    OUT_DIR="${1}"
+    VAR_TAS="${2}"
+    VAR_PS="${3}"
+    VAR_SH="${4}"
+    VAR_VPD="${5}"
+    DEPS="${6}"
+    JOB_NAME="${7}"
+
+    # .../ozflux/raw/CumberlandPlain/
+    FILE_TAS="${OUT_DIR}/$(get_out_file "${VAR_TAS}")"
+    FILE_PS="${OUT_DIR}/$(get_out_file "${VAR_PS}")"
+    FILE_SH="${OUT_DIR}/$(get_out_file "${VAR_SH}")"
+
+    # Generate an output file name.
+    START_DATE="$(get_timeseries_start "${VAR_TAS}")"
+    END_DATE="$(get_timeseries_end "${VAR_TAS}")"
+    FILE_VPD="${OUT_DIR}/$(get_file_name "${VAR_TAS}" "${START_DATE}" "${END_DATE}")"
+
+    JOB_DEPS=""
+    if [ -n "${DEPS}" ]
+    then
+        JOB_DEPS="-W depend=afterok:${DEPS}"
+    fi
+
+    # This assumes air temperature in °C, air pressure in Pa, and unitless
+    # specific humidity.
+    EQN_FILE="${SCRIPT_PATH}/vpd.eqn"
+    cat <<EOF >"${EQN_FILE}"
+_esat=0.001*611.2*exp((17.62*${VAR_TAS})/(${VAR_TAS} + 243.04));
+_es=${VAR_SH} * (${VAR_PS} / 1000) / (0.378 * ${VAR_SH} + 0.622);
+${VAR_VPD}=_esat - _es;
+
+EOF
+
+    SCRIPT_FILE="${SCRIPT_PATH}/${JOB_NAME}"
+    LOG_FILE="${LOG_PATH}/${JOB_NAME}.log"
+    cat <<EOF >"${SCRIPT_FILE}"
+#!/usr/bin/env bash
+#PBS -l ncpus=1
+#PBS -l walltime=${PBS_WALLTIME_VPD}
+#PBS -l mem=4GB
+#PBS -q normal
+#PBS -l wd
+#PBS -j oe
+#PBS -m a
+#PBS -M ${PBS_EMAIL}
+#PBS -P ${PBS_PROJECT}
+#PBS -p ${PBS_PRIORITY}
+#PBS -l storage=${PBS_STORAGE}
+#PBS -N ${JOB_NAME}
+#PBS -o ${LOG_FILE}
+#PBS ${JOB_DEPS}
+
+set -euo pipefail
+
+module purge
+module load netcdf cdo nco
+
+FILE_TAS="${FILE_TAS}"
+FILE_SH="${FILE_SH}"
+FILE_PS="${FILE_PS}"
+
+EQN_FILE="${EQN_FILE}"
+OUT_FILE="${FILE_VPD}"
+
+# Estimate VPD from air temperature, specific humidity and air pressure.
+cdo -O -L \\
+    -exprf,"\${EQN_FILE}" \\
+    -merge "\${FILE_SH}" "\${FILE_PS}" "\${FILE_TAS}" \\
+    "\${OUT_FILE}"
+
+# Set metadata.
+ncatted -O -a "units,${VAR_VPD},o,c,kPa" "\${OUT_FILE}" "\${OUT_FILE}"
+ncatted -O -a "standard_name,${VAR_VPD},o,c,water_vapor_saturation_deficit_in_air" "\${OUT_FILE}" "\${OUT_FILE}"
+ncatted -O -a "long_name,${VAR_VPD},o,c,Vapour pressure deficit" "\${OUT_FILE}" "\${OUT_FILE}"
+
+EOF
+    chmod u+x "${SCRIPT_FILE}"
+    submit "${SCRIPT_FILE}"
+}
+
+narclim2_ozflux_merge_files() {
+    SITE="${1}"
+    DEPS="${2:-}"
+
+    JOB_DEPS=
+    if [ -n "${DEPS}" ]
+    then
+        JOB_DEPS="-W depend=afterok:${DEPS}"
+    fi
+
+    # .../ozflux/working/CumberlandPlain
+    IN_DIR="$(get_ozflux_work_dir "${SITE}")"
+
+    # .../ozflux
+    OUT_DIR="${OZFLUX_OUT_PATH}"
+
+    # .../ozflux/CumberlandPlain.nc
+    OUT_FILE="${OUT_DIR}/${SITE}.nc"
+
+    JOB_NAME="narclim2_rechunk_${SITE}"
+    SCRIPT_FILE="${SCRIPT_PATH}/${JOB_NAME}"
+    LOG_FILE="${LOG_PATH}/${JOB_NAME}.log"
+
+    # Generate script.
+    cat <<EOF >"${SCRIPT_FILE}"
+#!/usr/bin/env bash
+#PBS -l ncpus=1
+#PBS -l walltime=${PBS_WALLTIME_RECHUNK}
+#PBS -l mem=4GB
+#PBS -q normal
+#PBS -l wd
+#PBS -j oe
+#PBS -m a
+#PBS -M ${PBS_EMAIL}
+#PBS -P ${PBS_PROJECT}
+#PBS -p ${PBS_PRIORITY}
+#PBS -l storage=${PBS_STORAGE}
+#PBS -N ${JOB_NAME}
+#PBS -o ${LOG_FILE}
+#PBS ${JOB_DEPS}
+
+set -euo pipefail
+
+module purge
+module load netcdf cdo nco
+
+IN_DIR="${IN_DIR}"
+OUT_FILE="${OUT_FILE}"
+cdo -O merge "\${IN_DIR}"/*.nc "\${OUT_FILE}"
+ncpdq -O -a lat,lon,time --cnk_dmn time,${TIME_CHUNK_SIZE} --cnk_dmn lat,1 --cnk_dmn lon,1 -L${DEFLATE_LEVEL} "\${OUT_FILE}" "\${OUT_FILE}2"
+mv "\${OUT_FILE}2" "\${OUT_FILE}"
+
+EOF
+    chmod u+x "${SCRIPT_FILE}"
+    submit "${SCRIPT_FILE}"
+}
+

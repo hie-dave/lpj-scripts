@@ -1,0 +1,93 @@
+# Root of the narclim directory tree.
+NARCLIM_BASE_PATH=/g/data/zz63/NARCliM2-0/output
+
+# CMIP version.
+MIP_ERA=CMIP6
+
+# Activity type.
+ACTIVITY_ID=DD
+
+# {AUS-18,NARCliM2-0-SEAus-04}
+DOMAIN_ID=AUS-18
+
+# Author of files.
+INSTITUTION_ID=NSW-Government
+
+# {ACCESS-ESM1-5,EC-Earth3-Veg,MPI-ESM1-2-HR,NorESM2-MM,UKESM1-0-LL}
+DRIVING_SOURCE_ID=ACCESS-ESM1-5
+
+# {historical,ssp126,ssp370}
+DRIVING_EXPERIMENT_ID=historical
+
+# DRIVING_VARIANT_LABEL="driving variant of driving_source, only one option per driving_source"
+
+# {NARCliM2-0-WRF412R3,NARCliM2-0-WRF412R5}
+SOURCE_ID=NARCliM2-0-WRF412R3
+
+# Version string.
+VERSION_REALISATION=v1-r1
+
+# {1hr,3hr,day,mon}
+FREQUENCY="1hr"
+
+# Chunk size of the time dimension in output files.
+# This should probably be changed if frequency is changed.
+TIME_CHUNK_SIZE=8760
+
+# Compression level to be used in output files (0-9). Higher values will
+# (theoretically) result in smaller files, but will increase processing time.
+# 0 means no compression.
+DEFLATE_LEVEL=1
+
+# Check documentation for full list
+# VARIABLE_ID=prw
+
+# Version string.
+VERSION=latest 
+
+################################################################################
+# PBS Parameters.
+################################################################################
+
+# Output directory.
+NARCLIM_OUT_PATH=/scratch/pt17/dh7190/narclim2
+
+# Output directory for all ozflux sites.
+OZFLUX_OUT_PATH="${NARCLIM_OUT_PATH}/ozflux"
+
+# Path into which script files will be written.
+SCRIPT_PATH="${NARCLIM_OUT_PATH}/scripts"
+
+# Path into which log files will be written.
+LOG_PATH="${NARCLIM_OUT_PATH}/logs"
+
+# Create output directory tree if it doesn't already exist.
+mkdir -p "${LOG_PATH}" "${SCRIPT_PATH}"
+
+# Storage directive requried by PBS scripts.
+PBS_STORAGE=gdata/zz63+scratch/pt17
+
+# Email address used by PBS to send email notifications.
+PBS_EMAIL=d.holzworth@westernsydney.edu.au
+
+# Walltime limit for the extraction of a single ozflux site from an input file.
+# This takes about 20-30 seconds per file (for hourly data).
+PBS_WALLTIME_EXTRACT="06:00:00"
+
+# Walltime limit for the estimation of VPD from other inputs.
+# TODO: update this with measured walltime.
+PBS_WALLTIME_VPD="06:00:00"
+
+# Walltime limit for merging variables and rechunking output files.
+# TODO: update this with measured walltime.
+PBS_WALLTIME_RECHUNK="06:00:00"
+
+# Project against which all PBS jobs will be debited.
+PBS_PROJECT=pt17
+
+# Priority for all PBS jobs in range [-1024, 1023]
+PBS_PRIORITY="0"
+
+# Set this to 0 to actually submit scripts to PBS. Set this to 1 for testing
+# purposes.
+DRY_RUN=0
