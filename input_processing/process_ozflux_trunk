@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+#
+# This script processes an L6-processed flux tower netcdf file into a netcdf
+# file suitable for consumption by trunk lpj-guess.
+
+# Exit immediately if:
+# - Any command fails
+# - Any part of a pipeline fails
+# - We reference any unbound variables
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+  echo "Running in debug mode. Set DEBUG to 0 to disable."
+  set -x
+fi
+
+die() { echo "$*" >&2; exit 1; }
+
+# Get directory containing this script.
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+
+USAGE="${0} <infile.nc> <out dir>"
+
+NARG_EXPECT=2
+if [ $# -ne ${NARG_EXPECT} ]
+then
+    echo "Expected ${NARG_EXPECT} arguments but received: $#" >&2
+    die "${USAGE}"
+fi
+
+IN_FILE="${1}"
+OUT_DIR="${2}"
+mkdir -p "${OUT_DIR}"
+
+SITE="$(basename "${IN_FILE}" | sed -r 's/([^_]+)_.*/\1/g')"
+
+# We need:
+#
+# - co2             ?               /scratch/pt17/dh7190/simulations/forcing/global_co2_ann_1700_2023.txt
+# - air temp        K               /scratch/pt17/dh7190/barra2/trunk/optimised/tas_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_day_197901-202312.nc
+# - precip          kg m-2 s-1      /scratch/pt17/dh7190/barra2/trunk/optimised/pr_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_day_197901-202312.nc
+# - SW radn         W m-2           /scratch/pt17/dh7190/barra2/trunk/optimised/rsds_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_day_197901-202312.nc
+# - wind speed      m s-1           /scratch/pt17/dh7190/barra2/trunk/optimised/sfcWind_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_day_197901-202312.nc
+# - min temp        K               /scratch/pt17/dh7190/barra2/trunk/optimised/tasmin_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_day_197901-202312.nc
+# - max temp        K               /scratch/pt17/dh7190/barra2/trunk/optimised/tasmax_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_day_197901-202312.nc
+
+# Either:
+# - rel. hum    <???>
+# OR
+# - air pressure    Pa              /scratch/pt17/dh7190/barra2/trunk/optimised/ps_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_day_197901-202312.nc
+# - spec. hum       1               /scratch/pt17/dh7190/barra2/trunk/optimised/huss_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_day_197901-202312.nc
+
+DEGC_TO_K=273.14
+
+aggregate_variable() {
+    NAME_IN="${1}"
+    NAME_OUT="${2}"
+    AGGREGATION="${3}"
+    NEW_UNITS="${4:-}"
+    UNIT_CONVERSION="${5:-}"
+
+    OUT_FILE="${OUT_DIR}/${NAME_OUT}.nc"
+
+    cdo -L -O "${AGGREGATION}" ${UNIT_CONVERSION} -selvar,"${NAME_IN}" "${IN_FILE}" "${OUT_FILE}"
+    ncpdq -O -a latitude,longitude,time \
+        --cnk_dmn latitude,1 --cnk_dmn longitude,1 --cnk_dmn time,365 \
+        "${OUT_FILE}" "${OUT_FILE}"
+
+    if [ "${NAME_IN}" != "${NAME_OUT}" ]
+    then
+        ncrename -O -v "${NAME_IN},${NAME_OUT}" "${OUT_FILE}"
+    fi
+
+    if [ -n "${NEW_UNITS}" ]
+    then
+        ncatted -O -a "units,${NAME_OUT},o,c,${NEW_UNITS}" "${OUT_FILE}"
+    fi
+}
+
+# Air temperature
+# Name                    Ta
+# Unit conversion         degC -> K
+# Temporal aggregation    mean
+aggregate_variable Ta ta daymean K -addc,"${DEGC_TO_K}"
+
+# Precipitation
+# Name                    Precip
+# Unit Conversion         mm -> kg m-2 (no value change)
+# Temporal Aggregation    sum
+aggregate_variable Precip pr daysum "kg m-2"
+ncatted -O -a "standard_name,pr,o,c,precipitation_amount" "${OUT_DIR}/pr.nc"
+
+# Shortwave Radiation
+# Name                    Fsd
+# Unit Conversion         W/m2 -> W m-2
+# Temporal Aggregation    mean
+aggregate_variable Fsd rs daymean "W m-2"
+# Apparently W/m2 is not the same as W m-2.
+# What brilliant error checking this model has.
+
+
+# Wind Speed
+# Name                    Ws
+# Unit Conversion         m/s -> m s-1 (yep)
+# Temporal Aggregation    mean
+aggregate_variable Ws ws daymean "m s-1"
+
+# Min Temperature
+# Name                    Ta
+# Unit Conversion         degC -> K
+# Temporal Aggregation    min
+aggregate_variable Ta tmin daymin K -addc,"${DEGC_TO_K}"
+
+# Max Temperature
+# Name                    Ta
+# Unit Conversion         degC -> K
+# Temporal Aggregation    max
+aggregate_variable Ta tmax daymax K -addc,"${DEGC_TO_K}"
+
+# - air pressure    Pa              /scratch/pt17/dh7190/barra2/trunk/optimised/ps_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_day_197901-202312.nc
+# - spec. hum       1               /scratch/pt17/dh7190/barra2/trunk/optimised/huss_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_day_197901-202312.nc
+
+# Air Pressure
+# Name                    ps
+# Unit Conversion         kPa -> Pa
+# Temporal Aggregation    mean
+aggregate_variable ps ps daymean Pa -mulc,1000
+
+# Specific Humidity
+# Name                    SH
+# Unit Conversion         kg/kg -> 1
+# Temporal Aggregation    mean
+aggregate_variable SH hs daymean 1
