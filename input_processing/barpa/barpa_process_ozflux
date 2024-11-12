@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+#
+# Extract a single gridcell from a given netcdf file, and store the result in
+# another netcdf file.
+#
+
+# Exit immediately if:
+# - Any command fails
+# - Any part of a pipeline fails
+# - We reference any unbound variables
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+    echo "Running in debug mode. Set DEBUG to 0 to disable."
+    set -x
+fi
+
+# Print the specified message and exit with non-zero exit code.
+die() { echo $*; exit 1; }
+
+# The site to be processed.
+SITE=Warra
+
+# Path to BARPA directory.
+BARPA_BASE=/scratch/pt17/dh7190/BARPA
+BARPA_DIR="${BARPA_BASE}/ozflux/${SITE}"
+BARPA_OUT="${BARPA_BASE}/ozflux/trunk/${SITE}"
+mkdir -p "${BARPA_OUT}"
+
+cd "${BARPA_DIR}"
+
+MODELS="ACCESS-CM2 ACCESS-ESM1-5 CESM2 CMCC-ESM2 EC-Earth3 MPI-ESM1-2-HR NorESM2-MM"
+SCENARIOS="historical ssp126 ssp370"
+
+DEGC_TO_K=273.14
+
+aggregate_variable() {
+    NAME_IN="${1}"
+    AGGREGATION="${2}"
+    NEW_UNITS="${3:-}"
+    UNIT_CONVERSION="${4:-}"
+    NAME_OUT="${5:-}"
+
+    if [ -z "${NAME_OUT}" ]
+    then
+        NAME_OUT="${NAME_IN}"
+    fi
+
+    IN_FILE="${DIR}/${NAME_IN}"_*.nc
+    OUT_FILE="${OUT_DIR}/$(basename "${IN_FILE}")"
+
+    if [ "${NAME_IN}" != "${NAME_OUT}" ]
+    then
+        OUT_FILE="${OUT_DIR}/$(basename "${IN_FILE}" | sed -r "s/^${NAME_IN}_/${NAME_OUT}_/")"
+    fi
+
+    TMP_FILE="$(mktemp)"
+    ncpdq -O -a time,lat,lon "${IN_FILE}" "${TMP_FILE}"
+    cdo -L -O "${AGGREGATION}" ${UNIT_CONVERSION} -selvar,"${NAME_IN}" "${TMP_FILE}" "${OUT_FILE}"
+    rm -f "${TMP_FILE}"
+    ncpdq -O -L1 -a lat,lon,time \
+        --cnk_dmn lat,1 --cnk_dmn lon,1 --cnk_dmn time,365 \
+        "${OUT_FILE}" "${OUT_FILE}"
+
+    if [ -n "${NEW_UNITS}" ]
+    then
+        ncatted -O -a "units,${NAME_OUT},o,c,${NEW_UNITS}" "${OUT_FILE}"
+    fi
+
+    if [ "${NAME_OUT}" != "${NAME_IN}" ]
+    then
+        ncrename -v "${NAME_IN},${NAME_OUT}" "${OUT_FILE}" "${OUT_FILE}"
+    fi
+}
+
+for MODEL in ${MODELS}
+do
+
+for SCENARIO in ${SCENARIOS}
+do
+
+DIR="${BARPA_DIR}/${MODEL}/${SCENARIO}"
+OUT_DIR="${BARPA_BASE}/${MODEL}/${SCENARIO}"
+mkdir -p "${OUT_DIR}"
+
+# Air temperature
+# Name                    Ta
+# Unit conversion         degC -> K
+# Temporal aggregation    mean
+aggregate_variable tas daymean K -addc,"${DEGC_TO_K}"
+
+# Precipitation
+# Name                    Precip
+# Unit Conversion         mm -> kg m-2 (no value change)
+# Temporal Aggregation    sum
+aggregate_variable pr daysum "kg m-2"
+for F in "${OUT_DIR}/"pr_*.nc
+do
+ncatted -O -a "standard_name,pr,o,c,precipitation_amount" "${F}"
+done
+
+# Shortwave Radiation
+# Name                    Fsd
+# Unit Conversion         W/m2 -> W m-2
+# Temporal Aggregation    mean
+aggregate_variable rsds daymean "W m-2"
+
+# Wind Speed
+# Name                    Ws
+# Unit Conversion         m/s -> m s-1 (yep)
+# Temporal Aggregation    mean
+aggregate_variable sfcWind daymean "m s-1"
+
+# Min Temperature
+# Name                    Ta
+# Unit Conversion         degC -> K
+# Temporal Aggregation    min
+aggregate_variable tas daymin K -addc,"${DEGC_TO_K}" tmin
+
+# Max Temperature
+# Name                    Ta
+# Unit Conversion         degC -> K
+# Temporal Aggregation    max
+aggregate_variable tas daymax K -addc,"${DEGC_TO_K}" tmax
+
+# - air pressure    Pa              /scratch/pt17/dh7190/barra2/trunk/optimised/ps_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_day_197901-202312.nc
+# - spec. hum       1               /scratch/pt17/dh7190/barra2/trunk/optimised/huss_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_day_197901-202312.nc
+
+# Air Pressure
+# Name                    ps
+# Unit Conversion         kPa -> Pa
+# Temporal Aggregation    mean
+aggregate_variable ps daymean Pa -mulc,1000
+
+# Specific Humidity
+# Name                    SH
+# Unit Conversion         kg/kg -> 1
+# Temporal Aggregation    mean
+aggregate_variable huss daymean 1
+
+
+done # for SCENARIO in ${SCENARIOS}
+done # for MODEL in ${MODELS}

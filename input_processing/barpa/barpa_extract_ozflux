@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+#
+# Extract a single gridcell from a given netcdf file, and store the result in
+# another netcdf file.
+#
+
+# Exit immediately if:
+# - Any command fails
+# - Any part of a pipeline fails
+# - We reference any unbound variables
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+    echo "Running in debug mode. Set DEBUG to 0 to disable."
+    set -x
+fi
+
+# Print the specified message and exit with non-zero exit code.
+die() { echo $*; exit 1; }
+
+# # CLI argument parsing.
+# if [ $# -ne 4 ]; then die "Usage: ${0} <longitude> <latitude> <inputfile.nc> <outfile.nc>"; fi
+
+SITE=Warra
+LAT=-43.25
+LON=146.75
+
+# Path to BARPA directory.
+BARPA_DIR=/scratch/pt17/dh7190/BARPA
+
+# Resolution of input files.
+RES=0.5deg
+
+SITE_DIR="${BARPA_DIR}/${SITE}"
+mkdir -p "${SITE_DIR}"
+
+IN_DIR="${BARPA_DIR}/${RES}"
+
+FILES="$(find "${IN_DIR}" -name '*.nc')"
+
+# This will break if any file names contain whitespace.
+NFILE=$(echo "${FILES}" | wc -w)
+I=0
+for IN_FILE in ${FILES}
+do
+	DIR="$(dirname "${IN_FILE}")"
+	FILE_NAME="$(basename "${IN_FILE}")"
+
+	OUT_DIR="${SITE_DIR}/${DIR/${IN_DIR}/}"
+	OUT_FILE="${OUT_DIR}/${FILE_NAME}"
+
+	# Create output directory if it doesn't already exist.
+	mkdir -p "${OUT_DIR}"
+
+	# echo "Extracting to ${OUT_FILE}..."
+	ncks -O -d "lon,${LON}" -d "lat,${LAT}" "${IN_FILE}" "${OUT_FILE}"
+	I=$((I + 1))
+	PROGRESS="$(echo "${I} / ${NFILE}" | bc -l)"
+	PROGRESS_PERCENT="$(echo "100.0 * ${PROGRESS}" | bc -l)"
+	printf "Working: %.2f%%...\r" "${PROGRESS_PERCENT}"
+done
+
+printf "Working: 100.00%%...\n"
+echo "All files processed successfully!"
