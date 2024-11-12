@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+#
+# This script will add a time dimension with a single value to a netcdf file.
+# A single variable will be modified to have the new time dimension as its first
+# dimension. A time dimension must not already exist in the input file.
+#
+# Run with --help for usage instructions.
+#
 
 import datetime, netCDF4, numpy, re, os
 from argparse import ArgumentParser
