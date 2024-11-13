@@ -331,7 +331,6 @@ generate_unpack_scripts() {
 		echo "GRID_FILE=\"${GRID_FILE}\"" >>"${SCRIPT_FILE}"
 	fi
 
-
 	# First we need to unpack all input files and perform a units conversion.
 	# The unpacking and units conversion of each input file will occur in its
 	# own separate PBS job, which will all run in parallel. There are about 55
