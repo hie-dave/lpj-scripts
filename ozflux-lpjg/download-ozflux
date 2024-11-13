@@ -158,11 +158,12 @@ def get_available_files(site: str, version: str, level: str, annual: bool
 	download_page = request_string(download_page_url)
 
 	sfx = get_file_suffix(annual, daily)
-	pattern = r"<a href=['\"][^'\"]+(%s[A-Za-z0-9]*_L\d+_\d+_\d+%s\.nc)" % (site, sfx)
+	pattern_base = r"<a href=['\"][^'\"]+(%s[A-Za-z0-9]*_L\d+_\d+_\d+%s\.nc)"
+	pattern = pattern_base % (site, sfx)
 	files = re.findall(pattern, download_page)
 	if len(files) == 0:
-		# Site name may not be in download name. E.g. site "CalperumChowilla" but filenames are "Calperum_L6_*"
-		pattern = r"<a href=['\"][^'\"]+([A-Za-z0-9]+_L\d+_\d+_\d+%s\.nc)" % "_Annual" if annual else ""
+		site_short = re.findall(r"^[A-Z][a-z]+", site)
+		pattern = r"<a href=['\"][^'\"]+/(%s[A-Za-z0-9]*_L\d+_\d+_\d+%s\.nc)" % (site_short, sfx)
 		files = re.findall(pattern, download_page)
 	return ["%s/%s/%s/%s/default/%s" % \
 		(DOWNLOAD_URL_BASE, site, version, level, file) \
@@ -251,6 +252,8 @@ def main(out_dir: str, annual: bool, daily: bool):
 
 	# Download the files.
 	for i in range(len(sites)):
+		if sites[i] != "CalperumChowilla":
+			continue
 		download(sites[i], out_dir, annual, daily
 		   , lambda p: log_progress( (i + p) / len(sites)))
 
