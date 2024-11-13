@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+#
+# This script processes part of the BARRA2 into a format ideally-suited for use
+# with LPJ-Guess.
+#
+# This script takes no positional arguments, but it expects that barra2_config
+# and barra2_helpers have already been sourced.
+#
+# This script will generate many scripts and submit them to PBS. The output of
+# this script will be the ID of the final job in the execution pipeline.
+#
+
+# Exit immediately if:
+# - Any command fails
+# - Any part of a pipeline fails
+# - We reference any unbound variables
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+    echo "Running in debug mode. Set DEBUG to 0 to disable."
+    set -x
+fi
+
+# Get directory containing this script.
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+
+source "${DIR}/barra2_config"
+source "${DIR}/barra2_helpers"
+
+# Min and max temperature (tasmin/tasmax) are only required when using daily
+# data.
+if [ "${FREQ}" = "day" ]
+then
+    TEMP_VARS="tas tasmax tasmin"
+else
+    TEMP_VARS="tas"
+fi
+
+# Precipitation requires a units conversion from kg m-2 s-1 (ie millimeters per
+# second) to mm. This requires us to multiply by the timestep size in seconds,
+# which is a parameter defined in barra2_config.
+SECONDS_PER_MINUTE=60
+MINUTES_PER_HOUR=60
+SECONDS_PER_HOUR=$((SECONDS_PER_MINUTE * MINUTES_PER_HOUR))
+SECONDS_PER_TIMESTEP=
+if [ ${FREQ} = 1hr ]
+then
+	SECONDS_PER_TIMESTEP=${SECONDS_PER_HOUR}
+elif [ ${FREQ} = 3hr ]
+then
+	SECONDS_PER_TIMESTEP=$((SECONDS_PER_HOUR * 3))
+elif [ ${FREQ} = 6hr ]
+then
+	SECONDS_PER_TIMESTEP=$((SECONDS_PER_HOUR * 6))
+elif [ ${FREQ} = day ]
+then
+	SECONDS_PER_TIMESTEP=$((SECONDS_PER_HOUR * 24))
+else
+	# Monthly input not supported.
+	die "Unknown/unsupported timestep frequency: ${FREQ}. Need to add number of seconds per timestep into barra2_processing in order to convert from kg m-2 s-1 to mm"
+fi
+
+# Variables requiring no unit conversion.
+STD_VARS="huss ps rsds sfcWind"
+STD_VARS="ps rsds sfcWind"
+
+REGRID_OP="-sellonlatbox,146.971,153.791,-37.534,-28.184"
+
+if [ "${TRUNK}" = "1" ]
+then
+    # The trunk version accepts precipitation in kg m-2 s-1.
+    # DEPS="$(barra2_process_var pr "${REGRID_OP}")"
+    DEPS=
+
+    # The trunk version expects temperatures in K, so the temperature variables
+    # don't require special treatment in that case (as they are already in K).
+    STD_VARS="${STD_VARS} ${TEMP_VARS}"
+    TEMP_VARS=""
+else
+    # Process precipitation, converting from kg m-2 s-1 to mm.
+    DEPS="$(barra2_process_var pr "mulc,${SECONDS_PER_TIMESTEP} ${REGRID_OP}" "mm")"
+fi
+
+# Process air temperature. TEMP_VARS will be "" here if processing for trunk,
+# because they don't require conversion from K -> °C, so they are included in
+# STD_VARS instead of TEMP_VARS.
+for VAR in ${TEMP_VARS}
+do
+    JOB_ID="$(barra2_process_var "${VAR}" "subc,273.15 ${REGRID_OP}" "degC")"
+    DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
+done
+
+# Process variables requiring no unit conversion.
+for VAR in ${STD_VARS}
+do
+    JOB_ID="$(barra2_process_var "${VAR}" "${REGRID_OP}")"
+    DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
+done
+
+# VPD is not an input in the trunk version of the model.
+if [ "${TRUNK}" != "1" ]
+then
+    JOB_ID="$("${DIR}/barra2_processing_vpd" "${DEPS}")"
+fi
+
+# Print ID of the final job in the execution pipeline.
+if [ -n "${JOB_ID}" ]
+then
+    echo "${JOB_ID}"
+else
+    echo "${DEPS}"
+fi
