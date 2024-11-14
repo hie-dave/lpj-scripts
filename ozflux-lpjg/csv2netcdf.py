@@ -128,8 +128,8 @@ def parse_args(argv: list[str]) -> Options:
     parser.add_argument("--time-column", help = "Name of the time column")
     parser.add_argument("--time-format", help = r"Format of data in the time column. E.g. %%d/%%m/%%y %%H:%%M:%%S).")
 
-    parser.add_argument("--year-column", required = True, help = "Name of the year column")
-    parser.add_argument("--day-column", required = True, help = "Name of the year column")
+    parser.add_argument("--year-column", help = "Name of the year column")
+    parser.add_argument("--day-column", help = "Name of the year column")
 
     parser.add_argument("--missing-value", help = "Special value used in input file to represent missing values.")
 
@@ -225,14 +225,15 @@ def read_input_file(opts: Options) -> pandas.DataFrame:
         opts.time_column: opts.dim_time,
     })
 
-    for col in data.columns:
+    columns = data.columns
+    for col in columns:
         metadata = get_metadata(col, opts.metadata)
         if metadata is None:
             if opts.keep_only_metadata and col != opts.dim_time and \
                     col != opts.dim_lon and col != opts.dim_lat:
                 data = data.drop(col, axis = 1)
         elif metadata.name != metadata.newname:
-            data.rename({col: metadata.newname})
+            data.rename(columns = {col: metadata.newname}, inplace = True)
 
     # Convert time column to datetime type.
     # data[opts.time_column] = [datetime.datetime.strptime(t.__str__(), opts.time_fmt) for t in data[opts.time_column]]
@@ -424,8 +425,8 @@ if __name__ == "__main__":
     try:
         # Actual logic is in main().
         main(opts)
-        print("\nFile converted successfully!")
-        print(f"Total duration: {get_walltime()}")
+        log_information("\nFile converted successfully!")
+        log_information(f"Total duration: {get_walltime()}")
     except Exception as error:
         # Basic error handling.
         log_error(f"Failed to process file: {opts.in_file}")
