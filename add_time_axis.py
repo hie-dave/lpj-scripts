@@ -7,9 +7,9 @@
 # Run with --help for usage instructions.
 #
 
-import datetime, netCDF4, numpy, re, os
+import datetime, netCDF4, os
 from argparse import ArgumentParser
-from sys import argv, exit
+from sys import argv
 
 # Format of date/time values.
 TIME_FMT = r"%Y-%m-%d %H:%m:%S"
@@ -76,6 +76,8 @@ def main(opts: Options):
 
     @param opts: Parsed CLI options.
     """
+    if os.path.exists(opts.out_file):
+        print(f"Output file already exists: {opts.out_file}")
     # Open the netcdf files.
     with netCDF4.Dataset(opts.in_file, "r") as nc_in:
         if not opts.var in nc_in.variables:
