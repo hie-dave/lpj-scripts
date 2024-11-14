@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+    echo "Running in debug mode. Set DEBUG to 0 to disable."
+    set -x
+fi
+
+# Print the specified message to stdout and exit.
+die() { echo $*; exit 1; }
+
+# Get path to current directory.
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+
+if [ $# -ne 8 ]; then die "Usage: ${0} <rs.csv> <ta.csv> <pr.csv> <ws.csv> <sh.csv> <ps.csv> <out dir> <gridlist>"; fi
+
+IN_RS="${1}"
+IN_TA="${2}"
+IN_PR="${3}"
+IN_WS="${4}"
+IN_SH="${5}"
+IN_PS="${6}"
+OUT_DIR="${7}"
+
+# Each line in gridlist should be space-separated <name> <lat> <lon>
+GRIDLIST="${8}"
+
+# First column is empty.
+# cut -d, -f2- "${IN_RS}"
+SITES="$(head -1 "${IN_RS}" | cut -d, -f3- | sed -r 's/,/ /g' | sed -r 's/"//g')"
+
+TMP_RS="$(mktemp --tmpdir rs_XXXXXX.nc)"
+TMP_TA="$(mktemp --tmpdir ta_XXXXXX.nc)"
+TMP_PR="$(mktemp --tmpdir pr_XXXXXX.nc)"
+TMP_WS="$(mktemp --tmpdir ws_XXXXXX.nc)"
+TMP_SH="$(mktemp --tmpdir sh_XXXXXX.nc)"
+TMP_PS="$(mktemp --tmpdir ps_XXXXXX.nc)"
+TMP_VPD="$(mktemp --tmpdir vpd_XXXXXX.nc)"
+TMP_OUT="$(mktemp --tmpdir tmp_XXXXXX.nc)"
+TMP_EQN="$(mktemp --tmpdir vpd_XXXXXX.eqn)"
+
+cleanup() {
+    rm -f "${TMP_RS}"
+    rm -f "${TMP_TA}"
+    rm -f "${TMP_PR}"
+    rm -f "${TMP_WS}"
+    rm -f "${TMP_SH}"
+    rm -f "${TMP_PS}"
+    rm -f "${TMP_VPD}"
+    rm -f "${TMP_OUT}"
+    rm -f "${TMP_EQN}"
+}
+trap cleanup EXIT
+
+# Using standard name for precipitation which is suitable for the variable in
+# its output units (mm) rather than its input units (mm s-1).
+STD_NAME_RS=surface_downwelling_shortwave_flux_in_air
+STD_NAME_TA=air_temperature
+STD_NAME_PR=precipitation_amount
+STD_NAME_WS=wind_speed
+STD_NAME_SH=specific_humidity
+STD_NAME_PS=surface_air_pressure
+STD_NAME_VPD=water_vapor_saturation_deficit_in_air
+
+LONG_NAME_RS="Down-welling shortwave radiation"
+LONG_NAME_TA="Air temperature"
+LONG_NAME_PR="Rainfall"
+LONG_NAME_WS="Wind speed"
+LONG_NAME_SH="Near-Surface Specific Humidity"
+LONG_NAME_PS="Surface air pressure"
+LONG_NAME_VPD="Vapour pressure deficit"
+
+UNITS_RS="W m-2"
+UNITS_TA="K"
+UNITS_PR="mm s-1"
+UNITS_WS="m s-1"
+UNITS_SH="1"
+UNITS_PS="Pa"
+UNITS_VPD="kPa"
+
+# Names to use for the variables in the NetCDF files.
+NAME_RS="insol"
+NAME_TA="tav"
+NAME_PR="prec"
+NAME_WS="wind"
+NAME_SH="sh"
+NAME_PS="ps"
+NAME_VPD="vpd"
+
+convert_to_netcdf() {
+    local IN_FILE="${1}"
+    local OUT_FILE="${2}"
+    local SITE="${3}"
+    local LAT="${4}"
+    local LON="${5}"
+    local STD_NAME="${6}"
+    local LONG_NAME="${7}"
+    local UNITS="${8}"
+    local OUT_NAME="${9}"
+
+    "${DIR}/csv2netcdf.py" -v1 -i "${IN_FILE}" -o "${TMP_OUT}" \
+        --time-column Time --time-format "%Y-%m-%d %H:%M:%S" \
+        --metadata "${SITE},${STD_NAME},${LONG_NAME},${UNITS},${OUT_NAME}" \
+        --keep-only-metadata --compression-level 1 \
+        --latitude "${LAT}" --longitude "${LON}" \
+        --dim-lat latitude --dim-lon longitude
+        
+    ncpdq -O -a "time,latitude,longitude" "${TMP_OUT}" "${OUT_FILE}"
+    rm -f "${TMP_OUT}"
+}
+
+for SITE in ${SITES}
+do
+    OUT_FILE="${OUT_DIR}/${SITE}.nc"
+    LAT="$(grep "${SITE}" "${GRIDLIST}" | cut -d\  -f2)"
+    LON="$(grep "${SITE}" "${GRIDLIST}" | cut -d\  -f3)"
+
+    echo "${SITE}: converting .csv files to NetCDF format..."
+
+    convert_to_netcdf "${IN_RS}" "${TMP_RS}" "${SITE}" "${LAT}" "${LON}" \
+        "${STD_NAME_RS}" "${LONG_NAME_RS}" "${UNITS_RS}" "${NAME_RS}"
+
+    convert_to_netcdf "${IN_TA}" "${TMP_TA}" "${SITE}" "${LAT}" "${LON}" \
+        "${STD_NAME_TA}" "${LONG_NAME_TA}" "${UNITS_TA}" "${NAME_TA}"
+
+    convert_to_netcdf "${IN_PR}" "${TMP_PR}" "${SITE}" "${LAT}" "${LON}" \
+        "${STD_NAME_PR}" "${LONG_NAME_PR}" "${UNITS_PR}" "${NAME_PR}"
+
+    convert_to_netcdf "${IN_WS}" "${TMP_WS}" "${SITE}" "${LAT}" "${LON}" \
+        "${STD_NAME_WS}" "${LONG_NAME_WS}" "${UNITS_WS}" "${NAME_WS}"
+
+    convert_to_netcdf "${IN_SH}" "${TMP_SH}" "${SITE}" "${LAT}" "${LON}" \
+        "${STD_NAME_SH}" "${LONG_NAME_SH}" "${UNITS_SH}" "${NAME_SH}"
+
+    # Create a new netcdf file for air pressure, with constant value.
+    PRESSURE_PA="$(grep "${SITE}" "${IN_PS}" | cut -d' ' -f2)"
+    cdo -O -L "addc,${PRESSURE_PA}" -mulc,0 -selvar,${NAME_TA} "${TMP_TA}" "${TMP_PS}"
+    ncrename -h -O -v "${NAME_TA},${NAME_PS}" "${TMP_PS}" "${TMP_PS}"
+    ncatted  -h -O -a "units,${NAME_PS},o,c,${UNITS_PS}" "${TMP_PS}" "${TMP_PS}"
+    ncatted  -h -O -a "standard_name,${NAME_PS},o,c,${STD_NAME_PS}" "${TMP_PS}" "${TMP_PS}"
+    ncatted  -h -O -a "long_name,${NAME_PS},o,c,${LONG_NAME_PS}" "${TMP_PS}" "${TMP_PS}"
+
+    # Estimate VPD from air temperature, specific humidity, and air pressure.
+    "${DIR}/../input_processing/calc_vpd" --out-file "${TMP_VPD}" \
+        --temperature-file "${TMP_TA}" --temperature-var "${NAME_TA}" \
+        --spechum-file "${TMP_SH}" --spechum-var "${NAME_SH}" \
+        --pressure-file "${TMP_PS}" --pressure-var "${NAME_PS}"
+
+    echo "${SITE}: Performing unit conversions..."
+
+    # Convert temperature from K -> °C.
+    cdo -L -O subc,273.14 "${TMP_TA}" "${TMP_OUT}"
+    mv "${TMP_OUT}" "${TMP_TA}"
+    ncatted -O -a "units,${NAME_TA},o,c,degC" "${TMP_TA}" "${TMP_TA}"
+
+    # Convert precipitation from mm/s -> mm.
+    # Assuming 3-hourly timesteps, we need to multiply by # seconds in 3 hours.
+    cdo -L -O mulc,10800 "${TMP_PR}" "${TMP_OUT}"
+    mv "${TMP_OUT}" "${TMP_PR}"
+    ncatted -O -a "units,${NAME_PR},o,c,mm" "${TMP_PR}" "${TMP_PR}"
+
+    # Merge the file for each variable into a single file.
+    cdo merge "${TMP_RS}" "${TMP_TA}" "${TMP_PR}" "${TMP_WS}" "${TMP_VPD}" "${TMP_PS}" "${TMP_OUT}"
+
+    # Improve chunk sizes, dimension order, etc.
+    ncpdq -O -L1 -a latitude,longitude,time --cnk_dmn latitude,1 --cnk_dmn longitude,1 --cnk_dmn time,2920 "${TMP_OUT}" "${OUT_FILE}"
+done
