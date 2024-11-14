@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+
+# Exit immediately if:
+# - Any command fails
+# - Any part of a pipeline fails
+# - We reference any unbound variables
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+  echo "Running in debug mode. Set DEBUG to 0 to disable."
+  set -x
+fi
+
+# Output file path.
+OUT_FILE=
+
+# Name of the air temperature variable.
+VAR_TAS=
+
+# Name of the specific humidity variable.
+VAR_SH=
+
+# Name of the atmospheric pressure variable.
+VAR_PATM=
+
+# Input file containing air temperature.
+FILE_TAS=
+
+# Input file containing specific humidity.
+FILE_SH=
+
+# Input file containing atmospheric pressure.
+FILE_PATM=
+
+# Name of the VPD variable in the output file.
+VAR_VPD=vpd
+
+################################################################################
+# Parsing of user inputs
+################################################################################
+
+# Usage information.
+SCRIPT_NAME="$(basename "${0}")"
+USAGE="Usage: ${SCRIPT_NAME} -o <out file> -t <temperature file> -T <temperature variable> -s <specific humidity file> -S <specific humidity variable> -p <air pressure file> -P <air pressure variable> [-h]
+
+    -o, --out-file          Path to which the wrapper script will be saved.
+    -t, --temperature-file  Path to the air temperature input file.
+    -T, --temperature-var   Name of the air temperature variable in its input file.
+    -s, --spechum-file      Path to the specific humidity input file.
+    -S, --spechum-var       Name of the specific humidity variable in its input file.
+    -p, --pressure-file     Path to the atmospheric pressure input file.
+    -P, --pressure-var      Name of the atmospheric pressure variable in its input file.
+    -h, --help              Print this usage information.
+"
+
+while [ $# -gt 0 ]
+do
+    case "${1}" in
+        -o | --out-file         ) OUT_FILE="${2}"                     ; shift 2 ;;
+        -t | --temperature-file ) FILE_TAS="${2}"                     ; shift 2 ;;
+        -T | --temperature-var  ) VAR_TAS="${2}"                      ; shift 2 ;;
+        -s | --spechum-file     ) FILE_SH="${2}"                      ; shift 2 ;;
+        -S | --spechum-var      ) VAR_SH="${2}"                       ; shift 2 ;;
+        -p | --pressure-file    ) FILE_PATM="${2}"                      ; shift 2 ;;
+        -P | --pressure-var     ) VAR_PATM="${2}"                       ; shift 2 ;;
+        --                      ) shift                               ; break   ;;
+        -h | --help             ) echo "${USAGE}"                     ; exit 0  ;;
+        *                       )                                       break   ;;
+    esac
+done
+
+# Remaining arguments are the command to be run and its arguments.
+UNPARSED_ARGS="$@"
+
+################################################################################
+# Validation of user inputs
+################################################################################
+
+# This function will print a message ($*) to stderr and exit with nonzero code.
+die() { echo "Error: $*" >&2; exit 1; }
+
+# This function will print a message ($*) to stderr, then print the usage
+# information, then exit with nonzero code.
+die_usage() {
+    echo "Error: $*" >&2
+    echo >&2
+    echo "${USAGE}" >&2
+    exit 1
+}
+
+# Ensure no unparsed arguments remain.
+test -n "${UNPARSED_ARGS}" && die_usage "Invalid arguments: ${UNPARSED_ARGS}"
+
+# Ensure all required inputs were provided.
+test -z "${OUT_FILE}" && die_usage "-o/--out-file not set"
+test -z "${FILE_TAS}" && die_usage "-t/--temperature-file not set"
+test -z "${VAR_TAS}" && die_usage "-T/--temperature-var not set"
+test -z "${FILE_SH}" && die_usage "-s/--spechum-file not set"
+test -z "${VAR_SH}" && die_usage "-S/--spechum-var not set"
+test -z "${FILE_PATM}" && die_usage "-p/--pressure-file not set"
+test -z "${VAR_PATM}" && die_usage "-P/--pressure-var not set"
+
+# Check units.
+# TODO: support automatic unit conversion (to some extent)?
+
+# Print the units of the specified variable in the specified file.
+get_units() {
+    FILE="${1}"
+    VAR="${2}"
+    ncdump -sh "${FILE}" \
+        | /usr/bin/grep "${VAR}:units" \
+        | sed -E "s/${VAR}:units = \"([^\"]*)\".*/\1/g" \
+        | xargs
+}
+
+# Ensure that the units of the specified variable in the specified file match
+# the expected units (case-insensitive). If units are invalid, will exit with
+# nonzero status.
+#
+# 1st arg: netcdf file path
+# 2nd arg: variable name
+# Any number of additional arguments: Valid unit names. e.g. degC, °C, etc
+check_units() {
+    FILE="${1}"
+    VAR="${2}"
+    shift 2
+    EXPECTED_UNITS="$@"
+    UNITS="$(get_units "${FILE}" "${VAR}")"
+    for EXPECTED in ${EXPECTED_UNITS}
+    do
+        # Case-insensitive comparison.
+        if [ ${UNITS,,} = ${EXPECTED,,} ]
+        then
+            return 0
+        fi
+    done
+    die "Invalid units for variable ${VAR}: expected one of ${EXPECTED_UNITS}"
+}
+
+check_units "${FILE_TAS}" "${VAR_TAS}" "K"
+check_units "${FILE_SH}" "${VAR_SH}" "1"
+check_units "${FILE_PATM}" "${VAR_PATM}" "Pa"
+
+################################################################################
+# Processing.
+################################################################################
+
+# Create a temporary file to hold the equation.
+EQN_FILE="$(mktemp vpd.eqn.XXXXXX)"
+echo "_esat=0.001*611.2*exp((17.62*(${VAR_TAS} - 273.15))/(${VAR_TAS} - 30.11));
+_es=${VAR_SH} * (${VAR_PATM} / 1000) / (0.378 * ${VAR_SH} + 0.622);
+${VAR_VPD}=_esat - _es;" >"${EQN_FILE}"
+
+cdo -O -L \
+    -exprf,"${EQN_FILE}" \
+    -merge "${FILE_SH}" "${FILE_PATM}" "${FILE_TAS}" \
+    "${OUT_FILE}"
+ncatted -O -a "units,${VAR_VPD},o,c,kPa" "${OUT_FILE}" "${OUT_FILE}"
+ncatted -O -a "standard_name,${VAR_VPD},o,c,water_vapor_saturation_deficit_in_air" "${OUT_FILE}" "${OUT_FILE}"
+ncatted -O -a "long_name,${VAR_VPD},o,c,Vapour pressure deficit" "${OUT_FILE}" "${OUT_FILE}"
+
+echo "Processing completed successfully."
+
+################################################################################
+# Cleanup.
+################################################################################
+
+rm "${EQN_FILE}"
