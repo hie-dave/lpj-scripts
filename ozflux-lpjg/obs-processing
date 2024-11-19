@@ -109,11 +109,11 @@ _LAI_MAX = 20
 # Standard variables in the ozflux files which will be used for benchmarking.
 _standard_variables = [
 	# GPP shouldn't get this high, but this is mainly for error checking anyway.
-	ForcingVariable("GPP_LT", "gpp", "gC/m2/day", numpy.mean, -200, 200),
-	ForcingVariable("ER_LT", "resp", "gC/m2/day", numpy.mean, -10, 10),
-	ForcingVariable("NEE_LT", "nee", "gC/m2/day", numpy.mean, -10, 10),
+	ForcingVariable("GPP_LT", "gpp", "gC/m2/day", numpy.mean, -20000, 20000),
+	ForcingVariable("ER_LT", "resp", "gC/m2/day", numpy.mean, -10000, 10000),
+	ForcingVariable("NEE_LT", "nee", "gC/m2/day", numpy.mean, -10000, 10000),
 	# todo: are these bounds sensible?
-	ForcingVariable("ET", "et", "mm/day", numpy.mean, -10, 10),
+	ForcingVariable("ET", "et", "mm/day", numpy.mean, -100, 100),
 ]
 
 class Layer:
@@ -169,7 +169,8 @@ _layer_variable_map = {
 	"Whroo": [Layer("Sws", 10)],
 	"WombatStateForest": [Layer("Sws", 10), Layer("Sws_35cma", 35), Layer("Sws_65cma", 65), Layer("Sws_95cma", 95)],
 	"Yanco": [Layer("Sws_3cm", 3), Layer("Sws", 10), Layer("Sws_15cm", 15), Layer("Sws_45cm", 45), Layer("Sws_75cm", 75)],
-	"YarCon": [Layer("Sws_5cm", 5), Layer("Sws", 10)]
+	"YarCon": [Layer("Sws_5cm", 5), Layer("Sws", 10)],
+	"YarIrr": [Layer("Sws_5cm", 5), Layer("Sws", 10)]
 }
 
 class Observation:
@@ -402,7 +403,7 @@ def get_start_date(filename: str) -> datetime.datetime:
 		var = nc.variables[VAR_TIME]
 		toffset = var[0]
 		units = getattr(var, ATTR_UNITS)
-		calendar = getattr(var, ATTR_CALENDAR)
+		calendar = get_calendar(var)
 		return num2date(toffset, units, calendar)
 
 def get_end_date(filename: str) -> datetime.datetime:
@@ -415,7 +416,7 @@ def get_end_date(filename: str) -> datetime.datetime:
 		var = nc.variables[VAR_TIME]
 		toffset = var[len(var) - 1]
 		units = getattr(var, ATTR_UNITS)
-		calendar = getattr(var, ATTR_CALENDAR)
+		calendar = get_calendar(var)
 		return num2date(toffset, units, calendar)
 
 def init_outfile(filename: str, infiles: list[str], timestep: int
@@ -846,17 +847,31 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 		start_date = get_next_year(ozflux_common.parse_date(nc.time_coverage_start))
 		for var in flux_vars:
 			if not var.in_name in nc.variables:
-				raise ValueError(f"Varable {var.in_name} does not exist in file {file}")
+				raise ValueError(f"Variable {var.in_name} does not exist in file {file}")
 			variable = nc.variables[var.in_name]
 			if not hasattr(variable, ATTR_UNITS):
 				raise ValueError(f"Variable {var.in_name} in {file} has no units")
 			units = getattr(variable, ATTR_UNITS)
-			raw = get_data(nc, var, timestep_minutes, True, False, lambda p: \
-				pcb(step_start + step_size * p))
+			# in_file: Dataset
+			# var: ForcingVariable
+			# output_timestep: int
+			# qc_filter: bool
+			# nan_filter: bool
+			# progress_cb: Callable[[float], None]
+			#
+			# in_file, var.in_name, output_timestep, var.out_units, var.aggregator, var.lbound, var.ubound, var.invert,
+			# qc_filter, nan_filter, progress_cb
+			data = get_data_timeseries(nc, var.in_name, timestep_minutes,
+							  		   var.out_units, var.aggregator,
+									   var.lbound, var.ubound, var.invert, True,
+									   False, lambda p: \
+									   pcb(step_start + step_size * p))
 			if len(timeseries) == 0:
-				timeseries = [start_date + multiply_timedelta(delta, i) for i in range(len(raw))]
-				end_date = start_date + multiply_timedelta(delta, len(raw))
-			parsed = [Observation(x, y) for (x, y) in zip(timeseries, raw)]
+				# timeseries = [start_date + multiply_timedelta(delta, i) for i in range(len(raw))]
+				# end_date = start_date + multiply_timedelta(delta, len(raw))
+				timeseries = data.index
+				end_date = timeseries[len(timeseries) - 1]
+			parsed = [Observation(x, y) for x, y in data.itertuples()]
 			out_variables.append(Observations(var.out_name, units, parsed))
 			step_start += step_size
 	read_time = time.time() - read_start

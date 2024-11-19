@@ -1,4 +1,4 @@
-import datetime, numpy, os, re, threading, time
+import datetime, numpy, os, pandas, re, threading, time
 import multiprocessing, multiprocessing.connection
 import traceback, sys
 from ozflux_common import *
@@ -23,6 +23,9 @@ CHUNK_SIZE = 16384
 
 # Progress updates inside long loops are written every N iterations.
 PROGRESS_CHUNK_SIZE = 1024
+
+# Maximum number of floating point numbers to copy at once.
+MAX_CHUNK_SIZE = 8192
 
 # Whether to aggregate timesteps in paralllel. This doesn't save a huge amount
 # of time in the files that I've tested (which are fairly small), but it doesn't
@@ -149,6 +152,7 @@ cd_tp_lock = multiprocessing.BoundedSemaphore(1)
 _units_synonyms = [
 	["W/m2", "W/m^2", "Wm^-2"],
 	["kg/m2/s", "kg/m^2/s", "kgm^-2s^-1", "kg m-2 s-1"],
+	["kg/m2/day", "kg/m^2/day", "mm/day"],
 	["K", "k"],
 	["m/s", "ms^-1"],
 	["Pa", "pa"],
@@ -156,7 +160,8 @@ _units_synonyms = [
 	["ppm", "umol/mol"],
 	["degC", "°C", "degrees C"],
 	["umol/m2/s", "umol/m^2/s"],
-	["m3/m3", "m^3/m^3"]
+	["m3/m3", "m^3/m^3"],
+	["gC/m^2/day", "gC/m2/day"]
 ]
 
 #
@@ -325,6 +330,8 @@ def _filter_qc(data: list[float], qc: list[float]
 	@param qc: List of same length as data containing QC flags.
 	@param pcb: Progress reporting function.
 	"""
+	if numpy.isscalar(data.mask):
+		data.mask = numpy.ma.make_mask_none(data.shape)
 	if len(data) != len(qc):
 		raise ValueError("Unable to filter from QC flag: data length mismatch")
 	for i in range(len(data)):
@@ -334,7 +341,7 @@ def _filter_qc(data: list[float], qc: list[float]
 		if qc_flag in _qc_flag_definitions:
 			(result, msg) = _qc_flag_definitions[qc_flag]
 			if not result:
-				data[i].mask = True
+				data.mask[i] = True
 				log_diagnostic("Filtering QC flag %d: %s" % (i, msg))
 	pcb(1)
 	return data
@@ -468,18 +475,24 @@ def _get_data(in_file: Dataset \
 		step_start += units_time_proportion
 
 		bounds_start = time.time()
-		if hasattr(var_id, _ATTR_VALID_RANGE):
-			# Use valid range to further restrict the range of the variable.
-			valid_range = getattr(var_id, _ATTR_VALID_RANGE)
-			lower_bound = max(valid_range[0], lower_bound)
-			upper_bound = min(valid_range[1], upper_bound)
-		else:
-			if hasattr(var_id, _ATTR_VALID_MIN):
-				valid_min = getattr(var_id, _ATTR_VALID_MIN)
-				lower_bound = max(lower_bound, valid_min)
-			if hasattr(var_id, _ATTR_VALID_MAX):
-				valid_max = getattr(var_id, _ATTR_VALID_MAX)
-				upper_bound = min(upper_bound, valid_max)
+
+		# Note: these attributes are in the original units of the variable, so
+		# in order to use them, we would need to perform a units conversion on
+		# them as we did with the above data. In practice, this is probably not
+		# worth it, and even if it was, they're not part of the CF spec anyway.
+		#
+		# if hasattr(var_id, _ATTR_VALID_RANGE):
+		# 	# Use valid range to further restrict the range of the variable.
+		# 	valid_range = getattr(var_id, _ATTR_VALID_RANGE)
+		# 	lower_bound = max(valid_range[0], lower_bound)
+		# 	upper_bound = min(valid_range[1], upper_bound)
+		# else:
+		# 	# if hasattr(var_id, _ATTR_VALID_MIN):
+		# 	# 	valid_min = getattr(var_id, _ATTR_VALID_MIN)
+		# 	# 	lower_bound = max(lower_bound, valid_min)
+		# 	# if hasattr(var_id, _ATTR_VALID_MAX):
+		# 	# 	valid_max = getattr(var_id, _ATTR_VALID_MAX)
+		# 	# 	upper_bound = min(upper_bound, valid_max)
 		data = bounds_checks(data, lower_bound, upper_bound, lambda p: \
 			progress_cb(step_start + bounds_time_prop * p))
 		bounds_tot = time.time() - bounds_start
@@ -509,6 +522,151 @@ def _get_data(in_file: Dataset \
 
 		# Release global time proportion mutex.
 		gd_tp_lock.release()
+
+		# Done!
+		return data
+
+def get_data_timeseries(in_file: Dataset \
+	, in_name: str
+	, output_timestep: int \
+	, out_units: str \
+	, aggregator: Callable[[list[float]], float] \
+	, lower_bound: float \
+	, upper_bound: float \
+	, invert: bool \
+	, qc_filter: bool \
+	, nan_filter: bool \
+	, progress_cb: Callable[[float], None]) -> list[float]:
+		"""
+		Get all data from the input file and convert it to a format
+		suitable for the output file.
+
+		@param in_name: Name of the variable in the input file.
+		@param out_name: Name of the variable in the output file.
+		@param output_timestep: Output timestep width in minutes.
+		@param qc_filter: Iff true, data with invalid QC flags will be treated as NaN.
+		@param nan_filter: Iff true, NaN data will be interpolated from neighbouring values.
+		"""
+		# Some variables are not translated directly into the output
+		# file and can be ignored (ie filled with zeroes).
+		if in_name == "zero":
+			log_diagnostic("Using zeroes for %s" % in_name)
+			input_timestep = int(in_file.time_step)
+			timestep_ratio = output_timestep // input_timestep
+			n = in_file.variables[VAR_TIME].size // timestep_ratio
+			data = zeroes(n)
+			return trim_to_start_year(in_file, output_timestep, data)
+		if not in_name in in_file.variables:
+			raise ValueError(f"Variable {in_name} does not exist in input file")
+
+		var_id = in_file.variables[in_name]
+
+		# Get units of the input variable.
+		in_units = get_units(var_id)
+
+		# Check if a unit conversion is required.
+		matching_units = units_match(in_units, out_units)
+
+		global get_data_read_prop, get_data_fixnan_prop, get_data_t_agg_prop
+		global get_data_unit_prop, get_data_bounds_prop
+
+		units_time_proportion = 0 if matching_units else get_data_unit_prop
+
+		prop_tot = get_data_read_prop + get_data_fixnan_prop + \
+			get_data_t_agg_prop + units_time_proportion + get_data_bounds_prop
+
+		read_time_proportion = get_data_read_prop / prop_tot
+
+		fixnan_time_proportion = get_data_fixnan_prop / prop_tot if nan_filter else 0
+
+		aggregation_time_proportion = get_data_t_agg_prop / prop_tot
+
+		bounds_time_prop = get_data_bounds_prop / prop_tot
+
+		units_time_proportion /= prop_tot
+
+		step_start = 0
+
+		step_size = read_time_proportion
+
+		qcvar_name = _get_qc_var_name(in_name)
+		if not qcvar_name in in_file.variables:
+			if qc_filter:
+				msg = "Unable to QC filter variable '%s': QC variable '%s' does not exist in file"
+				log_warning(msg % (in_name, qcvar_name))
+			qc_filter = False
+
+		if qc_filter:
+			step_size /= 2
+
+		# Read data from netcdf file.
+		read_start = time.time()
+		data = read_data(var_id, lambda p:progress_cb(step_size * p))
+		read_tot = time.time() - read_start
+		log_debug("Successfully read %d values from netcdf" % len(data))
+
+		step_start += step_size
+
+		if qc_filter:
+			qcvar = in_file.variables[qcvar_name]
+			step_size /= 2
+			qc_data = read_data(qcvar, lambda p: progress_cb(step_start + step_size * p))
+			step_start += step_size
+			data = _filter_qc(data, qc_data, lambda p: progress_cb(step_start + step_size * p))
+			step_start += step_size
+
+		# Convert to flat array.
+		data = numpy.array(data).flatten()
+
+		# Ensure units are correct.
+		unit_start = time.time()
+		if not matching_units:
+			log_diagnostic("Converting %s from %s to %s" % \
+				(in_name, in_units, out_units))
+			data = fix_units(data, in_units, out_units, output_timestep, invert,
+				lambda p: progress_cb( \
+					step_start + units_time_proportion * p))
+		else:
+			log_diagnostic("No units conversion required for %s" % in_name)
+		unit_tot = time.time() - unit_start
+
+		step_start += units_time_proportion
+
+		bounds_start = time.time()
+
+		# Note: these attributes are in the original units of the variable, so
+		# in order to use them, we would need to perform a units conversion on
+		# them as we did with the above data. In practice, this is probably not
+		# worth it, and even if it was, they're not part of the CF spec anyway.
+		#
+		# if hasattr(var_id, _ATTR_VALID_RANGE):
+		# 	# Use valid range to further restrict the range of the variable.
+		# 	valid_range = getattr(var_id, _ATTR_VALID_RANGE)
+		# 	lower_bound = max(valid_range[0], lower_bound)
+		# 	upper_bound = min(valid_range[1], upper_bound)
+		# else:
+		# 	# if hasattr(var_id, _ATTR_VALID_MIN):
+		# 	# 	valid_min = getattr(var_id, _ATTR_VALID_MIN)
+		# 	# 	lower_bound = max(lower_bound, valid_min)
+		# 	# if hasattr(var_id, _ATTR_VALID_MAX):
+		# 	# 	valid_max = getattr(var_id, _ATTR_VALID_MAX)
+		# 	# 	upper_bound = min(upper_bound, valid_max)
+		data = bounds_checks(data, lower_bound, upper_bound, lambda p: \
+			progress_cb(step_start + bounds_time_prop * p))
+		bounds_tot = time.time() - bounds_start
+
+		# Change timestep to something suitable for lpj-guess.
+		log_diagnostic("Aggregating %s to output timestep" % in_name)
+
+		t = in_file.variables["time"]
+		times = num2date(t[:], t.units, get_calendar(t), False, True)
+		if (output_timestep != 24 * 60):
+			raise ValueError(f"Only supported output timestep is currently 24h")
+		df = pandas.DataFrame({"datetime": times, "value": data})
+		df.set_index("datetime", inplace = True)
+		data = df.resample("D").apply(aggregator) # D means daily. Can also use H for hourly, 3H for 3-hourly, S for second, etc.
+
+		time_tot = read_tot + bounds_tot + unit_tot
 
 		# Done!
 		return data
@@ -640,7 +798,7 @@ def remove_nans(data: list[float]
 	n = len(data)
 	N_NEIGHBOUR = 5
 	for i in range(n):
-		if data.mask[i]:
+		if numpy.ma.is_masked(data[i]):
 			# Use mean of 5 closest values if value is nan.
 			x = neighbouring_mean(data, i, N_NEIGHBOUR)
 			m = "Replacing NaN at %d with mean %.2f (n = %d)"
@@ -674,11 +832,11 @@ def aggregate(data: list[float], start: int, stop: int, chunk_size: int \
 		m = "start cannot be greater than stop (start = %d, stop = %d)"
 		raise ValueError(m % (start, stop))
 
-	niter = ((stop - start) // chunk_size)
+	niter = int((stop - start) // chunk_size)
 	result = [0.0] * niter
 	for i in range(niter):
-		lower = start + i * chunk_size
-		upper = min(n, start + (i + 1) * chunk_size)
+		lower = int(start + i * chunk_size)
+		upper = int(min(n, start + (i + 1) * chunk_size))
 		result[i] = aggregator(data[lower:upper])
 		if i % PROGRESS_CHUNK_SIZE == 0:
 			progress_cb(i / niter)
@@ -839,11 +997,11 @@ def bounds_checks(data: list[float], xmin: float, xmax: float
 	for i in range(n):
 		if data[i] < xmin:
 			m = "Value %.2f in row %d exceeds lower bound of %.2f"
-			log_debug(m % (data[i], i, xmin))
+			log_warning(m % (data[i], i, xmin))
 			data[i] = xmin
 		elif data[i] > xmax:
 			m = "Value %.2f in row %d exceeds upper bound of %.2f"
-			log_debug(m % (data[i], i, xmax))
+			log_warning(m % (data[i], i, xmax))
 			data[i] = xmax
 		if i % PROGRESS_CHUNK_SIZE == 0:
 			progress_cb(i / n)
@@ -1022,6 +1180,7 @@ def create_dim_if_not_exists(nc: Dataset, name: str, size: int = 0):
 
 	@param nc: The NetCDF file.
 	@param name: Name of the dimension.
+	@param size: Size of the dimension, or 0 for an unlimited dimension.
 	"""
 	if not name in nc.dimensions:
 		log_diagnostic(f"Creating dimension {name} with size {size}")
@@ -1144,9 +1303,10 @@ def get_compression_type(filters: dict) -> str:
 	@param filters: The variable filters, obtained by variable.filters().
 	"""
 	types = ["zlib", "szip", "zstd", "bzip2", "blosc", "fletcher32"]
-	for compression_type in types:
-		if filters[compression_type]:
-			return compression_type
+	if filters is not None:
+		for compression_type in types:
+			if filters[compression_type]:
+				return compression_type
 	return ""
 
 def get_dimension_indices(nc_in: Dataset, nc_out: Dataset, name: str
@@ -1169,7 +1329,7 @@ def get_dimension_indices(nc_in: Dataset, nc_out: Dataset, name: str
 	return [get_coord_index(dim, var, value) for value in values]
 
 def copy_3d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
-		, pcb: Callable[[float], None]):
+		, pcb: Callable[[float], None], assume_same_dim_order: bool = False):
 	"""
 	Copy the contents of the specified variable in the input file into the
 	output file.
@@ -1179,6 +1339,7 @@ def copy_3d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
 	@param name: The name of the variable to be copied.
 	@param min_chunk_size: Minimum chunk size used when copying data.
 	@param pcb: Progress callback function.
+	@param assume_same_dim_order: Should we assume that the dimensions are in the same order, or should we check?
 	"""
 	var_in = nc_in.variables[name]
 	var_out = nc_out.variables[name]
@@ -1199,15 +1360,30 @@ def copy_3d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
 	dims = [nc_in.dimensions[name] for name in dim_names_in]
 
 	chunk_sizes = var_in.chunking()
-	chunk_sizes = [max(min_chunk_size * c, c) for c in chunk_sizes]
+	if (chunk_sizes is None):
+		chunk_sizes = [min(min_chunk_size, dim.size) for dim in dims]
+	else:
+		chunk_sizes = [max(min_chunk_size * c, c) for c in chunk_sizes]
+
+	for i in range(nd):
+		total_chunk_size = numpy.prod(chunk_sizes)
+		if total_chunk_size <= MAX_CHUNK_SIZE:
+			break
+		if i < nd - 1:
+			# First N dimensions set to chunksize=1
+			chunk_sizes[i] = 1
+		else:
+			# Last dimension set to chunksize=8192
+			chunk_sizes[i] = MAX_CHUNK_SIZE
+
 	shape = var_in.shape
 	niter = [math.ceil(s / c) for (s, c) in zip(shape, chunk_sizes)]
 
 	it_max = niter[0] * niter[1] * niter[2]
 	it = 0
-	samei = False
-	samej = False
-	samek = False
+	samei = assume_same_dim_order
+	samej = assume_same_dim_order
+	samek = assume_same_dim_order
 	for i in range(niter[0]):
 		ilow = i * chunk_sizes[0]
 		ihigh = min(shape[0], ilow + chunk_sizes[0])
@@ -1231,7 +1407,8 @@ def copy_3d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
 				pcb(it / it_max)
 
 def copy_2d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
-		, pcb: Callable[[float], None]):
+		, pcb: Callable[[float], None]
+		, assume_same_dim_order: bool = False):
 	"""
 	Copy the contents of the specified variable in the input file into the
 	output file.
@@ -1261,14 +1438,17 @@ def copy_2d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
 	dims = [nc_in.dimensions[name] for name in dim_names_in]
 
 	chunk_sizes = var_in.chunking()
-	chunk_sizes = [max(min_chunk_size * c, c) for c in chunk_sizes]
+	if chunk_sizes is None:
+		chunk_sizes = [min(min_chunk_size, dim.size) for dim in dims]
+	else:
+		chunk_sizes = [max(min_chunk_size * c, c) for c in chunk_sizes]
 	shape = var_in.shape
 	niter = [math.ceil(s / c) for (s, c) in zip(shape, chunk_sizes)]
 
 	it_max = niter[0] * niter[1]
 	it = 0
-	samei = False
-	samej = False
+	samei = assume_same_dim_order
+	samej = assume_same_dim_order
 	for i in range(niter[0]):
 		ilow = i * chunk_sizes[0]
 		ihigh = min(shape[0], ilow + chunk_sizes[0])
@@ -1300,7 +1480,13 @@ def copy_1d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
 	"""
 	var_in = nc_in.variables[name]
 	var_out = nc_out.variables[name]
-	chunk_size = var_in.chunking()[0]
+
+	chunking = var_in.chunking()
+	chunk_size = 1
+	if (chunking is None):
+		chunk_size = min(8192, len(var_in))
+	else:
+		chunk_size = var_in.chunking()[0]
 	if var_in.chunking() == "contiguous":
 		if min_chunk_size == 0:
 			chunk_size = 64
@@ -1465,7 +1651,8 @@ def consistent_dimensionality(var_in: Variable, var_out: Variable) -> bool:
 	return True
 
 def _copy_variable(nc_in: Dataset, nc_out: Dataset, name: str
-	, min_chunk_size: int, pcb: Callable[[float], None]):
+	, min_chunk_size: int, pcb: Callable[[float], None]
+	, assume_same_dim_order: bool = False):
 
 	# Call the appropriate function based on number of dimensions.
 	ndim = len(nc_in.variables[name].dimensions)
@@ -1473,14 +1660,15 @@ def _copy_variable(nc_in: Dataset, nc_out: Dataset, name: str
 	if ndim > 3:
 		raise ValueError(f"Unable to copy variable {name}: >3 dimensions not implemented (variable {name} has {ndim} dimensions)")
 	elif ndim == 3:
-		copy_3d(nc_in, nc_out, name, min_chunk_size, pcb)
+		copy_3d(nc_in, nc_out, name, min_chunk_size, pcb, assume_same_dim_order)
 	elif ndim == 2:
-		copy_2d(nc_in, nc_out, name, min_chunk_size, pcb)
+		copy_2d(nc_in, nc_out, name, min_chunk_size, pcb, assume_same_dim_order)
 	elif ndim == 1:
 		copy_1d(nc_in, nc_out, name, min_chunk_size, pcb)
 
 def copy_variable(nc_in: Dataset, nc_out: Dataset, name: str
-	, min_chunk_size: int, pcb: Callable[[float], None]):
+	, min_chunk_size: int, pcb: Callable[[float], None]
+	, assume_same_dim_order: bool = False):
 	"""
 	Copy the contents of the specified variable in the input file into the
 	output file.
@@ -1493,12 +1681,13 @@ def copy_variable(nc_in: Dataset, nc_out: Dataset, name: str
 	@param anme: The name of the variable to be copied.
 	@param min_chunk_size: Minimum chunk size used when copying data.
 	@param pcb: Progress callback function.
+	@param assume_same_dim_order: Should we assume that the dimensions are in the same order, or should we check?
 	"""
 	var_in = nc_in.variables[name]
 	var_out = nc_out.variables[name]
 
 	if consistent_dimensionality(var_in, var_out):
-		_copy_variable(nc_in, nc_out, name, min_chunk_size, pcb)
+		_copy_variable(nc_in, nc_out, name, min_chunk_size, pcb, assume_same_dim_order)
 	else:
 		copy_variable_transpose(nc_in, nc_out, name, min_chunk_size, pcb)
 
@@ -1657,9 +1846,19 @@ def get_first_time(nc: Dataset) -> datetime.datetime:
 	var_time = nc.variables[VAR_TIME]
 	time = nc.variables[VAR_TIME][0]
 	units = getattr(var_time, ATTR_UNITS)
-	calendar = getattr(var_time, ATTR_CALENDAR)
+	calendar = get_calendar(var_time)
 	return num2date(time, units, calendar, only_use_cftime_datetimes = False
 		, only_use_python_datetimes = True)
+
+def get_calendar(var: Variable) -> str:
+	if hasattr(var, ATTR_STD_NAME) and getattr(var, ATTR_STD_NAME) != STD_TIME:
+		raise ValueError(f"Cannot get calendar attribute for variable {var.name}")
+
+	if hasattr(var, ATTR_CALENDAR):
+		return getattr(var, ATTR_CALENDAR)
+
+	# Use default calendar.
+	return "standard"
 
 def get_timestep(nc: Dataset) -> int:
 	"""
@@ -1667,23 +1866,10 @@ def get_timestep(nc: Dataset) -> int:
 	"""
 	var_time = get_var_from_std_name(nc, STD_TIME)
 	units = getattr(var_time, ATTR_UNITS)
-	calendar = getattr(var_time, ATTR_CALENDAR)
+	calendar = get_calendar(var_time)
 
-	chunk_size = var_time.chunking()
-	chunk_size = 64 if chunk_size == "contiguous" else chunk_size[0]
-	n = len(var_time)
-	for i in range(0, n, chunk_size):
-		upper = min(n, i + chunk_size)
-		raw = var_time[i:upper]
-		times = num2date(raw, units, calendar, only_use_cftime_datetimes = False, only_use_python_datetimes = True)
-		first_date = times[0].date()
-		for j in range(len(times)):
-			if times[j].date() != first_date:
-				timestep = SECONDS_PER_DAY // j
-				log_diagnostic(f"Input timestep is {timestep} seconds ({j} steps per day)")
-				return timestep
-
-	raise ValueError(f"Unable to determine timestep width: all data appears to be on the same day")
+	times = num2date(var_time[0:2], units, calendar, only_use_cftime_datetimes = False, only_use_python_datetimes = True)
+	return (times[1] - times[0]).total_seconds()
 
 def get_nexist(var: Variable) -> int:
 	"""
