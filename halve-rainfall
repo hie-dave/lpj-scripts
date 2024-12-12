@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+
+# Exit immediately if:
+# - Any command fails
+# - Any part of a pipeline fails
+# - We reference any unbound variables
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+    echo "Running in debug mode. Set DEBUG to 0 to disable."
+    set -x
+fi
+
+# Print the specified error message to stderr and exit with nonzero status.
+die() { echo "${0}: Error: $*" >&2; exit 1; }
+
+# CLI Argument parsing.
+
+# Default valued for optional arguments.
+
+PRECIP_NAME=prec
+
+USAGE="Usage: ${0} -i <infile.nc> -o <outfile.nc> -s startyear -e endyear [-h] [-p <precip name>]
+
+Halve the precipitation in the specified year range in a NetCDF file.
+
+  -i <infile.nc>, --in-file <infile.nc>            Path to the input NetCDF file
+  -o <outfile.nc>, --out-file <outfile.nc>         Path to the output NetCDF file
+  -s <start year>, --start-year <start year>       The start year of the halved rainfall (inclusive)
+  -e <end year>, --end-year <end year>             The end year of the halved rainfall (inclusive)
+  -p <precip name, --precip-name <precip name>     (Optional) Name of the precipitation variable in the NetCDF file (default: prec)
+  -h, --help                                       Show this help information and exit"
+
+POSITIONAL_ARGS=()
+while [[ $# -gt 0 ]]
+do
+    case ${1} in
+        -i|--in-file)
+            IN_FILE="${2}"
+            shift
+            shift
+            ;;
+        -o|--out-file)
+            OUT_FILE="${2}"
+            shift
+            shift
+            ;;
+        -s|--start-year)
+            START_YEAR="${2}"
+            shift
+            shift
+            ;;
+        -e|--end-year)
+            END_YEAR="${2}"
+            shift
+            shift
+            ;;
+        -p|--precip-name)
+            PRECIP_NAME="${2}"
+            shift
+            shift
+            ;;
+        -h|--help)
+            echo "${USAGE}"
+            exit 0
+            ;;
+        -*|--*)
+            die "Unknown option: ${1}"
+            exit 1
+            ;;
+        *)
+            POSITIONAL_ARGS+=("${1}")
+            shift
+            ;;
+    esac
+done
+
+set -- "${POSITIONAL_ARGS[@]}"
+
+missing_arg() {
+    local MISSING_ARGS="$(echo ${1})"
+    local MISSING_STR="$(echo "${MISSING_ARGS}" | sed -r 's/ /, /g')"
+    local PLURAL="argument"
+    if [ $(echo "${MISSING_ARGS}" | wc -w) -gt 1 ]; then PLURAL="arguments"; fi
+    echo "Missing mandatory ${PLURAL}: ${MISSING_STR}"
+    echo "${USAGE}"
+    exit 1
+}
+
+# Check if any required arguments are missing. If so, we want to print out all
+# missing arguments in a single error message, along with full usage info.
+MISSING_ARGS=""
+if [ -z "${IN_FILE:-}" ]; then MISSING_ARGS="${MISSING_ARGS} -i|--in-file"; fi
+if [ -z "${OUT_FILE:-}" ]; then MISSING_ARGS="${MISSING_ARGS} -o|--out-file"; fi
+if [ -z "${START_YEAR:-}" ]; then MISSING_ARGS="${MISSING_ARGS} -s|--start-year"; fi
+if [ -z "${END_YEAR:-}" ]; then MISSING_ARGS="${MISSING_ARGS} -e|--end-year"; fi
+if [ -n "${MISSING_ARGS}" ]; then missing_arg "${MISSING_ARGS}"; fi
+
+# Create a temporary working directory.
+WORK_DIR="$(mktemp -d)"
+
+# This cleanup function will be called when this script exits for any reason.
+cleanup() {
+    # Remove temporary files.
+    rm -rf "${WORK_DIR}"
+}
+trap cleanup EXIT
+
+# Get the names of the longitude, latitude, and time variables, by looking for
+# variables with the correct standard name. Non-CF-compliant files are not
+# supported by this tool.
+LON_NAME="$(ncdump -sh "${IN_FILE}" | grep 'standard_name = "longitude"' | xargs echo | cut -d: -f1)"
+LAT_NAME="$(ncdump -sh "${IN_FILE}" | grep 'standard_name = "latitude"' | xargs echo | cut -d: -f1)"
+TIME_NAME="$(ncdump -sh "${IN_FILE}" | grep 'standard_name = "time"' | xargs echo | cut -d: -f1)"
+
+# Ensure that time is the first dimension, so that cdo can work with the file.
+REORDERED_FILE="${WORK_DIR}/$(basename "${IN_FILE/.nc/}")_reordered.nc"
+ncpdq -O -a "${TIME_NAME},${LAT_NAME},${LON_NAME}" "${IN_FILE}" "${REORDERED_FILE}"
+
+# Get full year range of input file.
+YEARS="$(cdo -L --silent showyear "${REORDERED_FILE}")"
+FIRST_YEAR="$(echo "${YEARS}" | awk '{print $1}')"
+LAST_YEAR="$(echo "${YEARS}" | awk '{print $NF}')"
+
+# Verify that the user-specified date range is sensible.
+DATE_MSG="You want to take years ${START_YEAR}-${END_YEAR} but the input file goes from ${FIRST_YEAR}-${LAST_YEAR}"
+if [ ${START_YEAR} -lt ${FIRST_YEAR} ]; then die "${DATE_MSG}"; fi
+if [ ${START_YEAR} -gt ${LAST_YEAR} ]; then die "${DATE_MSG}"; fi
+if [ ${END_YEAR} -lt ${FIRST_YEAR} ]; then die "${DATE_MSG}"; fi
+if [ ${END_YEAR} -gt ${LAST_YEAR} ]; then die "${DATE_MSG}"; fi
+if [ ${START_YEAR} -gt ${END_YEAR} ]; then die "Start year (${START_YEAR}) must be < end year (${END_YEAR})"; fi
+
+SUBSET_FILE="${WORK_DIR}/$(basename "${IN_FILE/.nc/}")_${START_YEAR}-${END_YEAR}.nc"
+YEAR_RANGE="${START_YEAR},${END_YEAR}"
+if [ "${START_YEAR}" = "${END_YEAR}" ]; then YEAR_RANGE="${START_YEAR}"; fi
+cdo --silent -L -O selyear,"${YEAR_RANGE}" "${REORDERED_FILE}" "${SUBSET_FILE}"
+
+HALVED_FILE="${WORK_DIR}/$(basename "${IN_FILE/.nc/}")_halved.nc"
+cdo --silent -L -O aexpr,"${PRECIP_NAME}=${PRECIP_NAME} / 2.0" "${SUBSET_FILE}" "${HALVED_FILE}"
+
+# The final output file will be:
+# 0. First year -> start year (if start year > first year)
+# 1. Start year -> end year (halved rainfall)
+# 2. End year -> last year (if end year < last year)
+
+# Unsure if this will work if the input filename contains spaces/newlines/etc.
+FILES_TO_MERGE="${HALVED_FILE}"
+
+# Check if there is data before the halved rainfall.
+if [ "${START_YEAR}" -gt "${FIRST_YEAR}" ]
+then
+    ANTE_FILE="${WORK_DIR}/$(basename "${IN_FILE/.nc/}")_ante.nc"
+    cdo --silent -L -O selyear,"${FIRST_YEAR}/$((START_YEAR - 1))" "${REORDERED_FILE}" "${ANTE_FILE}"
+    FILES_TO_MERGE="${ANTE_FILE} ${HALVED_FILE}"
+fi
+
+# Check if there is data after the halved rainfall.
+if [ "${END_YEAR}" -lt "${LAST_YEAR}" ]
+then
+    POST_FILE="${WORK_DIR}/$(basename "${IN_FILE/.nc/}")_post.nc"
+    cdo --silent -L -O selyear,"$((END_YEAR + 1))/${LAST_YEAR}" "${REORDERED_FILE}" "${POST_FILE}"
+    FILES_TO_MERGE="${FILES_TO_MERGE} ${POST_FILE}"
+fi
+
+# Generate the output file with time,lat,lon dimension order and bad chunking.
+TMP_OUT="${WORK_DIR}/$(basename "${OUT_FILE/.nc/}")_unoptimised.nc"
+cdo --silent -L -O mergetime ${FILES_TO_MERGE} "${TMP_OUT}"
+
+# Get dimension order.
+DIM_ORDER="$(ncdump -sh "${IN_FILE}" | grep "${PRECIP_NAME}(" | sed -r 's/.*\(([^,]+), ([^,]+), ([^\)]+).*/\1,\2,\3/g')"
+ARGS="-a ${DIM_ORDER}"
+
+# Get chunk sizes.
+CHUNK_SIZES_RAW="$(ncdump -sh "${IN_FILE}" | grep "${PRECIP_NAME}:_ChunkSizes")"
+if [ -n "${CHUNK_SIZES_RAW}" ]
+then
+    CHUNK_SIZES="$(echo "${CHUNK_SIZES_RAW}" | sed -r 's/.* = ([0-9]+), ([0-9]+), ([0-9]+).*/\1,\2,\3/g')"
+    for ((I=1; I<=3; I++))
+    do
+        DIM_NAME="$(echo "${DIM_ORDER}" | cut -d, -f${I})"
+        CHUNK_SIZE="$(echo "${CHUNK_SIZES}" | cut -d, -f${I})"
+        ARGS="${ARGS} --cnk_dmn ${DIM_NAME},${CHUNK_SIZE}"
+    done
+fi
+
+# Get deflation level.
+if ncdump -sh "${IN_FILE}" | grep -q "${PRECIP_NAME}:_DeflateLevel"
+then
+    DEFLATE_LEVEL="$(ncdump -sh "${IN_FILE}" | grep -q "${PRECIP_NAME}:_DeflateLevel" | sed -r 's/.*= ([0-9]).*/\1/g')"
+    ARGS="${ARGS} -L${DEFLATE_LEVEL}"
+fi
+
+# Generate output file, with same dimension order, chunking, and deflation level
+# as the original input file. Technically, it's possible for the original file
+# to have different settings per variable, but we're going to ignore this
+# possibility for now. If they really want that, they can manually ncpdq it.
+ncpdq -O ${ARGS} "${TMP_OUT}" "${OUT_FILE}"
