@@ -378,7 +378,7 @@ OUT_FILE="${OUT_FILE}"
 EOF
 
 		REMAP_OP=""
-		if [ -n "${GRID_FILE}" ]
+		if [ -n "${GRID_FILE:-}" ]
 		then
 			# User has provided a grid file. Therefore we add a conservative
 			# remapping operation to the cdo command.
