@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+#
+# Usage: ${0} <model> <scenario> <wrf version>
 
 # Exit immediately if any command fails.
 set -euo pipefail
@@ -6,15 +8,27 @@ set -euo pipefail
 # If environment variable DEBUG is set to 1, run in debug mode.
 if [ "${DEBUG:-}" = 1 ]
 then
-  echo "Running in debug mode. Set DEBUG to 0 to disable."
+  echo "Running in debug mode. Set DEBUG to 0 to disable." >&2
   set -x
 fi
 
 # Get directory containing this script.
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
 
+MODEL=${1:-}
+SCENARIO=${2:-}
+WRF_VERSION=${3:-}
+
 . "${DIR}/narclim2_config"
 . "${DIR}/narclim2_helpers"
+
+# Overwrite model/scenario/WRF version with CLI arguments, if any were given.
+if [ -n "${MODEL}" ]; then DRIVING_SOURCE_ID=${MODEL}; fi
+if [ -n "${SCENARIO}" ]; then DRIVING_EXPERIMENT_ID=${SCENARIO}; fi
+if [ -n "${WRF_VERSION}" ]; then SOURCE_ID=${WRF_VERSION}; fi
+
+# .../ozflux/WRF_VERSION/MODEL/SCENARIO
+OZFLUX_OUT_PATH="${NARCLIM_OUT_PATH}/ozflux/${SOURCE_ID}/${DRIVING_SOURCE_ID}/${DRIVING_EXPERIMENT_ID}"
 
 # Path to a plaintext file containing space-separated columns: lon lat site.
 GRIDLIST="/home/590/dh7190/code/lpj-guess/scripts/ozflux.grid"
@@ -77,69 +91,54 @@ fi
 START_DATE="$(get_timeseries_start "${VAR_TAS}")"
 END_DATE="$(get_timeseries_end "${VAR_TAS}")"
 
-MODELS="ACCESS-ESM1-5 EC-Earth3-Veg MPI-ESM1-2-HR NorESM2-MM UKESM1-0-LL"
-SCENARIOS="historical ssp126 ssp370"
-WRF_VERSIONS="NARCliM2-0-WRF412R3 NARCliM2-0-WRF412R5"
-
-submit_sites() {
-    # Iterate over sites.
-    NSITE=`wc -l "${GRIDLIST}" | cut -d' ' -f1`
-    while read LINE
-    do
-        if [ -z "${LINE}" ]; then continue; fi
-
-        LON="$(echo "${LINE}" | cut -d' ' -f1)"
-        LAT="$(echo "${LINE}" | cut -d' ' -f2)"
-        SITE="$(echo "${LINE}" | cut -d' ' -f3)"
-
-        printf "${SITE} (${LON}, ${LAT}) "
-
-        # 1. Variable name.
-        # 2. Longitude of the gridcell.
-        # 3. Latitude of the gridcell.
-        # 4. (Optional) Name of the site.
-        # 5. (Optional) Units conversion as cdo operator without '-' prefix.
-        # 6. (Optional) New units. Required if argument 5 is provided.
-
-        DEPS=""
-        for VAR in ${STD_VARS}
-        do
-            JOB_ID="$(narclim_process_var_ozflux "${VAR}" "${LON}" "${LAT}" "${START_DATE}" "${END_DATE}" "${SITE}")"
-            DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
-        done
-
-        for VAR in ${TEMP_VARS}
-        do
-            JOB_ID="$(narclim_process_var_ozflux "${VAR}" "${LON}" "${LAT}" "${START_DATE}" "${END_DATE}" "${SITE}" "subc,273.15" "degC")"
-            DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
-        done
-
-        # Process precipitation, converting from kg m-2 s-1 to mm.
-        JOB_ID="$(narclim_process_var_ozflux pr "${LON}" "${LAT}" "${START_DATE}" "${END_DATE}" "${SITE}" "mulc,${SECONDS_PER_TIMESTEP}" "mm")"
-        DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
-
-        # Estimate VPD from air temperature, pressure, and specific humidity.
-        OUT_DIR="$(get_ozflux_work_dir "${SITE}")"
-        JOB_NAME="narclim2_estimate_vpd_${SITE}_${SOURCE_ID}_${DRIVING_SOURCE_ID}_${DRIVING_EXPERIMENT_ID}"
-        JOB_ID="$(narclim_process_vpd "${OUT_DIR}" "${VAR_TAS}" "${VAR_PS}" "${VAR_SH}" "${VAR_VPD}" "${DEPS}" "${JOB_NAME}" "${START_DATE}" "${END_DATE}")"
-        DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
-
-        # Merge all variables into a single file for this site. Note: this will also
-        # rechunk the file, compress it, etc.
-        narclim2_ozflux_merge_files "${SITE}" "${DEPS}"
-    done <"${GRIDLIST}"
-}
-
-for MODEL in ${MODELS}
+# Iterate over sites.
+NSITE=`wc -l "${GRIDLIST}" | cut -d' ' -f1`
+GLOBAL_DEPS=
+while read LINE
 do
-    DRIVING_SOURCE_ID=${MODEL}
-    for SCENARIO in ${SCENARIOS}
+    if [ -z "${LINE}" ]; then continue; fi
+
+    LON="$(echo "${LINE}" | cut -d' ' -f1)"
+    LAT="$(echo "${LINE}" | cut -d' ' -f2)"
+    SITE="$(echo "${LINE}" | cut -d' ' -f3)"
+
+    # printf "${SITE} (${LON}, ${LAT}) "
+
+    # 1. Variable name.
+    # 2. Longitude of the gridcell.
+    # 3. Latitude of the gridcell.
+    # 4. (Optional) Name of the site.
+    # 5. (Optional) Units conversion as cdo operator without '-' prefix.
+    # 6. (Optional) New units. Required if argument 5 is provided.
+
+    DEPS=""
+    for VAR in ${STD_VARS}
     do
-        DRIVING_EXPERIMENT_ID=${SCENARIO}
-        for WRF_VERSION in ${WRF_VERSIONS}
-        do
-            SOURCE_ID=${WRF_VERSION}
-            OZFLUX_OUT_PATH="${NARCLIM_OUT_PATH}/ozflux/${WRF_VERSION}/${MODEL}/${SCENARIO}"
-        done
+        JOB_ID="$(narclim_process_var_ozflux "${VAR}" "${LON}" "${LAT}" "${START_DATE}" "${END_DATE}" "${SITE}")"
+        DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
     done
-done
+
+    for VAR in ${TEMP_VARS}
+    do
+        JOB_ID="$(narclim_process_var_ozflux "${VAR}" "${LON}" "${LAT}" "${START_DATE}" "${END_DATE}" "${SITE}" "subc,273.15" "degC")"
+        DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
+    done
+
+    # Process precipitation, converting from kg m-2 s-1 to mm.
+    JOB_ID="$(narclim_process_var_ozflux pr "${LON}" "${LAT}" "${START_DATE}" "${END_DATE}" "${SITE}" "mulc,${SECONDS_PER_TIMESTEP}" "mm")"
+    DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
+
+    # Estimate VPD from air temperature, pressure, and specific humidity.
+    OUT_DIR="$(get_ozflux_work_dir "${SITE}")"
+    JOB_NAME="narclim2_estimate_vpd_${SITE}_${SOURCE_ID}_${DRIVING_SOURCE_ID}_${DRIVING_EXPERIMENT_ID}"
+    JOB_ID="$(narclim_process_vpd "${OUT_DIR}" "${VAR_TAS}" "${VAR_PS}" "${VAR_SH}" "${VAR_VPD}" "${DEPS}" "${JOB_NAME}" "${START_DATE}" "${END_DATE}")"
+    DEPS="$(append_deps "${DEPS}" "${JOB_ID}")"
+
+    # Merge all variables into a single file for this site. Note: this will also
+    # rechunk the file, compress it, etc.
+    JOB_ID="$(narclim2_ozflux_merge_files "${SITE}" "${DEPS}")"
+    GLOBAL_DEPS="$(append_deps "${GLOBAL_DEPS}" "${JOB_ID}")"
+done <"${GRIDLIST}"
+
+echo "${GLOBAL_DEPS}"
+
