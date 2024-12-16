@@ -196,7 +196,7 @@ def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int, units: st
 		for name in nc_in.variables:
 			var = nc_in.variables[name]
 			dims = var.dimensions
-			fmt = get_nc_datatype(var.datatype)
+			fmt = get_nc_datatype(var.datatype.__str__())
 			filters = var.filters()
 			# Compression level
 			cl = opts.compression_level
