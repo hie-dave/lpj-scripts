@@ -493,8 +493,10 @@ def _get_data(in_file: Dataset \
 		# 	# if hasattr(var_id, _ATTR_VALID_MAX):
 		# 	# 	valid_max = getattr(var_id, _ATTR_VALID_MAX)
 		# 	# 	upper_bound = min(upper_bound, valid_max)
-		data = bounds_checks(data, lower_bound, upper_bound, lambda p: \
+		(data, passed) = bounds_checks(data, lower_bound, upper_bound, lambda p: \
 			progress_cb(step_start + bounds_time_prop * p))
+		if not passed:
+			log_warning(f"Variable {in_name} failed its bounds checks")
 		bounds_tot = time.time() - bounds_start
 
 		time_tot = read_tot + fixnan_tot + t_agg_tot + bounds_tot + unit_tot
@@ -651,8 +653,10 @@ def get_data_timeseries(in_file: Dataset \
 		# 	# if hasattr(var_id, _ATTR_VALID_MAX):
 		# 	# 	valid_max = getattr(var_id, _ATTR_VALID_MAX)
 		# 	# 	upper_bound = min(upper_bound, valid_max)
-		data = bounds_checks(data, lower_bound, upper_bound, lambda p: \
+		(data, passed) = bounds_checks(data, lower_bound, upper_bound, lambda p: \
 			progress_cb(step_start + bounds_time_prop * p))
+		if not passed:
+			log_warning(f"Variable {in_name} failed its bounds checks")
 		bounds_tot = time.time() - bounds_start
 
 		# Change timestep to something suitable for lpj-guess.
@@ -994,18 +998,21 @@ def bounds_checks(data: list[float], xmin: float, xmax: float
 	@param progress_cb: Progress reporting function.
 	"""
 	n = len(data)
+	passed = True
 	for i in range(n):
 		if data[i] < xmin:
+			passed = False
 			m = "Value %.2f in row %d exceeds lower bound of %.2f"
-			log_warning(m % (data[i], i, xmin))
+			log_diagnostic(m % (data[i], i, xmin))
 			data[i] = xmin
 		elif data[i] > xmax:
+			passed = False
 			m = "Value %.2f in row %d exceeds upper bound of %.2f"
-			log_warning(m % (data[i], i, xmax))
+			log_diagnostic(m % (data[i], i, xmax))
 			data[i] = xmax
 		if i % PROGRESS_CHUNK_SIZE == 0:
 			progress_cb(i / n)
-	return data
+	return (data, passed)
 
 def index_of(xarr: list[float], x: float) -> int:
 	"""
