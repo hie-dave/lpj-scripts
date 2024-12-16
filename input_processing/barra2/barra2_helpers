@@ -365,7 +365,7 @@ module load netcdf cdo nco
 INPUT_FILES="${INPUT_FILES}"
 OUT_DIR="${UNPACK_DIR}"
 
-for IN_FILE in ${INPUT_FILES}
+for IN_FILE in \${INPUT_FILES}
 do
 	OUT_FILE="\${OUT_DIR}/\$(basename "\${IN_FILE}")"
 
