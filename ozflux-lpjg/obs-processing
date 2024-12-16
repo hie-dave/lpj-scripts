@@ -113,7 +113,7 @@ _standard_variables = [
 	ForcingVariable("ER_LT", "resp", "gC/m2/day", numpy.mean, -10000, 10000),
 	ForcingVariable("NEE_LT", "nee", "gC/m2/day", numpy.mean, -10000, 10000),
 	# todo: are these bounds sensible?
-	ForcingVariable("ET", "et", "mm/day", numpy.mean, -100, 100),
+	ForcingVariable("ET", "transpiration", "mm/day", numpy.mean, -100, 100),
 ]
 
 class Layer:

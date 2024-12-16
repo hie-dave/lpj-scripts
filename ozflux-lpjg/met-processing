@@ -180,7 +180,7 @@ def copy_data_lsm(in_file: Dataset, out_file: Dataset, timestep: int, \
 
 def get_coord(nc: Dataset, attr: str, std_name: str):
 	if hasattr(nc, attr):
-		return getattr(nc, attr)
+		return float(getattr(nc, attr))
 	dim = get_dim_from_std_name(nc, std_name)
 	if dim.size > 1:
 		raise ValueError(f"Input file has multiple ({len(dim)}) {std_name} values")
