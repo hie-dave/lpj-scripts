@@ -437,8 +437,13 @@ FILE_TAS="${FILE_TAS}"
 FILE_SH="${FILE_SH}"
 FILE_PS="${FILE_PS}"
 
-EQN_FILE="${EQN_FILE}"
+EQN_FILE="\$(mktemp vpd.eqn.XXX)"
 OUT_FILE="${FILE_VPD}"
+
+# Generate equation file.
+echo "_esat=0.001*611.2*exp((17.62*${VAR_TAS})/(${VAR_TAS} + 243.04));" >"\${EQN_FILE}"
+echo "_es=${VAR_SH} * (${VAR_PS} / 1000) / (0.378 * ${VAR_SH} + 0.622);" >>"\${EQN_FILE}"
+echo "${VAR_VPD}=_esat - _es;" >>"\${EQN_FILE}"
 
 # Estimate VPD from air temperature, specific humidity and air pressure.
 cdo -O -L \\
@@ -484,7 +489,7 @@ narclim2_ozflux_merge_files() {
 #!/usr/bin/env bash
 #PBS -l ncpus=1
 #PBS -l walltime=${PBS_WALLTIME_RECHUNK}
-#PBS -l mem=4GB
+#PBS -l mem=8GB
 #PBS -q normal
 #PBS -l wd
 #PBS -j oe
@@ -504,7 +509,7 @@ module load netcdf cdo nco
 
 IN_DIR="${IN_DIR}"
 OUT_FILE="${OUT_FILE}"
-cdo -O merge "\${IN_DIR}"/*.nc "\${OUT_FILE}"
+cdo -L -O merge "\${IN_DIR}"/*.nc "\${OUT_FILE}"
 ncpdq -O -a lat,lon,time --cnk_dmn time,${TIME_CHUNK_SIZE} --cnk_dmn lat,1 --cnk_dmn lon,1 -L${DEFLATE_LEVEL} "\${OUT_FILE}" "\${OUT_FILE}2"
 mv "\${OUT_FILE}2" "\${OUT_FILE}"
 

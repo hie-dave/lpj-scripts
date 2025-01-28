@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Extract ozflux site data for all narclim models/scenarios.
+
+# Exit immediately if any command fails.
+set -euo pipefail
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+  echo "Running in debug mode. Set DEBUG to 0 to disable."
+  set -x
+fi
+
+# Get directory containing this script.
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+
+. "${DIR}/narclim2_config"
+
+MODELS="ACCESS-ESM1-5 EC-Earth3-Veg MPI-ESM1-2-HR NorESM2-MM UKESM1-0-LL"
+SCENARIOS="historical ssp126 ssp370"
+WRF_VERSIONS="NARCliM2-0-WRF412R3 NARCliM2-0-WRF412R5"
+
+SCRIPT_PREV=
+for MODEL in ${MODELS}
+do
+    for SCENARIO in ${SCENARIOS}
+    do
+        for WRF_VERSION in ${WRF_VERSIONS}
+        do
+            JOB_NAME="narclim2_ozflux_submit_${MODEL}_${SCENARIO}_${WRF_VERSION}"
+            SCRIPT_FILE="${SCRIPT_PATH}/${JOB_NAME}"
+            cat <<EOF >"${SCRIPT_FILE}"
+#!/usr/bin/env bash
+#PBS -l ncpus=1
+#PBS -l walltime=01:00:00
+#PBS -l mem=4GB
+#PBS -q normal
+#PBS -l wd
+#PBS -j oe
+#PBS -m a
+#PBS -M ${PBS_EMAIL}
+#PBS -P ${PBS_PROJECT}
+#PBS -p ${PBS_PRIORITY}
+#PBS -l storage=${PBS_STORAGE}
+#PBS -N ${JOB_NAME}
+#PBS -o ${LOG_PATH}/${JOB_NAME}.log
+
+set -euo pipefail
+
+module purge
+module load netcdf cdo nco
+
+MODEL="${MODEL}"
+SCENARIO="${SCENARIO}"
+WRF_VERSION="${WRF_VERSION}"
+DEPS="\$("${DIR}/narclim2_extract_ozflux" "\${MODEL}" "\${SCENARIO}" "\${WRF_VERSION}")"
+
+EOF
+            if [ -n "${SCRIPT_PREV}" ]
+            then
+                echo "qsub -W \"depend=afterok:\${DEPS}\" \"${SCRIPT_PREV}\"" >>"${SCRIPT_FILE}"
+            fi
+            chmod u+x "${SCRIPT_FILE}"
+            SCRIPT_PREV="${SCRIPT_FILE}"
+        done
+    done
+done
+
+echo "${SCRIPT_PREV}"
