@@ -210,18 +210,11 @@ vpd=(_esat-_e)/1000";
 
         // Create temporary directory and cd into it
         sb.AppendLine("TMPDIR=$(mktemp -d)");
-        sb.AppendLine("if [ ! -d \"$TMPDIR\" ]; then");
-        sb.AppendLine("    echo \"Error: Failed to create temporary directory\"");
-        sb.AppendLine("    exit 1");
-        sb.AppendLine("fi");
-        sb.AppendLine();
-
         sb.AppendLine("cd \"$TMPDIR\"");
         sb.AppendLine("trap 'cd \"$WORKDIR\"; rm -rf \"$TMPDIR\"' EXIT");
         sb.AppendLine();
 
         // Ensure output directory exists
-        sb.AppendLine("# Ensure output directory exists");
         sb.AppendLine($"mkdir -p \"{_config.OutputDirectory}\"");
         sb.AppendLine();
 
@@ -233,31 +226,18 @@ vpd=(_esat-_e)/1000";
 
             sb.AppendLine($"# Processing {variable}");
             
-            // Extract variable from input files and get time range
-            sb.AppendLine($"# Extract variable and determine time range");
-            sb.AppendLine($"if ! cdo -O select,name={varInfo.Name} {string.Join(" ", dataset.GetInputFiles())} temp.nc; then");
-            sb.AppendLine($"    echo \"Error: Failed to extract variable {varInfo.Name}\"");
-            sb.AppendLine("    exit 1");
-            sb.AppendLine("fi");
-            sb.AppendLine();
-
-            // Extract date range with error handling
-            sb.AppendLine("if ! START_DATE=$(cdo -s showdate temp.nc | head -n 1); then");
-            sb.AppendLine("    echo \"Error: Failed to extract start date\"");
-            sb.AppendLine("    exit 1");
-            sb.AppendLine("fi");
-            sb.AppendLine();
-
-            sb.AppendLine("if ! END_DATE=$(cdo -s showdate temp.nc | tail -n 1); then");
-            sb.AppendLine("    echo \"Error: Failed to extract end date\"");
-            sb.AppendLine("    exit 1");
-            sb.AppendLine("fi");
+            // Merge files and extract variable
+            sb.AppendLine($"cdo -O mergetime {string.Join(" ", dataset.GetInputFiles())} merged.nc");
+            sb.AppendLine($"cdo -O select,name={varInfo.Name} merged.nc temp.nc");
+            sb.AppendLine("rm -f merged.nc");
+            sb.AppendLine("START_DATE=$(cdo -s showdate temp.nc | head -n 1)");
+            sb.AppendLine("END_DATE=$(cdo -s showdate temp.nc | tail -n 1)");
             sb.AppendLine();
 
             // Convert units if needed
             var conversionCmd = GenerateUnitConversionCommand(
                 varInfo.Name, 
-                varInfo.Name,  // Keep same name during conversion
+                varInfo.Name,
                 varInfo.Units, 
                 targetUnits,
                 _config.InputTimeStep,
@@ -266,12 +246,8 @@ vpd=(_esat-_e)/1000";
 
             if (conversionCmd.RequiresProcessing)
             {
-                sb.AppendLine("# Convert units");
-                sb.AppendLine($"if ! {conversionCmd.Command}; then");
-                sb.AppendLine($"    echo \"Error: Failed to convert units for {varInfo.Name}\"");
-                sb.AppendLine("    exit 1");
-                sb.AppendLine("fi");
-                sb.AppendLine("rm -f temp.nc");  // Clean up as we go
+                sb.AppendLine(conversionCmd.Command);
+                sb.AppendLine("rm -f temp.nc");
             }
             else
             {
@@ -286,11 +262,7 @@ vpd=(_esat-_e)/1000";
 
             if (aggregationCmd.RequiresProcessing)
             {
-                sb.AppendLine("# Aggregate timesteps");
-                sb.AppendLine($"if ! {aggregationCmd.Command}; then");
-                sb.AppendLine($"    echo \"Error: Failed to aggregate timesteps for {varInfo.Name}\"");
-                sb.AppendLine("    exit 1");
-                sb.AppendLine("fi");
+                sb.AppendLine(aggregationCmd.Command);
                 sb.AppendLine("rm -f converted.nc");
             }
             else
@@ -298,13 +270,9 @@ vpd=(_esat-_e)/1000";
                 sb.AppendLine(aggregationCmd.Command);
             }
 
-            // Get the base filename pattern from the dataset
-            sb.AppendLine("# Generate output filename with full date range");
+            // Generate output filename with full date range
             sb.AppendLine($"FILENAME_PATTERN=\"{dataset.GetOutputFilePattern(variable)}\"");
-            sb.AppendLine("if ! OUTPUT_FILE=$(echo \"$FILENAME_PATTERN\" | sed \"s/[0-9]\\{8\\}-[0-9]\\{8\\}/${START_DATE}-${END_DATE}/\"); then");
-            sb.AppendLine("    echo \"Error: Failed to generate output filename\"");
-            sb.AppendLine("    exit 1");
-            sb.AppendLine("fi");
+            sb.AppendLine("OUTPUT_FILE=$(echo \"$FILENAME_PATTERN\" | sed \"s/[0-9]\\{8\\}-[0-9]\\{8\\}/${START_DATE}-${END_DATE}/\")");
             sb.AppendLine();
 
             // Reorder dimensions, improve chunking, and enable compression
@@ -312,11 +280,7 @@ vpd=(_esat-_e)/1000";
             string compressionSpec = _config.CompressOutput ? $"-L{_config.CompressionLevel}" : "";
             var outputPath = Path.Combine(_config.OutputDirectory, "$OUTPUT_FILE");
 
-            sb.AppendLine("# Reorder dimensions, improve chunking, and enable compression");
-            sb.AppendLine($"if ! ncpdq -O -a lat,lon,time {chunkSpec} {compressionSpec} aggregated.nc \"{outputPath}\"; then");
-            sb.AppendLine($"    echo \"Error: Failed to finalize output file for {varInfo.Name}\"");
-            sb.AppendLine("    exit 1");
-            sb.AppendLine("fi");
+            sb.AppendLine($"ncpdq -O -a lat,lon,time {chunkSpec} {compressionSpec} aggregated.nc \"{outputPath}\"");
             sb.AppendLine("rm -f aggregated.nc");
             sb.AppendLine();
         }

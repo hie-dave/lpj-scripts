@@ -91,31 +91,4 @@ public class ScriptGeneratorTests
 
         Assert.Equal(requiresProcessing, command.RequiresProcessing);
     }
-
-    [Fact]
-    public void GenerateProcessingScript_HandlesDateExtractionErrors()
-    {
-        var script = _generator.GenerateProcessingScript(new MockDataset());
-        
-        // Verify that the script includes error handling for date extraction
-        Assert.Contains("if ! START_DATE=$(cdo -s showdate", script);
-        Assert.Contains("then echo \"Error: Failed to extract start date\"", script);
-        Assert.Contains("exit 1", script);
-    }
-
-    private class MockDataset : IClimateDataset
-    {
-        public string DatasetName => "mock";
-
-        public IEnumerable<string> GetInputFiles() => new[] { "test.nc" };
-
-        public VariableInfo GetVariableInfo(ClimateVariable variable) =>
-            new("test", "K");
-
-        public string GetOutputFilePattern(ClimateVariable variable) =>
-            "test_XXXXXXXX-XXXXXXXX.nc";
-
-        public Dictionary<string, string> GetMetadata() => 
-            new Dictionary<string, string>();
-    }
 }
