@@ -53,11 +53,25 @@ public class ProcessingConfig
     [Option("vpd-method", Default = VPDMethod.Magnus, HelpText = "Method to calculate VPD: Magnus (default), Buck1981, AlduchovEskridge1996, AllenFAO1998, or Sonntag1990")]
     public VPDMethod VPDMethod { get; set; } = VPDMethod.Magnus;
 
-    [Option("input-time-step", HelpText = "Input time step")]
-    public TimeStep InputTimeStep { get; set; } = TimeStep.Hourly;
+    private TimeStep inputTimeStep = TimeStep.Hourly;
+    private TimeStep outputTimeStep = TimeStep.ThreeHourly;
 
-    [Option("output-time-step", HelpText = "Output time step")]
-    public TimeStep OutputTimeStep { get; set; } = TimeStep.ThreeHourly;
+    [Option("input-time-step", HelpText = "Input time step in hours (must be 1, 3, or 24)")]
+    public int InputTimeStepHours
+    {
+        get => inputTimeStep.Hours;
+        set => inputTimeStep = new TimeStep(value);
+    }
+
+    [Option("output-time-step", HelpText = "Output time step in hours (must be 1, 3, or 24)")]
+    public int OutputTimeStepHours
+    {
+        get => outputTimeStep.Hours;
+        set => outputTimeStep = new TimeStep(value);
+    }
+
+    public TimeStep InputTimeStep => inputTimeStep;
+    public TimeStep OutputTimeStep => outputTimeStep;
 
     private static readonly Dictionary<ClimateVariable, (string units, AggregationMethod aggregation)> DefaultVariableConfig = new()
     {
