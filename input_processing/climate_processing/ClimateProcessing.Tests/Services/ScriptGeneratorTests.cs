@@ -28,50 +28,73 @@ public class ScriptGeneratorTests
     }
 
     [Theory]
-    [InlineData("K", "K", "temp", "temp", false)]  // No conversion needed
-    [InlineData("K", "degC", "temp", "temp", true)]  // Conversion needed
-    [InlineData("W/m2", "W m-2", "rad", "rad", true)]  // Only renaming needed
-    public void GenerateUnitConversionCommand_DetectsProcessingNeeds(
+    [InlineData("K", "K", "temp", false, false)]  // No conversion needed
+    [InlineData("K", "degC", "temp", true, true)]  // Conversion needed
+    [InlineData("W/m2", "W m-2", "rad", false, true)]  // Only renaming needed
+    public void GenerateUnitConversionOperators_GeneratesCorrectOperators(
         string inputUnits,
         string targetUnits,
-        string inputVar,
         string outputVar,
-        bool requiresProcessing)
+        bool expectsConversion,
+        bool expectsRenaming)
     {
-        var command = _generator.GenerateUnitConversionCommand(
-            inputVar,
+        var operators = _generator.GenerateUnitConversionOperators(
             outputVar,
             inputUnits,
             targetUnits,
-            TimeStep.Hourly,
-            "input.nc",
-            "output.nc");
+            TimeStep.Hourly).ToList();
 
-        Assert.Equal(requiresProcessing, command.RequiresProcessing);
+        if (expectsConversion)
+        {
+            Assert.Contains(operators, op => op.StartsWith("-expr"));
+        }
+        if (expectsRenaming)
+        {
+            Assert.Contains(operators, op => op.StartsWith("-setattribute"));
+        }
+        if (!expectsConversion && !expectsRenaming)
+        {
+            Assert.Empty(operators);
+        }
     }
 
     [Theory]
     [InlineData(1, 24, true)]   // Hourly to daily
     [InlineData(24, 24, false)] // Daily to daily
     [InlineData(3, 24, true)]   // 3-hourly to daily
-    public void GenerateTimeAggregationCommand_DetectsProcessingNeeds(
+    public void GenerateTimeAggregationOperators_GeneratesCorrectOperators(
         int inputHours,
         int outputHours,
-        bool requiresProcessing)
+        bool requiresAggregation)
     {
-        var config = _config with
+        var config = new ProcessingConfig
         {
+            JobName = _config.JobName,
+            Project = _config.Project,
+            Queue = _config.Queue,
+            Walltime = _config.Walltime,
+            Ncpus = _config.Ncpus,
+            Memory = _config.Memory,
+            OutputDirectory = _config.OutputDirectory,
             InputTimeStep = new TimeStep(inputHours),
             OutputTimeStep = new TimeStep(outputHours)
         };
         var generator = new ScriptGenerator(config);
 
-        var command = generator.GenerateTimeAggregationCommand(
-            ClimateVariable.Temperature,
-            "input.nc",
-            "output.nc");
+        string @operator = generator.GenerateTimeAggregationOperator(
+            ClimateVariable.Temperature);
 
-        Assert.Equal(requiresProcessing, command.RequiresProcessing);
+        if (requiresAggregation)
+        {
+            if (outputHours == 24)
+                Assert.StartsWith("-daymean", @operator);
+            else
+                Assert.StartsWith("-timemean", @operator);
+        }
+        else
+        {
+            Assert.Empty(@operator);
+        }
     }
 
     [Theory]

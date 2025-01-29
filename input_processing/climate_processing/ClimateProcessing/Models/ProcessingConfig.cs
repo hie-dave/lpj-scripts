@@ -53,11 +53,11 @@ public class ProcessingConfig
     [Option("vpd-method", Default = VPDMethod.Magnus, HelpText = "Method to calculate VPD: Magnus (default), Buck1981, AlduchovEskridge1996, AllenFAO1998, or Sonntag1990")]
     public VPDMethod VPDMethod { get; set; } = VPDMethod.Magnus;
 
-    [Option("input-time-step", Required = true, HelpText = "Input time step")]
+    [Option("input-time-step", HelpText = "Input time step")]
     public TimeStep InputTimeStep { get; set; } = TimeStep.Hourly;
 
-    [Option("output-time-step", Required = true, HelpText = "Output time step")]
-    public TimeStep OutputTimeStep { get; set; } = TimeStep.Daily;
+    [Option("output-time-step", HelpText = "Output time step")]
+    public TimeStep OutputTimeStep { get; set; } = TimeStep.ThreeHourly;
 
     private static readonly Dictionary<ClimateVariable, (string units, AggregationMethod aggregation)> DefaultVariableConfig = new()
     {
@@ -100,7 +100,7 @@ public class ProcessingConfig
     public void Validate()
     {
         if (!Directory.Exists(InputDirectory))
-            throw new ArgumentException("InputDirectory must be specified and exist");
+            throw new ArgumentException($"Input directory does not exist: '{InputDirectory}'");
 
         // Create output directory if it doesn't already exist.
         if (!string.IsNullOrEmpty(OutputDirectory))

@@ -10,12 +10,12 @@ public enum AggregationMethod
 
 public static class AggregationMethodExtensions
 {
-    public static string ToCdoOperator(this AggregationMethod method) => method switch
+    public static string ToCdoOperator(this AggregationMethod method, TimeStep timeStep) => method switch
     {
-        AggregationMethod.Mean => "timemean",
-        AggregationMethod.Sum => "timesum",
-        AggregationMethod.Maximum => "timemax",
-        AggregationMethod.Minimum => "timemin",
+        AggregationMethod.Mean => timeStep == TimeStep.Daily ? "daymean" : "timemean",
+        AggregationMethod.Sum => timeStep == TimeStep.Daily ? "daysum" : "timesum",
+        AggregationMethod.Maximum => timeStep == TimeStep.Daily ? "daymax" : "timemax",
+        AggregationMethod.Minimum => timeStep == TimeStep.Daily ? "daymin" : "timemin",
         _ => throw new ArgumentException($"Unknown aggregation method: {method}")
     };
 }

@@ -24,3 +24,10 @@ ozflux-lpjg/inputs
 
 # Scratch files
 scratch/
+
+# ClimateProcessing build artifacts.
+input_processing/climate_processing/ClimateProcessing/bin
+input_processing/climate_processing/ClimateProcessing/obj
+input_processing/climate_processing/ClimateProcessing.Tests/bin
+input_processing/climate_processing/ClimateProcessing.Tests/obj
+
