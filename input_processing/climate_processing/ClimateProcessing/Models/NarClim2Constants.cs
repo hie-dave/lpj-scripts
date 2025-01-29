@@ -82,7 +82,7 @@ public static class NarClim2Constants
 
     public static class DomainNames
     {
-        public const string AUS18 = "AUS18";
+        public const string AUS18 = "AUS-18";
         public const string SEAus04 = "NARCliM2-0-SEAus-04";
 
         public static string ToString(NarClim2Domain domain) => domain switch

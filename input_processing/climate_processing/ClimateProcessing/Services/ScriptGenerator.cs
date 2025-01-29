@@ -2,90 +2,87 @@ using System.Text;
 using ClimateProcessing.Models;
 using System.IO;
 using ClimateProcessing.Units;
+using System.Runtime.CompilerServices;
+
+[assembly: InternalsVisibleTo("ClimateProcessing.Tests")]
 
 namespace ClimateProcessing.Services;
 
 public class ScriptGenerator
 {
     private readonly ProcessingConfig _config;
-    private static readonly Dictionary<ClimateVariable, (string stdName, string units, TimeStep timeStep)> _standardVariables = new()
+
+    // List of standard variables and their output names and units.
+    private static readonly Dictionary<ClimateVariable, (string outName, string outUnits)> _standardVariables = new()
     {
-        { ClimateVariable.SpecificHumidity, ("huss", "1", TimeStep.Hourly) },
-        { ClimateVariable.SurfacePressure, ("ps", "Pa", TimeStep.Hourly) },
-        { ClimateVariable.ShortwaveRadiation, ("rsds", "W m-2", TimeStep.Hourly) },
-        { ClimateVariable.WindSpeed, ("sfcWind", "m s-1", TimeStep.Hourly) },
-        { ClimateVariable.Temperature, ("tas", "degC", TimeStep.Hourly) },
-        { ClimateVariable.Precipitation, ("pr", "mm", TimeStep.Daily) }  // Target is accumulated daily precipitation
+        { ClimateVariable.SpecificHumidity, ("huss", "1") },
+        { ClimateVariable.SurfacePressure, ("ps", "Pa") },
+        { ClimateVariable.ShortwaveRadiation, ("rsds", "W m-2") },
+        { ClimateVariable.WindSpeed, ("sfcWind", "m s-1") },
+        { ClimateVariable.Temperature, ("tas", "degC") },
+        { ClimateVariable.Precipitation, ("pr", "mm") }
     };
+
+    private (string outName, string outUnits) GetStandardConfig(ClimateVariable variable)
+    {
+        if (!_standardVariables.TryGetValue(variable, out var config))
+        {
+            throw new ArgumentException($"No configuration found for variable {variable}");
+        }
+        return config;
+    }
 
     public ScriptGenerator(ProcessingConfig config)
     {
         _config = config;
     }
 
-    internal ProcessingCommand GenerateUnitConversionCommand(
-        string inputVar,
+    internal string GenerateRenameOperator(string inName, string outName)
+    {
+        if (inName == outName)
+            return string.Empty;
+        return $"-chname,'{inName}','{outName}'";
+    }
+
+    internal IEnumerable<string> GenerateUnitConversionOperators(
         string outputVar,
         string inputUnits,
         string targetUnits,
-        TimeStep timeStep,
-        string inputFile,
-        string outputFile)
+        TimeStep timeStep)
     {
         var result = UnitConverter.AnalyzeConversion(inputUnits, targetUnits);
-        
-        if (!result.RequiresConversion && !result.RequiresRenaming)
-        {
-            return ProcessingCommand.Skip(inputFile, outputFile);
-        }
 
-        var commands = new List<string>();
+        List<string> operators = [];
 
         if (result.RequiresConversion)
         {
-            var expression = UnitConverter.GenerateConversionExpression(
-                inputVar, 
-                outputVar, 
-                inputUnits, 
+            string expression = UnitConverter.GenerateConversionExpression(
+                inputUnits,
                 targetUnits,
-                result.RequiresTimeStep ? timeStep : null);
-            commands.Add($"cdo -O expr,'{expression}' {inputFile} {outputFile}");
+                timeStep);
+            operators.Add($"-expr,'{expression}'");
         }
 
-        if (result.RequiresRenaming && !result.RequiresConversion)
-        {
-            // If we only need to rename units, we can do it in-place with a symlink
-            commands.Add($"ln -sf {inputFile} {outputFile}");
-            commands.Add($"ncatted -O -a units,{outputVar},m,c,\"{targetUnits}\" {outputFile}");
-        }
-        else if (result.RequiresRenaming)
-        {
-            // If we already converted, just update the metadata on the output file
-            commands.Add($"ncatted -O -a units,{outputVar},m,c,\"{targetUnits}\" {outputFile}");
-        }
+        if (result.RequiresRenaming)
+            operators.Add($"-setattribute,'{outputVar}@units={targetUnits}'");
 
-        return ProcessingCommand.Process(string.Join("\n", commands));
+        return operators;
     }
 
-    internal ProcessingCommand GenerateTimeAggregationCommand(
-        ClimateVariable variable,
-        string inputFile,
-        string outputFile)
+    internal string GenerateTimeAggregationOperator(
+        ClimateVariable variable)
     {
         // Only aggregate if input and output timesteps differ
         if (_config.InputTimeStep == _config.OutputTimeStep)
-        {
-            return ProcessingCommand.Skip(inputFile, outputFile);
-        }
+            return string.Empty;
 
         // Calculate the number of timesteps to aggregate
         int stepsToAggregate = _config.OutputTimeStep.Hours / _config.InputTimeStep.Hours;
         
         var aggregationMethod = _config.GetAggregationMethod(variable);
-        var @operator = aggregationMethod.ToCdoOperator();
+        var @operator = aggregationMethod.ToCdoOperator(_config.OutputTimeStep);
 
-        return ProcessingCommand.Process(
-            $"cdo -O -{@operator},{stepsToAggregate} {inputFile} {outputFile}");
+        return $"-{@operator},{stepsToAggregate}";
     }
 
     internal ProcessingCommand GenerateVariableRenameCommand(
@@ -163,29 +160,23 @@ vpd=(_esat-_e)/1000";
         return sb.ToString();
     }
 
-    private string GeneratePBSHeader()
+    private void WritePBSHeader(TextWriter writer)
     {
-        var lines = new List<string>
-        {
-            "#!/bin/bash",
-            $"#PBS -N {_config.JobName}",
-            $"#PBS -P {_config.Project}",
-            $"#PBS -q {_config.Queue}",
-            $"#PBS -l walltime={_config.Walltime}",
-            $"#PBS -l ncpus={_config.Ncpus}",
-            $"#PBS -l mem={_config.Memory}GB",
-            $"#PBS -j oe"
-        };
+        writer.WriteLine("#!/bin/bash");
+        writer.WriteLine($"#PBS -N {_config.JobName}");
+        writer.WriteLine($"#PBS -P {_config.Project}");
+        writer.WriteLine($"#PBS -q {_config.Queue}");
+        writer.WriteLine($"#PBS -l walltime={_config.Walltime}");
+        writer.WriteLine($"#PBS -l ncpus={_config.Ncpus}");
+        writer.WriteLine($"#PBS -l mem={_config.Memory}GB");
+        writer.WriteLine($"#PBS -j oe");
 
         // Add storage directives if required
         var storageDirectives = _config.GetRequiredStorageDirectives();
         if (storageDirectives.Any())
-        {
-            lines.Add(PBSStorageHelper.FormatStorageDirectives(storageDirectives));
-        }
+            writer.WriteLine(PBSStorageHelper.FormatStorageDirectives(storageDirectives));
 
-        lines.Add("");  // Add blank line after header
-        return string.Join("\n", lines);
+        writer.WriteLine("");  // Add blank line after header
     }
 
     public string GenerateProcessingScript(IClimateDataset dataset)
@@ -193,7 +184,8 @@ vpd=(_esat-_e)/1000";
         var sb = new StringBuilder();
         
         // Add PBS header
-        sb.AppendLine(GeneratePBSHeader());
+        using (TextWriter writer = new StringWriter(sb))
+            WritePBSHeader(writer);
 
         sb.AppendLine("set -euo pipefail");
         sb.AppendLine();
@@ -222,66 +214,36 @@ vpd=(_esat-_e)/1000";
         foreach (ClimateVariable variable in Enum.GetValues<ClimateVariable>())
         {
             VariableInfo varInfo = dataset.GetVariableInfo(variable);
-            string targetUnits = _config.GetTargetUnits(variable);
+            (string outVar, string targetUnits) = GetStandardConfig(variable);
 
-            sb.AppendLine($"# Processing {variable}");
-            
-            // Merge files and extract variable
-            sb.AppendLine($"cdo -O mergetime {string.Join(" ", dataset.GetInputFiles())} merged.nc");
-            sb.AppendLine($"cdo -O select,name={varInfo.Name} merged.nc temp.nc");
-            sb.AppendLine("rm -f merged.nc");
-            sb.AppendLine("START_DATE=$(cdo -s showdate temp.nc | head -n 1)");
-            sb.AppendLine("END_DATE=$(cdo -s showdate temp.nc | tail -n 1)");
-            sb.AppendLine();
+            sb.AppendLine($"echo \"Processing {variable}...\"");
 
-            // Convert units if needed
-            var conversionCmd = GenerateUnitConversionCommand(
-                varInfo.Name, 
-                varInfo.Name,
-                varInfo.Units, 
-                targetUnits,
-                _config.InputTimeStep,
-                "temp.nc", 
-                "converted.nc");
+            string rename = GenerateRenameOperator(varInfo.Name, outVar);
+            string conversion = string.Join(" ", GenerateUnitConversionOperators(outVar, varInfo.Units, targetUnits, _config.InputTimeStep));
+            string aggregation = GenerateTimeAggregationOperator(variable);
+            string unpack = "-unpack";
+            string remap = $"-remapcon,{_config.GridFile}";
+            string operators = $"{aggregation} {conversion} {rename} {unpack} {remap}";
 
-            if (conversionCmd.RequiresProcessing)
-            {
-                sb.AppendLine(conversionCmd.Command);
-                sb.AppendLine("rm -f temp.nc");
-            }
-            else
-            {
-                sb.AppendLine(conversionCmd.Command);
-            }
+            string outFileName = dataset.GenerateOutputFileName(variable);
+            string tmpFile = Path.Combine("\"${WORKDIR}\"", outFileName);
 
-            // Perform time aggregation if needed
-            var aggregationCmd = GenerateTimeAggregationCommand(
-                variable,
-                "converted.nc",
-                "aggregated.nc");
+            // TODO: quote file names.
+            // TODO: use variable name for output file?
 
-            if (aggregationCmd.RequiresProcessing)
-            {
-                sb.AppendLine(aggregationCmd.Command);
-                sb.AppendLine("rm -f converted.nc");
-            }
-            else
-            {
-                sb.AppendLine(aggregationCmd.Command);
-            }
-
-            // Generate output filename with full date range
-            sb.AppendLine($"FILENAME_PATTERN=\"{dataset.GetOutputFilePattern(variable)}\"");
-            sb.AppendLine("OUTPUT_FILE=$(echo \"$FILENAME_PATTERN\" | sed \"s/[0-9]\\{8\\}-[0-9]\\{8\\}/${START_DATE}-${END_DATE}/\")");
+            // Merge files and perform all operations in a single step.
+            string inFiles = string.Join(" ", dataset.GetInputFiles(variable));
+            sb.AppendLine($"cdo -O mergetime {operators} {inFiles} {tmpFile}");
             sb.AppendLine();
 
             // Reorder dimensions, improve chunking, and enable compression
-            string chunkSpec = $"--cnk_dmn lat/{_config.ChunkSizeSpatial},lon/{_config.ChunkSizeSpatial},time/{_config.ChunkSizeTime}";
-            string compressionSpec = _config.CompressOutput ? $"-L{_config.CompressionLevel}" : "";
-            var outputPath = Path.Combine(_config.OutputDirectory, "$OUTPUT_FILE");
+            string ordering = "-a lat,lon,time";
+            string chunking = $"--cnk_dmn lat,{_config.ChunkSizeSpatial} --cnk_dmn lon,{_config.ChunkSizeSpatial} --cnk_dmn time,{_config.ChunkSizeTime}";
+            string compression = _config.CompressOutput ? $"-L{_config.CompressionLevel}" : "";
+            string outFile = Path.Combine(_config.OutputDirectory, outFileName);
 
-            sb.AppendLine($"ncpdq -O -a lat,lon,time {chunkSpec} {compressionSpec} aggregated.nc \"{outputPath}\"");
-            sb.AppendLine("rm -f aggregated.nc");
+            sb.AppendLine($"ncpdq -O {ordering} {chunking} {compression} \"{tmpFile}\" \"{outFile}\"");
+            sb.AppendLine($"rm -f \"{tmpFile}\"");
             sb.AppendLine();
         }
 

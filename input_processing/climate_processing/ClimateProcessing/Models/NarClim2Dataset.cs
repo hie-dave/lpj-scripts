@@ -14,13 +14,26 @@ public class NarClim2Dataset : IClimateDataset
     private readonly NarClim2RCM _rcm;
     private readonly NarClim2Frequency _frequency;
 
+    // Variable names and units as they exist in the NARCliM2 dataset.
     private static readonly Dictionary<ClimateVariable, (string name, string units)> _variableMap = new()
     {
-        { ClimateVariable.SpecificHumidity, ("huss", "1") },        // Specific humidity
-        { ClimateVariable.SurfacePressure, ("ps", "Pa") },         // Surface pressure
-        { ClimateVariable.ShortwaveRadiation, ("rsds", "W m-2") }, // Surface downwelling shortwave radiation
-        { ClimateVariable.WindSpeed, ("sfcwind", "m s-1") },       // Near-surface wind speed
-        { ClimateVariable.Temperature, ("tas", "K") }              // Near-surface air temperature
+        // Specific humidity
+        { ClimateVariable.SpecificHumidity, ("huss", "1") },
+
+        // Surface pressure
+        { ClimateVariable.SurfacePressure, ("ps", "Pa") },
+
+        // Surface downwelling shortwave radiation
+        { ClimateVariable.ShortwaveRadiation, ("rsds", "W m-2") },
+
+        // Near-surface wind speed
+        { ClimateVariable.WindSpeed, ("sfcwind", "m s-1") },
+
+        // Near-surface air temperature
+        { ClimateVariable.Temperature, ("tas", "K") },
+
+        // Precipitation
+        { ClimateVariable.Precipitation, ("pr", "kg m-2 s-1") }
     };
 
     private readonly Dictionary<string, string> _metadata;
@@ -45,9 +58,9 @@ public class NarClim2Dataset : IClimateDataset
     public string DatasetName => 
         $"NARCliM2.0_{NarClim2Constants.GCMNames.ToString(_gcm)}_{NarClim2Constants.ExperimentNames.ToString(_experiment)}_{NarClim2Constants.RCMNames.ToString(_rcm)}";
 
-    public IEnumerable<string> GetInputFiles()
+    public IEnumerable<string> GetInputFiles(ClimateVariable variable)
     {
-        var baseDir = Path.Combine(_inputPath,
+        string baseDir = Path.Combine(_inputPath,
             NarClim2Constants.Paths.MipEra,
             NarClim2Constants.Paths.ActivityId,
             NarClim2Constants.DomainNames.ToString(_domain),
@@ -59,18 +72,12 @@ public class NarClim2Dataset : IClimateDataset
             NarClim2Constants.Paths.Version,
             NarClim2Constants.FrequencyNames.ToString(_frequency));
 
-        var files = new List<string>();
-        foreach (var variable in _variableMap.Values)
-        {
-            var varDir = Path.Combine(baseDir, variable.name, NarClim2Constants.Paths.LatestVersion);
-            if (Directory.Exists(varDir))
-            {
-                files.AddRange(Directory.GetFiles(varDir, "*.nc")
-                    .OrderBy(f => GetDateFromFilename(f)));
-            }
-        }
+        string varName = GetVariableInfo(variable).Name;
+        string varDir = Path.Combine(baseDir, varName, NarClim2Constants.Paths.LatestVersion);
+        if (!Directory.Exists(varDir))
+            return Enumerable.Empty<string>();
 
-        return files;
+        return Directory.GetFiles(varDir, "*.nc").OrderBy(GetDateFromFilename);
     }
 
     public VariableInfo GetVariableInfo(ClimateVariable variable)
@@ -93,36 +100,35 @@ public class NarClim2Dataset : IClimateDataset
         { "version", NarClim2Constants.Paths.Version }
     };
 
-    public string GetOutputFilePattern(ClimateVariable variable)
-    {
-        // Get the first input file for this variable to use as a pattern
-        var inputFiles = Directory.GetFiles(_inputPath,
-            "*.nc")
-            .Where(f => Path.GetFileName(f).Contains(_variableMap[variable].name))
-            .OrderBy(f => f);
-
-        if (!inputFiles.Any())
-        {
-            throw new InvalidOperationException($"No input files found for variable {variable}");
-        }
-
-        var firstFile = Path.GetFileName(inputFiles.First());
-        
-        // Extract the pattern before the date range
-        var prefix = string.Join("_", firstFile.Split('_').TakeWhile(p => !p.Contains("-")));
-        
-        // Add placeholder for full date range and extension
-        return $"{prefix}_XXXXXXXX-XXXXXXXX.nc";
-    }
-
     private static DateTime GetDateFromFilename(string filename)
     {
         // Example filename: tas_AUS18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_mon_195101-195112.nc
-        var match = Regex.Match(filename, @"_(\d{6})-\d{6}\.nc$");
+        Match match = Regex.Match(filename, @"_(\d{6})-\d{6}\.nc$");
         if (!match.Success)
             throw new ArgumentException($"Invalid filename format: {filename}");
 
-        var dateStr = match.Groups[1].Value;
+        string dateStr = match.Groups[1].Value;
         return DateTime.ParseExact(dateStr, "yyyyMM", null);
+    }
+
+    public string GenerateOutputFileName(ClimateVariable variable)
+    {
+        // Get the first input file for this variable to use as a pattern
+        IEnumerable<string> inputFiles = GetInputFiles(variable);
+
+        if (!inputFiles.Any())
+            throw new InvalidOperationException($"No input files found for variable {GetVariableInfo(variable).Name}");
+
+        DateTime startDate = GetDateFromFilename(inputFiles.First());
+        DateTime endDate = GetDateFromFilename(inputFiles.Last());
+
+        string firstFile = Path.GetFileName(inputFiles.First());
+
+        // Extract the pattern before the date range
+        // pr_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_mon_198301-198312.nc
+        string prefix = string.Join("_", firstFile.Split('_').TakeWhile(p => !p.Contains(".nc")));
+
+        // Add the date range and extension
+        return $"{prefix}_{startDate:yyyyMM}-{endDate:yyyyMM}.nc";
     }
 }

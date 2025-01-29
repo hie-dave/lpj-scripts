@@ -20,8 +20,8 @@ public static class UnitConverter
 
     private static readonly Dictionary<(string From, string To), ConversionDefinition> ConversionExpressions = new()
     {
-        [("K", "degC")] = new("${output}=${input}-273.15", false),
-        [("kg m-2 s-1", "mm")] = new("${output}=${input}*${timestep}", true)  // Multiply by seconds in period to get accumulation
+        [("K", "degC")] = new("subc,273.15", false),
+        [("kg m-2 s-1", "mm")] = new("mulc,{timestep}", true)  // Multiply by seconds in period to get accumulation
     };
 
     public record ConversionResult(
@@ -92,37 +92,23 @@ public static class UnitConverter
     }
 
     public static string GenerateConversionExpression(
-        string inputVar,
-        string outputVar,
         string inputUnits,
         string targetUnits,
-        TimeStep? timeStep = null)
+        TimeStep timeStep)
     {
-        var result = AnalyzeConversion(inputUnits, targetUnits);
-        
+        ConversionResult result = AnalyzeConversion(inputUnits, targetUnits);
+
+        // Should never happen - this function is only called if a conversion is
+        // required.
         if (!result.RequiresConversion)
-        {
-            return $"{outputVar}={inputVar}";
-        }
+            return string.Empty;
 
         if (result.ConversionExpression == null)
-        {
             throw new InvalidOperationException($"No conversion expression available for {inputUnits} to {targetUnits}");
-        }
 
-        if (result.RequiresTimeStep && !timeStep.HasValue)
-        {
-            throw new ArgumentException($"TimeStep is required for conversion from {inputUnits} to {targetUnits}");
-        }
-
-        var expression = result.ConversionExpression
-            .Replace("${input}", inputVar)
-            .Replace("${output}", outputVar);
-
-        if (result.RequiresTimeStep && timeStep.HasValue)
-        {
-            expression = expression.Replace("${timestep}", timeStep.Value.GetSecondsInPeriod().ToString());
-        }
+        string expression = result.ConversionExpression;
+        if (result.RequiresTimeStep)
+            expression = expression.Replace("{timestep}", timeStep.GetSecondsInPeriod().ToString());
 
         return expression;
     }

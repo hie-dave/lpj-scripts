@@ -15,8 +15,8 @@ public record VariableInfo(string Name, string Units);
 public interface IClimateDataset
 {
     string DatasetName { get; }
-    IEnumerable<string> GetInputFiles();
+    IEnumerable<string> GetInputFiles(ClimateVariable variable);
     VariableInfo GetVariableInfo(ClimateVariable variable);
-    string GetOutputFilePattern(ClimateVariable variable);
+    string GenerateOutputFileName(ClimateVariable variable);
     Dictionary<string, string> GetMetadata();
 }
