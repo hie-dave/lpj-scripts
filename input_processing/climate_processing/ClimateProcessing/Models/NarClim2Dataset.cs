@@ -55,10 +55,10 @@ public class NarClim2Dataset : IClimateDataset
         _metadata = GetMetadata();
     }
 
-    public string DatasetName => 
+    public string DatasetName =>
         $"NARCliM2.0_{NarClim2Constants.GCMNames.ToString(_gcm)}_{NarClim2Constants.ExperimentNames.ToString(_experiment)}_{NarClim2Constants.RCMNames.ToString(_rcm)}";
 
-    public IEnumerable<string> GetInputFiles(ClimateVariable variable)
+    public IEnumerable<string> GetInputFiles(ClimateVariable variable, bool expandWildcard = true)
     {
         string baseDir = Path.Combine(_inputPath,
             NarClim2Constants.Paths.MipEra,
@@ -77,7 +77,9 @@ public class NarClim2Dataset : IClimateDataset
         if (!Directory.Exists(varDir))
             return Enumerable.Empty<string>();
 
-        return Directory.GetFiles(varDir, "*.nc").OrderBy(GetDateFromFilename);
+        if (expandWildcard)
+            return Directory.GetFiles(varDir, "*.nc").OrderBy(GetDateFromFilename);
+        return [Path.Combine(varDir, "*.nc")];
     }
 
     public VariableInfo GetVariableInfo(ClimateVariable variable)

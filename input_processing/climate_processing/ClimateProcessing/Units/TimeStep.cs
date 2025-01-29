@@ -3,7 +3,7 @@ namespace ClimateProcessing.Units;
 public record struct TimeStep
 {
     private readonly int hours;
-    
+
     public int Hours
     {
         get => hours;

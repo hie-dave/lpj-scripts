@@ -26,9 +26,7 @@ public class ScriptGenerator
     private (string outName, string outUnits) GetStandardConfig(ClimateVariable variable)
     {
         if (!_standardVariables.TryGetValue(variable, out var config))
-        {
             throw new ArgumentException($"No configuration found for variable {variable}");
-        }
         return config;
     }
 
@@ -78,7 +76,7 @@ public class ScriptGenerator
 
         // Calculate the number of timesteps to aggregate
         int stepsToAggregate = _config.OutputTimeStep.Hours / _config.InputTimeStep.Hours;
-        
+
         var aggregationMethod = _config.GetAggregationMethod(variable);
         var @operator = aggregationMethod.ToCdoOperator(_config.OutputTimeStep);
 
@@ -106,28 +104,28 @@ public class ScriptGenerator
         // 1. Calculate saturation vapor pressure (_esat)
         // 2. Calculate actual vapor pressure (_e)
         // 3. Calculate VPD as (_esat - _e) / 1000 to convert to kPa
-        
+
         var esatEquation = method switch
         {
             // Magnus equation (default)
             VPDMethod.Magnus => "_esat=0.611*exp((17.27*tas)/(tas+237.3))*1000",
-            
+
             // Buck (1981)
             // Buck's equation for temperatures above 0°C
             VPDMethod.Buck1981 => "_esat=0.61121*exp((18.678-tas/234.5)*(tas/(257.14+tas)))*1000",
-            
+
             // Alduchov and Eskridge (1996)
             // More accurate coefficients for the Magnus equation
             VPDMethod.AlduchovEskridge1996 => "_esat=0.61094*exp((17.625*tas)/(tas+243.04))*1000",
-            
+
             // Allen et al. (1998) FAO
             // Tetens equation with FAO coefficients
             VPDMethod.AllenFAO1998 => "_esat=0.6108*exp((17.27*tas)/(tas+237.3))*1000",
-            
+
             // Sonntag (1990)
             // Based on ITS-90 temperature scale
             VPDMethod.Sonntag1990 => "_esat=0.61078*exp((17.08085*tas)/(234.175+tas))*1000",
-            
+
             _ => throw new ArgumentException($"Unsupported VPD calculation method: {method}")
         };
 
@@ -139,25 +137,19 @@ _e=(huss*ps)/(0.622+0.378*huss)
 vpd=(_esat-_e)/1000";
     }
 
-    private string GenerateVPDCalculation()
+    private string GenerateVPDOperator()
     {
         var sb = new StringBuilder();
         sb.AppendLine("# Calculate VPD using equation file");
-        
+
         // Create equation file with selected method
-        sb.AppendLine("cat > \"$TMPDIR/vpd_equations.txt\" << 'EOF'");
+        sb.AppendLine("cat > \"${TMPDIR}/vpd_equations.txt\" <<EOF");
         sb.AppendLine(GetVPDEquations(_config.VPDMethod));
         sb.AppendLine("EOF");
         sb.AppendLine();
-        
+
         // Calculate VPD using the equation file
-        sb.AppendLine("cdo -O exprf,\"$TMPDIR/vpd_equations.txt\" \"$TMPDIR/merged.nc\" \"$TMPDIR/vpd.nc\"");
-        sb.AppendLine();
-        
-        // Clean up equation file
-        sb.AppendLine("rm \"$TMPDIR/vpd_equations.txt\"");
-        
-        return sb.ToString();
+        return $"exprf,\"${TMPDIR}/vpd_equations.txt\";
     }
 
     private void WritePBSHeader(TextWriter writer)
@@ -182,14 +174,14 @@ vpd=(_esat-_e)/1000";
     public string GenerateProcessingScript(IClimateDataset dataset)
     {
         var sb = new StringBuilder();
-        
+
         // Add PBS header
         using (TextWriter writer = new StringWriter(sb))
             WritePBSHeader(writer);
 
         sb.AppendLine("set -euo pipefail");
         sb.AppendLine();
-        
+
         // Load required modules
         sb.AppendLine("module load cdo");
         sb.AppendLine("module load nco");
@@ -232,7 +224,7 @@ vpd=(_esat-_e)/1000";
             // TODO: use variable name for output file?
 
             // Merge files and perform all operations in a single step.
-            string inFiles = string.Join(" ", dataset.GetInputFiles(variable));
+            string inFiles = string.Join(" ", dataset.GetInputFiles(variable, false));
             sb.AppendLine($"cdo -O mergetime {operators} {inFiles} {tmpFile}");
             sb.AppendLine();
 
@@ -253,10 +245,10 @@ vpd=(_esat-_e)/1000";
     public string GenerateSubmissionScript(string processingScriptPath)
     {
         var sb = new StringBuilder();
-        
+
         sb.AppendLine("#!/bin/bash");
         sb.AppendLine();
-        
+
         // Submit the processing script
         sb.AppendLine($"qsub {processingScriptPath}");
 

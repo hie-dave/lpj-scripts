@@ -56,14 +56,14 @@ public class ProcessingConfig
     private TimeStep inputTimeStep = TimeStep.Hourly;
     private TimeStep outputTimeStep = TimeStep.ThreeHourly;
 
-    [Option("input-time-step", HelpText = "Input time step in hours (must be 1, 3, or 24)")]
+    [Option("input-timestep", HelpText = "Input time step in hours")]
     public int InputTimeStepHours
     {
         get => inputTimeStep.Hours;
         set => inputTimeStep = new TimeStep(value);
     }
 
-    [Option("output-time-step", HelpText = "Output time step in hours (must be 1, 3, or 24)")]
+    [Option("output-timestep", HelpText = "Output time step in hours")]
     public int OutputTimeStepHours
     {
         get => outputTimeStep.Hours;
