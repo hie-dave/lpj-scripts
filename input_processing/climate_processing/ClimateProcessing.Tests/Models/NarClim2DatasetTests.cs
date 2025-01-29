@@ -90,7 +90,7 @@ public class NarClim2DatasetTests : IDisposable
     [InlineData(ClimateVariable.SpecificHumidity, "huss", "1")]
     [InlineData(ClimateVariable.SurfacePressure, "ps", "Pa")]
     [InlineData(ClimateVariable.ShortwaveRadiation, "rsds", "W m-2")]
-    [InlineData(ClimateVariable.WindSpeed, "sfcwind", "m s-1")]
+    [InlineData(ClimateVariable.WindSpeed, "sfcWind", "m s-1")]
     public void GetVariableInfo_ReturnsCorrectInfo(ClimateVariable variable, string expectedName, string expectedUnits)
     {
         var info = _dataset.GetVariableInfo(variable);

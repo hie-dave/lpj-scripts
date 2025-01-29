@@ -20,23 +20,13 @@ result.WithParsed(config =>
 
         var scriptGenerator = new ScriptGenerator(config);
 
-        // Generate processing script
-        string processingScript = scriptGenerator.GenerateProcessingScript(dataset);
-        string processingScriptPath = Path.Combine(config.OutputDirectory, $"process_{dataset.DatasetName}.sh");
-        File.WriteAllText(processingScriptPath, processingScript);
-        File.SetUnixFileMode(processingScriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        // Generate scripts.
+        string submissionScript = scriptGenerator.GenerateScripts(dataset);
 
-        // Generate submission script
-        string submissionScript = scriptGenerator.GenerateSubmissionScript(processingScriptPath);
-        string submissionScriptPath = Path.Combine(config.OutputDirectory, "submit_job.sh");
-        File.WriteAllText(submissionScriptPath, submissionScript);
-        File.SetUnixFileMode(submissionScriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-
-        Console.WriteLine($"Processing scripts have been generated in {config.OutputDirectory}:");
-        Console.WriteLine($"- Processing script: {Path.GetFileName(processingScriptPath)}");
-        Console.WriteLine($"- Submission script: {Path.GetFileName(submissionScriptPath)}");
+        Console.WriteLine($"Processing scripts have been generated in:");
+        Console.WriteLine($"{Path.GetDirectoryName(submissionScript)}");
         Console.WriteLine("\nTo submit the job to PBS, run:");
-        Console.WriteLine($"cd {config.OutputDirectory} && ./submit_job.sh");
+        Console.WriteLine($"{submissionScript}");
     }
     catch (Exception ex)
     {
