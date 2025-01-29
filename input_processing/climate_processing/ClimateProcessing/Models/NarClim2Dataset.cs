@@ -27,7 +27,7 @@ public class NarClim2Dataset : IClimateDataset
         { ClimateVariable.ShortwaveRadiation, ("rsds", "W m-2") },
 
         // Near-surface wind speed
-        { ClimateVariable.WindSpeed, ("sfcwind", "m s-1") },
+        { ClimateVariable.WindSpeed, ("sfcWind", "m s-1") },
 
         // Near-surface air temperature
         { ClimateVariable.Temperature, ("tas", "K") },
