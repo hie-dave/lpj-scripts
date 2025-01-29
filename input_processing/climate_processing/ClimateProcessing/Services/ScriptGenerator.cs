@@ -149,7 +149,7 @@ vpd=(_esat-_e)/1000";
         sb.AppendLine();
 
         // Calculate VPD using the equation file
-        return $"exprf,\"${TMPDIR}/vpd_equations.txt\";
+        return "exprf,\"${TMPDIR}/vpd_equations.txt\"";
     }
 
     private void WritePBSHeader(TextWriter writer)

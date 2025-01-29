@@ -16,8 +16,8 @@ public class ScriptGeneratorTests
         Ncpus = 1,
         Memory = 4,
         OutputDirectory = "/output",
-        InputTimeStep = TimeStep.Hourly,
-        OutputTimeStep = TimeStep.Daily
+        InputTimeStepHours = 1,
+        OutputTimeStepHours = 24
     };
 
     private readonly ScriptGenerator _generator;
@@ -76,8 +76,8 @@ public class ScriptGeneratorTests
             Ncpus = _config.Ncpus,
             Memory = _config.Memory,
             OutputDirectory = _config.OutputDirectory,
-            InputTimeStep = new TimeStep(inputHours),
-            OutputTimeStep = new TimeStep(outputHours)
+            InputTimeStepHours = inputHours,
+            OutputTimeStepHours = outputHours
         };
         var generator = new ScriptGenerator(config);
 
