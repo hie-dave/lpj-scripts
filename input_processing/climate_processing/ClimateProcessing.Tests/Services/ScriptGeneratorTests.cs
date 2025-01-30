@@ -87,7 +87,7 @@ public class ScriptGeneratorTests
             if (outputHours == 24)
                 Assert.StartsWith("-daymean", @operator);
             else
-                Assert.StartsWith("-timemean", @operator);
+                Assert.StartsWith("-timmean", @operator);
         }
         else
         {
