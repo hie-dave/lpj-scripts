@@ -134,4 +134,12 @@ public class NarClim2Dataset : IClimateDataset
         // Add the date range and extension
         return $"{prefix}_{startDate:yyyyMM}-{endDate:yyyyMM}.nc";
     }
+
+    public string GetOutputDirectory()
+    {
+        string gcm = NarClim2Constants.GCMNames.ToString(_gcm);
+        string experiment = NarClim2Constants.ExperimentNames.ToString(_experiment);
+        string rcm = NarClim2Constants.RCMNames.ToString(_rcm);
+        return Path.Combine(gcm, experiment, rcm);
+    }
 }

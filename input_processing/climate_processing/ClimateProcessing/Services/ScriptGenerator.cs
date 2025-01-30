@@ -335,8 +335,10 @@ vpd=(_esat-_e)/1000";
 
     private string GetOutputFilePath(IClimateDataset dataset, ClimateVariable variable)
     {
+        string directory = Path.Combine(_config.OutputDirectory, dataset.GetOutputDirectory());
+        Directory.CreateDirectory(directory);
         string outFileName = dataset.GenerateOutputFileName(variable);
-        return Path.Combine(_config.OutputDirectory, outFileName);
+        return Path.Combine(directory, outFileName);
     }
 
     private string GenerateVariableMergeScript(IClimateDataset dataset, ClimateVariable variable)
