@@ -157,6 +157,15 @@ public static class NarClim2Constants
             NarClim2Frequency.Month => Month,
             _ => throw new ArgumentException($"Unknown frequency: {frequency}")
         };
+
+        public static NarClim2Frequency FromString(string frequencyStr) => frequencyStr switch
+        {
+            Hour1 => NarClim2Frequency.Hour1,
+            Hour3 => NarClim2Frequency.Hour3,
+            Day => NarClim2Frequency.Day,
+            Month => NarClim2Frequency.Month,
+            _ => throw new ArgumentException($"Unknown frequency string: {frequencyStr}")
+        };
     }
 
     public static class VariantLabels

@@ -18,11 +18,11 @@ public class UnitConverterTests
         bool expectedRequiresTimeStep)
     {
         var result = UnitConverter.AnalyzeConversion(inputUnits, targetUnits);
-        
+
         Assert.Equal(expectedRequiresConversion, result.RequiresConversion);
         Assert.Equal(expectedRequiresRenaming, result.RequiresRenaming);
         Assert.Equal(expectedRequiresTimeStep, result.RequiresTimeStep);
-        
+
         if (expectedRequiresConversion)
         {
             Assert.NotNull(result.ConversionExpression);
@@ -53,7 +53,7 @@ public class UnitConverterTests
         string targetUnits
     )
     {
-        Assert.Throws<ArgumentException>(() => 
+        Assert.Throws<ArgumentException>(() =>
             UnitConverter.AnalyzeConversion(inputUnits, targetUnits));
     }
 

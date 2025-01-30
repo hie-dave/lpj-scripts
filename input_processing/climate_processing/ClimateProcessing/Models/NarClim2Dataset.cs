@@ -2,6 +2,8 @@ using System.Text.RegularExpressions;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Microsoft.VisualBasic;
+using System.Globalization;
 
 namespace ClimateProcessing.Models;
 
@@ -99,7 +101,7 @@ public class NarClim2Dataset : IClimateDataset
         if (!Directory.Exists(dir))
             return Enumerable.Empty<string>();
 
-        return Directory.GetFiles(dir, "*.nc").OrderBy(GetDateFromFilename);
+        return Directory.GetFiles(dir, "*.nc").OrderBy(f => GetDateFromFilename(f, true));
     }
 
     public VariableInfo GetVariableInfo(ClimateVariable variable)
@@ -109,15 +111,86 @@ public class NarClim2Dataset : IClimateDataset
         return new VariableInfo(info.name, info.units);
     }
 
-    private static DateTime GetDateFromFilename(string filename)
+    /// <summary>
+    /// Gets the start or end date from a NARCliM2 filename.
+    /// </summary>
+    /// <param name="filename">The filename to parse.</param>
+    /// <param name="start">If true, get the start date. If false, get the end date.</param>
+    /// <returns>The date.</returns>
+    /// <exception cref="ArgumentException">If the date cannot be determined from the filename.</exception>
+    internal static DateTime GetDateFromFilename(string filename, bool start)
     {
         // Example filename: tas_AUS18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_mon_195101-195112.nc
-        Match match = Regex.Match(filename, @"_(\d{6})-\d{6}\.nc$");
-        if (!match.Success)
-            throw new ArgumentException($"Invalid filename format: {filename}");
+        const string regexmm = @"_(\d{6})-(\d{6})\.nc$";
+        const string regexmmdd = @"_(\d{8})-(\d{8})\.nc$";
+        const string regexmmddhh = @"_(\d{10})-(\d{10})\.nc$";
 
-        string dateStr = match.Groups[1].Value;
-        return DateTime.ParseExact(dateStr, "yyyyMM", null);
+        // Remove the directory component, if one is present.
+        filename = Path.GetFileName(filename);
+
+        // Determine if the file is subdaily and use the correct regex.
+        // Note: 1hr and 3hr files contain yyyyMMddHH, but day, mon, ..., etc
+        //       use yyyyMMdd format (ie not time component).
+        NarClim2Frequency frequency = GetFrequencyFromFilename(filename);
+        string pattern = frequency switch
+        {
+            NarClim2Frequency.Hour1 => regexmmddhh,
+            NarClim2Frequency.Hour3 => regexmmddhh,
+            NarClim2Frequency.Day => regexmmdd,
+            NarClim2Frequency.Month => regexmm,
+            _ => throw new ArgumentException($"Unknown frequency: {frequency}")
+        };
+
+        // Parse the filename.
+        Match match = Regex.Match(filename, pattern);
+        if (!match.Success)
+            throw new ArgumentException($"Unable to get date from filename. Invalid filename format: {filename}");
+
+        // Choose the correct group and format, depending on whether we are
+        // looking for the start or end date.
+        string dateStr = match.Groups[start ? 1 : 2].Value;
+        string fmt = frequency switch
+        {
+            NarClim2Frequency.Hour1 => "yyyyMMddHH",
+            NarClim2Frequency.Hour3 => "yyyyMMddHH",
+            NarClim2Frequency.Day => "yyyyMMdd",
+            NarClim2Frequency.Month => "yyyyMM",
+            _ => throw new ArgumentException($"Unknown frequency: {frequency}")
+        };
+
+        // Parse the date.
+        return DateTime.ParseExact(dateStr, fmt, CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Parse the frequency from a NARCliM2 filename.
+    /// </summary>
+    /// <param name="filename">The filename to parse.</param>
+    /// <returns>The frequency enum value.</returns>
+    /// <exception cref="ArgumentException">If the frequency cannot be determined from the filename.</exception>
+    internal static NarClim2Frequency GetFrequencyFromFilename(string filename)
+    {
+        // Example: tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_mon_195101-195112.nc
+        //                                                                                              ^^^
+        // Remove the directory component, if one is present
+        filename = Path.GetFileName(filename);
+
+        // Build regex pattern to match any of the frequency strings followed by underscore and digits
+        var freqStrings = new[]
+        {
+            NarClim2Constants.FrequencyNames.Hour1,
+            NarClim2Constants.FrequencyNames.Hour3,
+            NarClim2Constants.FrequencyNames.Day,
+            NarClim2Constants.FrequencyNames.Month
+        };
+        string pattern = $@"_({string.Join("|", freqStrings)})_\d+";
+
+        Match match = Regex.Match(filename, pattern);
+        if (!match.Success)
+            throw new ArgumentException($"Unable to determine frequency from filename. Invalid filename format: {filename}");
+
+        string freqStr = match.Groups[1].Value;
+        return NarClim2Constants.FrequencyNames.FromString(freqStr);
     }
 
     public string GenerateOutputFileName(ClimateVariable variable)
@@ -128,8 +201,8 @@ public class NarClim2Dataset : IClimateDataset
         if (!inputFiles.Any())
             throw new InvalidOperationException($"No input files found for variable {GetVariableInfo(variable).Name}");
 
-        DateTime startDate = GetDateFromFilename(inputFiles.First());
-        DateTime endDate = GetDateFromFilename(inputFiles.Last());
+        DateTime startDate = GetDateFromFilename(inputFiles.First(), true);
+        DateTime endDate = GetDateFromFilename(inputFiles.Last(), false);
 
         string firstFile = Path.GetFileName(inputFiles.First());
 

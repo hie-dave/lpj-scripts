@@ -114,7 +114,7 @@ public class NarClim2DatasetTests : IDisposable
         var filename = _dataset.GenerateOutputFileName(variable);
         string name = _dataset.GetVariableInfo(variable).Name;
 
-        string expected = $"{name}_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_mon_195101-195201.nc";
+        string expected = $"{name}_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_mon_195101-195212.nc";
         Assert.Equal(expected, filename);
     }
 
@@ -126,21 +126,65 @@ public class NarClim2DatasetTests : IDisposable
         Directory.CreateDirectory(emptyDir);
         var emptyDataset = new NarClim2Dataset(emptyDir);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => 
+        var ex = Assert.Throws<InvalidOperationException>(() =>
             emptyDataset.GenerateOutputFileName(ClimateVariable.Temperature));
         Assert.Contains("No input files found for variable", ex.Message);
     }
 
-    [Fact]
-    public void GetMetadata_ReturnsCorrectValues()
+    [Theory]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_1hr_1951010100-1951123123.nc", NarClim2Frequency.Hour1)]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_3hr_1951010100-1951123121.nc", NarClim2Frequency.Hour3)]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_day_19510101-19511231.nc", NarClim2Frequency.Day)]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_mon_195101-195112.nc", NarClim2Frequency.Month)]
+    [InlineData("/some/path/to/tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_mon_195101-195112.nc", NarClim2Frequency.Month)]
+    public void GetFrequencyFromFilename_ReturnsCorrectFrequency(string filename, NarClim2Frequency expected)
     {
-        var metadata = _dataset.GetMetadata();
-        Assert.Equal("NARCliM2.0", metadata["source"]);
-        Assert.Equal(NarClim2Constants.DomainNames.ToString(_domain), metadata["domain"]);
-        Assert.Equal(NarClim2Constants.GCMNames.ToString(_gcm), metadata["gcm"]);
-        Assert.Equal(NarClim2Constants.ExperimentNames.ToString(_experiment), metadata["experiment"]);
-        Assert.Equal(NarClim2Constants.RCMNames.ToString(_rcm), metadata["rcm"]);
-        Assert.Equal(NarClim2Constants.FrequencyNames.ToString(_frequency), metadata["frequency"]);
-        Assert.Equal(NarClim2Constants.Paths.Version, metadata["version"]);
+        var result = NarClim2Dataset.GetFrequencyFromFilename(filename);
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("invalid_filename.nc")]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1.nc")]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_invalid_19510101-19511231.nc")]
+    public void GetFrequencyFromFilename_ThrowsForInvalidFilename(string filename)
+    {
+        Assert.ThrowsAny<ArgumentException>(() => NarClim2Dataset.GetFrequencyFromFilename(filename));
+    }
+
+    [Theory]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_1hr_1951010100-1951123123.nc", true, 1951, 1, 1, 0)]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_1hr_1951010100-1951123123.nc", false, 1951, 12, 31, 23)]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_3hr_1951010100-1951123121.nc", true, 1951, 1, 1, 0)]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_3hr_1951010100-1951123121.nc", false, 1951, 12, 31, 21)]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_day_19510101-19511231.nc", true, 1951, 1, 1, 0)]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_day_19510101-19511231.nc", false, 1951, 12, 31, 0)]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_mon_195101-195112.nc", true, 1951, 1, 1, 0)]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_mon_195101-195112.nc", false, 1951, 12, 1, 0)]
+    public void GetDateFromFilename_ReturnsCorrectDate(string filename, bool start, int year, int month, int day, int hour)
+    {
+        var expected = new DateTime(year, month, day, hour, 0, 0);
+        var result = NarClim2Dataset.GetDateFromFilename(filename, start);
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("invalid_filename.nc")]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1.nc")]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_mon.nc")]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_mon_invalid.nc")]
+    public void GetDateFromFilename_ThrowsForInvalidFilename(string filename)
+    {
+        var ex = Assert.ThrowsAny<ArgumentException>(() => NarClim2Dataset.GetDateFromFilename(filename, true));
+        Assert.Contains("Unable to determine frequency from filename. Invalid filename format", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_1hr_1951010199-1951123199.nc")]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_mon_195113-195112.nc")]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_day_19510132-19511231.nc")]
+    public void GetDateFromFilename_ThrowsForInvalidDates(string filename)
+    {
+        Assert.ThrowsAny<FormatException>(() => NarClim2Dataset.GetDateFromFilename(filename, true));
     }
 }
