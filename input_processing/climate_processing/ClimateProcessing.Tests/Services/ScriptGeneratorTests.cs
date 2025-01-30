@@ -104,12 +104,7 @@ public class ScriptGeneratorTests
         string outputVar,
         bool requiresProcessing)
     {
-        var command = _generator.GenerateVariableRenameCommand(
-            inputVar,
-            outputVar,
-            "input.nc",
-            "output.nc");
-
-        Assert.Equal(requiresProcessing, command.RequiresProcessing);
+        string op = _generator.GenerateRenameOperator(inputVar, outputVar);
+        Assert.Equal(requiresProcessing, !string.IsNullOrEmpty(op));
     }
 }

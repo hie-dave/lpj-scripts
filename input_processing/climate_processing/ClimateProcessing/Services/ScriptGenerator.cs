@@ -14,6 +14,7 @@ public class ScriptGenerator
     // Subdirectory of the output directory into which the scripts are written.
     private const string scriptDirectory = "scripts";
     private const string logDirectory = "logs";
+    private const string streamDirectory = "streams";
 
     private readonly ProcessingConfig _config;
 
@@ -86,21 +87,6 @@ public class ScriptGenerator
         var @operator = aggregationMethod.ToCdoOperator(_config.OutputTimeStep);
 
         return $"-{@operator},{stepsToAggregate}";
-    }
-
-    internal ProcessingCommand GenerateVariableRenameCommand(
-        string inputVar,
-        string outputVar,
-        string inputFile,
-        string outputFile)
-    {
-        if (inputVar == outputVar)
-        {
-            return ProcessingCommand.Skip(inputFile, outputFile);
-        }
-
-        return ProcessingCommand.Process(
-            $"cdo -O chname,{inputVar},{outputVar} {inputFile} {outputFile}");
     }
 
     private string GetVPDEquations(VPDMethod method)
@@ -183,7 +169,7 @@ vpd=(_esat-_e)/1000";
         // Calculate VPD using the equation file.
         writer.WriteLine("# Calculate VPD.");
         writer.WriteLine($"log \"Calculating VPD...\"");
-        writer.WriteLine($"cdo -O exprf,{eqnFile} {inFiles} \"${{OUT_FILE}}\"");
+        writer.WriteLine($"cdo -v -L -O exprf,{eqnFile} {inFiles} \"${{OUT_FILE}}\"");
         writer.WriteLine($"log \"VPD calculation completed successfully.\"");
         writer.WriteLine();
 
@@ -193,9 +179,13 @@ vpd=(_esat-_e)/1000";
 
     private void WritePBSHeader(TextWriter writer, string jobName)
     {
+        string logFileName = $"{jobName}.log";
+        string logFile = Path.Combine(GetLogPath(), logFileName);
+        string streamFile = Path.Combine(GetStreamPath(), logFileName);
+
         writer.WriteLine("#!/bin/bash");
         writer.WriteLine($"#PBS -N {jobName}");
-        writer.WriteLine($"#PBS -o {GetLogPath()}/{jobName}.log");
+        writer.WriteLine($"#PBS -o {logFile}");
         writer.WriteLine($"#PBS -P {_config.Project}");
         writer.WriteLine($"#PBS -q {_config.Queue}");
         writer.WriteLine($"#PBS -l walltime={_config.Walltime}");
@@ -239,7 +229,8 @@ vpd=(_esat-_e)/1000";
 
         writer.WriteLine("# Print a log message");
         writer.WriteLine("log() {");
-        writer.WriteLine("    echo \"[$(date)] $*\"");
+        writer.WriteLine($"    local STREAM_FILE=\"{streamFile}\"");
+        writer.WriteLine("    echo \"[$(date)] $*\" | tee -a \"${STREAM_FILE}\"");
         writer.WriteLine("}");
 
         // Add blank line after header.
@@ -258,6 +249,13 @@ vpd=(_esat-_e)/1000";
         string logPath = Path.Combine(_config.OutputDirectory, logDirectory);
         Directory.CreateDirectory(logPath);
         return logPath;
+    }
+
+    private string GetStreamPath()
+    {
+        string streamPath = Path.Combine(_config.OutputDirectory, streamDirectory);
+        Directory.CreateDirectory(streamPath);
+        return streamPath;
     }
 
     // Generate processing scripts, and return the path to the top-level script.
@@ -369,7 +367,7 @@ vpd=(_esat-_e)/1000";
 
         // Merge files and perform all operations in a single step.
         writer.WriteLine("log \"Merging files...\"");
-        writer.WriteLine($"cdo -O mergetime {operators} \"${{IN_DIR}}\"/*.nc \"${{TMP_FILE}}\"");
+        writer.WriteLine($"cdo -L -O -v mergetime {operators} \"${{IN_DIR}}\"/*.nc \"${{TMP_FILE}}\"");
         writer.WriteLine("log \"All files merged successfully.\"");
 
         // Reorder dimensions, improve chunking, and enable compression.
