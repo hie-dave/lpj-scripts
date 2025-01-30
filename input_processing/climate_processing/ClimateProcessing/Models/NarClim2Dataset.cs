@@ -69,7 +69,7 @@ public class NarClim2Dataset : IClimateDataset
     {
         return new NarClim2Dataset(
             inputPath: config.InputDirectory,
-            frequency: NarClim2Constants.ParseFrequency(config.OutputTimeStep.Hours));
+            frequency: NarClim2Constants.ParseFrequency(config.InputTimeStep.Hours));
     }
 
     public string DatasetName =>
