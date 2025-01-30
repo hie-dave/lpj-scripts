@@ -243,12 +243,13 @@ public class ScriptGenerator
         writer.WriteLine();
 
         // Set up logging that streams all output into the stream directory.
+        writer.WriteLine("# Stream all output to a log file without buffering.");
         writer.WriteLine($"STREAM_FILE=\"{streamFile}\"");
         writer.WriteLine("rm -f \"${STREAM_FILE}\"");
         writer.WriteLine("exec 1> >(tee -a \"${STREAM_FILE}\") 2>&1");
         writer.WriteLine();
 
-        writer.WriteLine("# Print a log message");
+        writer.WriteLine("# Print a log message.");
         writer.WriteLine("log() {");
         writer.WriteLine("    echo \"[$(date)] $*\"");
         writer.WriteLine("}");
