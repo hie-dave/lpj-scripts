@@ -141,5 +141,8 @@ public class ProcessingConfig
 
         if (!string.IsNullOrEmpty(GridFile) && !File.Exists(GridFile))
             throw new ArgumentException($"Grid file does not exist: {GridFile}");
+
+        if (InputTimeStepHours > OutputTimeStepHours)
+            throw new ArgumentException("Input timestep cannot be coarser than the output timestep.");
     }
 }

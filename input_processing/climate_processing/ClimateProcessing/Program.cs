@@ -14,7 +14,7 @@ result.WithParsed(config =>
         // Create dataset instance based on type
         IClimateDataset dataset = config.DatasetType.ToLower() switch
         {
-            "narclim2" => new NarClim2Dataset(config.InputDirectory),
+            "narclim2" => NarClim2Dataset.Create(config),
             _ => throw new ArgumentException($"Unsupported dataset type: {config.DatasetType}")
         };
 

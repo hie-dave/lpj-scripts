@@ -12,6 +12,10 @@ public class NarClim2Dataset : IClimateDataset
     private readonly NarClim2GCM _gcm;
     private readonly NarClim2Experiment _experiment;
     private readonly NarClim2RCM _rcm;
+
+    /// <summary>
+    /// Timestep of input data.
+    /// </summary>
     private readonly NarClim2Frequency _frequency;
 
     // Variable names and units as they exist in the NARCliM2 dataset.
@@ -36,6 +40,15 @@ public class NarClim2Dataset : IClimateDataset
         { ClimateVariable.Precipitation, ("pr", "kg m-2 s-1") }
     };
 
+    /// <summary>
+    /// Create a new instance of the NARCliM2 dataset.
+    /// </summary>
+    /// <param name="inputPath">Path to the NARCliM2 dataset.</param>
+    /// <param name="domain">Domain of the dataset.</param>
+    /// <param name="gcm">Global Climate Model.</param>
+    /// <param name="experiment">The scenario.</param>
+    /// <param name="rcm">The Regional Climate Model.</param>
+    /// <param name="frequency">Timestep of input data.</param>
     public NarClim2Dataset(
         string inputPath,
         NarClim2Domain domain = NarClim2Domain.AUS18,
@@ -50,6 +63,13 @@ public class NarClim2Dataset : IClimateDataset
         _experiment = experiment;
         _rcm = rcm;
         _frequency = frequency;
+    }
+
+    public static NarClim2Dataset Create(ProcessingConfig config)
+    {
+        return new NarClim2Dataset(
+            inputPath: config.InputDirectory,
+            frequency: NarClim2Constants.ParseFrequency(config.OutputTimeStep.Hours));
     }
 
     public string DatasetName =>

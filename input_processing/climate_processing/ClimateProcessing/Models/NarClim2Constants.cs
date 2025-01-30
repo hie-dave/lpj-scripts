@@ -177,4 +177,15 @@ public static class NarClim2Constants
             _ => throw new ArgumentException($"Unknown GCM: {gcm}")
         };
     }
+
+    public static NarClim2Frequency ParseFrequency(int hours)
+    {
+        if (hours == 1)
+            return NarClim2Frequency.Hour1;
+        if (hours == 3)
+            return NarClim2Frequency.Hour3;
+        if (hours == 24)
+            return NarClim2Frequency.Day;
+        throw new ArgumentException($"Unknown narclim2 frequency: {hours} hours. The only supported output timesteps are: 1hr, 3hr, day.");
+    }
 }
