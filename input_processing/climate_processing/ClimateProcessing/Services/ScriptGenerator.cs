@@ -89,7 +89,7 @@ public class ScriptGenerator
         return $"-{@operator},{stepsToAggregate}";
     }
 
-    private string GetVPDEquations(VPDMethod method)
+    private void WriteVPDEquations(TextWriter writer, VPDMethod method)
     {
         // All methods follow the same general pattern:
         // 1. Calculate saturation vapor pressure (_esat)
@@ -120,12 +120,21 @@ public class ScriptGenerator
             _ => throw new ArgumentException($"Unsupported VPD calculation method: {method}")
         };
 
-        return $@"# Saturation vapor pressure (Pa)
-{esatEquation}
-# Actual vapor pressure (Pa)
-_e=(huss*ps)/(0.622+0.378*huss)
-# VPD (kPa)
-vpd=(_esat-_e)/1000";
+        writer.WriteLine($@"# Saturation vapor pressure (Pa)");
+        writer.WriteLine(esatEquation);
+        writer.WriteLine("# Actual vapor pressure (Pa)");
+        writer.WriteLine("_e=(huss*ps)/(0.622+0.378*huss)");
+        writer.WriteLine("# VPD (kPa)");
+        writer.WriteLine("vpd=(_esat-_e)/1000");
+    }
+
+    /// <summary>
+    /// Standard arguments used for all CDO invocations.
+    /// TODO: make verbosity configurable?
+    /// </summary>
+    private string GetCDOArgs()
+    {
+        return $"-L -O -v";
     }
 
     private string GenerateVPDScript(IClimateDataset dataset)
@@ -134,16 +143,6 @@ vpd=(_esat-_e)/1000";
         string script = CreateScript(jobName);
         using TextWriter writer = new StreamWriter(script);
         WritePBSHeader(writer, jobName);
-
-        writer.WriteLine("# Generate equation file.");
-        writer.WriteLine("log \"Generating VPD equation file...\"");
-
-        // Create equation file with selected method.
-        string eqnFile = "${TMPDIR}/vpd_equations.txt";
-        writer.WriteLine($"cat >\"{eqnFile}\" <<EOF");
-        writer.WriteLine(GetVPDEquations(_config.VPDMethod));
-        writer.WriteLine("EOF");
-        writer.WriteLine();
 
         writer.WriteLine("# File paths.");
         string humidityFile = GetOutputFilePath(dataset, ClimateVariable.SpecificHumidity);
@@ -164,12 +163,24 @@ vpd=(_esat-_e)/1000";
         string outFile = Path.Combine(Path.GetDirectoryName(temperatureFile)!, baseName);
 
         writer.WriteLine($"OUT_FILE=\"{outFile}\"");
+
+        string eqnFile = "${WORK_DIR}/vpd_equations.txt";
+        writer.WriteLine($"EQN_FILE=\"{eqnFile}\"");
+        writer.WriteLine();
+
+        writer.WriteLine("# Generate equation file.");
+        writer.WriteLine("log \"Generating VPD equation file...\"");
+
+        // Create equation file with selected method.
+        writer.WriteLine($"cat >\"${{EQN_FILE}}\" <<EOF");
+        WriteVPDEquations(writer, _config.VPDMethod);
+        writer.WriteLine("EOF");
         writer.WriteLine();
 
         // Calculate VPD using the equation file.
         writer.WriteLine("# Calculate VPD.");
         writer.WriteLine($"log \"Calculating VPD...\"");
-        writer.WriteLine($"cdo -v -L -O exprf,{eqnFile} {inFiles} \"${{OUT_FILE}}\"");
+        writer.WriteLine($"cdo {GetCDOArgs()} exprf,\"${{EQN_FILE}}\" {inFiles} \"${{OUT_FILE}}\"");
         writer.WriteLine($"log \"VPD calculation completed successfully.\"");
         writer.WriteLine();
 
@@ -191,6 +202,7 @@ vpd=(_esat-_e)/1000";
         writer.WriteLine($"#PBS -l walltime={_config.Walltime}");
         writer.WriteLine($"#PBS -l ncpus={_config.Ncpus}");
         writer.WriteLine($"#PBS -l mem={_config.Memory}GB");
+        writer.WriteLine($"#PBS -l jobfs={_config.JobFS}GB");
         writer.WriteLine($"#PBS -j oe");
         if (!string.IsNullOrEmpty(_config.Email))
         {
@@ -216,15 +228,15 @@ vpd=(_esat-_e)/1000";
 
         // Create temporary directory and cd into it.
         writer.WriteLine("# Create temporary directory and cd into it.");
-        writer.WriteLine("TMPDIR=\"$(mktemp -d)\"");
-        writer.WriteLine("cd \"${TMPDIR}\"");
+        writer.WriteLine("WORK_DIR=\"$(mktemp -d -p \"${PBS_JOBFS}\")\"");
+        writer.WriteLine("cd \"${WORK_DIR}\"");
         writer.WriteLine();
 
         // Technically, deleting the temporary directory is unnecessary, because
         // the tempfs on the compute nodes will be deleted when the job
         // finishes. However, it's a good practice to clean up after ourselves.
         writer.WriteLine("# Delete the temporary directory on exit.");
-        writer.WriteLine("trap 'cd; rm -rf \"${TMPDIR}\"' EXIT");
+        writer.WriteLine("trap 'cd; rm -rf \"${WORK_DIR}\"' EXIT");
         writer.WriteLine();
 
         // Set up logging that streams all output into the stream directory.
@@ -271,7 +283,10 @@ vpd=(_esat-_e)/1000";
         using TextWriter writer = new StreamWriter(scriptFile);
 
         // Add PBS header.
-        WritePBSHeader(writer, jobName);
+        writer.WriteLine("#!/usr/bin/env bash");
+        writer.WriteLine($"# Job submission script for: {dataset.DatasetName}");
+        writer.WriteLine("set -euo pipefail");
+        writer.WriteLine();
 
         // Ensure output directory exists.
         writer.WriteLine($"mkdir -p \"{_config.OutputDirectory}\"");
@@ -356,11 +371,11 @@ vpd=(_esat-_e)/1000";
         // File paths.
         string inDir = dataset.GetInputFilesDirectory(variable);
         string outFileName = dataset.GenerateOutputFileName(variable);
-        string tmpFile = Path.Combine("\"${TMPDIR}\"", outFileName);
+        string tmpFile = Path.Combine("\"${WORK_DIR}\"", outFileName);
         string outFile = GetOutputFilePath(dataset, variable);
         writer.WriteLine("# File paths.");
         writer.WriteLine($"IN_DIR=\"{inDir}\"");
-        writer.WriteLine($"TMP_FILE=\"${{TMPDIR}}/{tmpFile}\"");
+        writer.WriteLine($"TMP_FILE=\"${{WORK_DIR}}/{tmpFile}\"");
         writer.WriteLine($"OUT_FILE=\"{outFile}\"");
         writer.WriteLine();
 
@@ -373,7 +388,7 @@ vpd=(_esat-_e)/1000";
 
         // Merge files and perform all operations in a single step.
         writer.WriteLine("log \"Merging files...\"");
-        writer.WriteLine($"cdo -L -O -v mergetime {operators} \"${{IN_DIR}}\"/*.nc \"${{TMP_FILE}}\"");
+        writer.WriteLine($"cdo {GetCDOArgs()} mergetime {operators} \"${{IN_DIR}}\"/*.nc \"${{TMP_FILE}}\"");
         writer.WriteLine("log \"All files merged successfully.\"");
         writer.WriteLine();
 

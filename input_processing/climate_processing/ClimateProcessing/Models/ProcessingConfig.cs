@@ -35,6 +35,9 @@ public class ProcessingConfig
     [Option('m', "memory", Required = false, Default = 16, HelpText = "Memory limit in GiB")]
     public int Memory { get; set; } = 16;
 
+    [Option("jobfs", Required = false, Default = 128, HelpText = "PBS JobFS size in GiB (recommended: 100+)")]
+    public int JobFS { get; set; } = 128;
+
     [Option('p', "project", Required = true, HelpText = "Project for job submission")]
     public string Project { get; set; } = string.Empty;
 
