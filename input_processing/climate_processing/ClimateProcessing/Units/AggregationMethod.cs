@@ -12,10 +12,10 @@ public static class AggregationMethodExtensions
 {
     public static string ToCdoOperator(this AggregationMethod method, TimeStep timeStep) => method switch
     {
-        AggregationMethod.Mean => timeStep == TimeStep.Daily ? "daymean" : "timmean",
-        AggregationMethod.Sum => timeStep == TimeStep.Daily ? "daysum" : "timsum",
-        AggregationMethod.Maximum => timeStep == TimeStep.Daily ? "daymax" : "timmax",
-        AggregationMethod.Minimum => timeStep == TimeStep.Daily ? "daymin" : "timmin",
+        AggregationMethod.Mean => timeStep == TimeStep.Daily ? "daymean" : "timselmean",
+        AggregationMethod.Sum => timeStep == TimeStep.Daily ? "daysum" : "timselsum",
+        AggregationMethod.Maximum => timeStep == TimeStep.Daily ? "daymax" : "timselmax",
+        AggregationMethod.Minimum => timeStep == TimeStep.Daily ? "daymin" : "timselmin",
         _ => throw new ArgumentException($"Unknown aggregation method: {method}")
     };
 }

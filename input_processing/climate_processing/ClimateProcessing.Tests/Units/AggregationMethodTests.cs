@@ -7,17 +7,17 @@ public class AggregationMethodTests
 {
     [Theory]
     [InlineData(AggregationMethod.Mean, 24, "daymean")]
-    [InlineData(AggregationMethod.Mean, 1, "timmean")]
-    [InlineData(AggregationMethod.Mean, 3, "timmean")]
+    [InlineData(AggregationMethod.Mean, 1, "timselmean")]
+    [InlineData(AggregationMethod.Mean, 3, "timselmean")]
     [InlineData(AggregationMethod.Sum, 24, "daysum")]
-    [InlineData(AggregationMethod.Sum, 1, "timsum")]
-    [InlineData(AggregationMethod.Sum, 3, "timsum")]
+    [InlineData(AggregationMethod.Sum, 1, "timselsum")]
+    [InlineData(AggregationMethod.Sum, 3, "timselsum")]
     [InlineData(AggregationMethod.Maximum, 24, "daymax")]
-    [InlineData(AggregationMethod.Maximum, 1, "timmax")]
-    [InlineData(AggregationMethod.Maximum, 3, "timmax")]
+    [InlineData(AggregationMethod.Maximum, 1, "timselmax")]
+    [InlineData(AggregationMethod.Maximum, 3, "timselmax")]
     [InlineData(AggregationMethod.Minimum, 24, "daymin")]
-    [InlineData(AggregationMethod.Minimum, 1, "timmin")]
-    [InlineData(AggregationMethod.Minimum, 3, "timmin")]
+    [InlineData(AggregationMethod.Minimum, 1, "timselmin")]
+    [InlineData(AggregationMethod.Minimum, 3, "timselmin")]
     public void ToCdoOperator_ReturnsCorrectOperator(
         AggregationMethod method,
         int hours,
