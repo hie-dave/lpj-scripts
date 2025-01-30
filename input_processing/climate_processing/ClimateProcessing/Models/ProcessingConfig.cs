@@ -106,11 +106,9 @@ public class ProcessingConfig
 
     public IEnumerable<PBSStorageDirective> GetRequiredStorageDirectives()
     {
-        var paths = new List<string> { InputDirectory };
+        List<string> paths = [InputDirectory];
         if (!string.IsNullOrEmpty(OutputDirectory))
-        {
             paths.Add(OutputDirectory);
-        }
         return PBSStorageHelper.GetStorageDirectives(paths);
     }
 

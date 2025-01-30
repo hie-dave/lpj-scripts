@@ -5,21 +5,23 @@ namespace ClimateProcessing.Models;
 public class PBSStorageDirective
 {
     public string Path { get; }
+    public string Kind { get; }
     public string StorageIdentifier { get; }
 
-    public PBSStorageDirective(string path, string storageIdentifier)
+    public PBSStorageDirective(string path, string kind, string storageIdentifier)
     {
         Path = path;
+        Kind = kind;
         StorageIdentifier = storageIdentifier;
     }
 
-    public override string ToString() => $"gdata/{StorageIdentifier}";
+    public override string ToString() => $"{Kind}/{StorageIdentifier}";
 }
 
 public static class PBSStorageHelper
 {
-    private static readonly Regex GDataPathRegex = new(@"^/g/data/([^/]+)/.*$");
-    private static readonly Regex ScratchPathRegex = new(@"^/scratch/([^/]+)/.*$");
+    private static readonly Regex gdataRegex = new(@"^/g/data/([^/]+)/.*$");
+    private static readonly Regex scratchRegex = new(@"^/scratch/([^/]+)/.*$");
 
     /// <summary>
     /// Gets the required PBS storage directives for a given path.
@@ -30,19 +32,19 @@ public static class PBSStorageHelper
     public static PBSStorageDirective? GetStorageDirective(string path)
     {
         // Check for gdata paths
-        var gdataMatch = GDataPathRegex.Match(path);
+        var gdataMatch = gdataRegex.Match(path);
         if (gdataMatch.Success)
         {
             var projectId = gdataMatch.Groups[1].Value;
-            return new PBSStorageDirective(path, projectId);
+            return new PBSStorageDirective(path, "gdata", projectId);
         }
 
         // Check for scratch paths
-        var scratchMatch = ScratchPathRegex.Match(path);
+        var scratchMatch = scratchRegex.Match(path);
         if (scratchMatch.Success)
         {
             var projectId = scratchMatch.Groups[1].Value;
-            return new PBSStorageDirective(path, projectId);
+            return new PBSStorageDirective(path, "scratch", projectId);
         }
 
         return null;

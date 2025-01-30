@@ -141,30 +141,15 @@ _e=(huss*ps)/(0.622+0.378*huss)
 vpd=(_esat-_e)/1000";
     }
 
-    private string GenerateVPDOperator()
-    {
-        // TBI
-        var sb = new StringBuilder();
-        sb.AppendLine("# Calculate VPD using equation file");
-
-        // Create equation file with selected method
-        sb.AppendLine("cat > \"${TMPDIR}/vpd_equations.txt\" <<EOF");
-        sb.AppendLine(GetVPDEquations(_config.VPDMethod));
-        sb.AppendLine("EOF");
-        sb.AppendLine();
-
-        // Calculate VPD using the equation file
-        return "exprf,\"${TMPDIR}/vpd_equations.txt\"";
-    }
-
     private string GenerateVPDScript(IClimateDataset dataset)
     {
-        string script = CreateScript("calc_vpd");
+        string script = CreateScript($"calc_vpd_{dataset.DatasetName}");
         using TextWriter writer = new StreamWriter(script);
         WritePBSHeader(writer);
         writer.WriteLine();
 
         writer.WriteLine("# Calculate VPD using equation file");
+        writer.WriteLine("log \"Generating VPD equation file...\"");
 
         // Create equation file with selected method.
         string eqnFile = "${TMPDIR}/vpd_equations.txt";
@@ -174,9 +159,15 @@ vpd=(_esat-_e)/1000";
         writer.WriteLine();
 
         string humidityFile = GetOutputFilePath(dataset, ClimateVariable.SpecificHumidity);
+        writer.WriteLine($"HUSS_FILE=\"{humidityFile}\"");
+
         string pressureFile = GetOutputFilePath(dataset, ClimateVariable.SurfacePressure);
+        writer.WriteLine($"PS_FILE=\"{pressureFile}\"");
+
         string temperatureFile = GetOutputFilePath(dataset, ClimateVariable.Temperature);
-        string inFiles = $"\"{humidityFile}\" \"{pressureFile}\" \"{temperatureFile}\"";
+        writer.WriteLine($"TAS_FILE=\"{temperatureFile}\"");
+
+        string inFiles = "\"${HUSS_FILE}\" \"${PS_FILE}\" \"${TAS_FILE}\"";
 
         // Generate an output file name.
         string fileName = Path.GetFileName(temperatureFile);
@@ -184,8 +175,13 @@ vpd=(_esat-_e)/1000";
         string baseName = fileName.ReplaceFirst($"{tempName}_", "vpd_");
         string outFile = Path.Combine(Path.GetDirectoryName(temperatureFile)!, baseName);
 
+        writer.WriteLine($"OUT_FILE=\"{outFile}\"");
+        writer.WriteLine();
+
         // Calculate VPD using the equation file.
-        writer.WriteLine($"cdo -O exprf,{eqnFile} {inFiles} {outFile}");
+        writer.WriteLine($"log \"Calculating VPD...\"");
+        writer.WriteLine($"cdo -O exprf,{eqnFile} {inFiles} \"${{OUT_FILE}}\"");
+        writer.WriteLine($"log \"VPD calculation completed successfully.\"");
         writer.WriteLine();
 
         // Return the path to the generated script.
@@ -216,20 +212,30 @@ vpd=(_esat-_e)/1000";
         writer.WriteLine();
 
         // Load required modules.
-        writer.WriteLine("module load cdo");
-        writer.WriteLine("module load nco");
+        writer.WriteLine("module load cdo nco");
         writer.WriteLine();
 
         // Create working directory.
+        writer.WriteLine("# Working directory on jobfs - note this may be limited in capacity.");
         writer.WriteLine("WORKDIR=\"${PBS_O_WORKDIR}\"");
         writer.WriteLine("cd \"${WORKDIR}\"");
         writer.WriteLine();
 
         // Create temporary directory and cd into it.
+        writer.WriteLine("# Create temporary directory and cd into it.");
         writer.WriteLine("TMPDIR=\"$(mktemp -d)\"");
         writer.WriteLine("cd \"${TMPDIR}\"");
         writer.WriteLine("trap 'cd \"${WORKDIR}\"; rm -rf \"${TMPDIR}\"' EXIT");
         writer.WriteLine();
+
+        writer.WriteLine("# Print a log message");
+        writer.WriteLine("log() {");
+        writer.WriteLine("    echo \"[$(date)] $*\"");
+        writer.WriteLine("}");
+        writer.WriteLine();
+
+        // Add blank line after header
+        writer.WriteLine("");
     }
 
     private string GetScriptPath()
@@ -242,7 +248,7 @@ vpd=(_esat-_e)/1000";
     // Generate processing scripts, and return the path to the top-level script.
     public string GenerateScripts(IClimateDataset dataset)
     {
-        string scriptFile = CreateScript($"process_{dataset.DatasetName}");
+        string scriptFile = CreateScript($"submit_{dataset.DatasetName}");
         using (TextWriter writer = new StreamWriter(scriptFile))
             GenerateProcessingScript(writer, dataset);
 
@@ -275,7 +281,7 @@ vpd=(_esat-_e)/1000";
 
         // Create script directory if it doesn't already exist.
         // This should be unnecessary at this point.
-        string scriptFile = CreateScript($"mergetime_{varInfo.Name}");
+        string scriptFile = CreateScript($"mergetime_{varInfo.Name}_{dataset.DatasetName}");
         using TextWriter writer = new StreamWriter(scriptFile);
         WritePBSHeader(writer);
 
@@ -295,9 +301,14 @@ vpd=(_esat-_e)/1000";
         // TODO: use variable name for output file?
 
         // Merge files and perform all operations in a single step.
-        string inFiles = string.Join(" ", dataset.GetInputFiles(variable, false));
-        writer.WriteLine($"cdo -O mergetime {operators} {inFiles} {tmpFile}");
+        string inDir = dataset.GetInputFilesDirectory(variable);
+        writer.WriteLine($"IN_DIR=\"{inDir}\"");
+        writer.WriteLine($"TMP_FILE=\"${{TMPDIR}}/{tmpFile}\"");
         writer.WriteLine();
+
+        writer.WriteLine("log \"Merging files...\"");
+        writer.WriteLine($"cdo -O mergetime {operators} \"${{IN_DIR}}\"/*.nc \"${{TMP_FILE}}\"");
+        writer.WriteLine("log \"All files merged successfully.\"");
 
         // Reorder dimensions, improve chunking, and enable compression.
         string ordering = "-a lat,lon,time";
@@ -305,9 +316,13 @@ vpd=(_esat-_e)/1000";
         string compression = _config.CompressOutput ? $"-L{_config.CompressionLevel}" : "";
         string outFile = GetOutputFilePath(dataset, variable);
 
+        writer.WriteLine("log \"Rechunking files...\"");
         writer.WriteLine($"ncpdq -O {ordering} {chunking} {compression} \"{tmpFile}\" \"{outFile}\"");
-        writer.WriteLine($"rm -f \"{tmpFile}\"");
+        writer.WriteLine("log \"All files rechunked successfully.\"");
         writer.WriteLine();
+
+        writer.WriteLine("# Delete temporary file.");
+        writer.WriteLine($"rm -f \"{tmpFile}\"");
 
         return scriptFile;
     }

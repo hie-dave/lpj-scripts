@@ -58,7 +58,7 @@ public class NarClim2Dataset : IClimateDataset
     public string DatasetName =>
         $"NARCliM2.0_{NarClim2Constants.GCMNames.ToString(_gcm)}_{NarClim2Constants.ExperimentNames.ToString(_experiment)}_{NarClim2Constants.RCMNames.ToString(_rcm)}";
 
-    public IEnumerable<string> GetInputFiles(ClimateVariable variable, bool expandWildcard = true)
+    public string GetInputFilesDirectory(ClimateVariable variable)
     {
         string baseDir = Path.Combine(_inputPath,
             NarClim2Constants.Paths.MipEra,
@@ -73,21 +73,22 @@ public class NarClim2Dataset : IClimateDataset
             NarClim2Constants.FrequencyNames.ToString(_frequency));
 
         string varName = GetVariableInfo(variable).Name;
-        string varDir = Path.Combine(baseDir, varName, NarClim2Constants.Paths.LatestVersion);
-        if (!Directory.Exists(varDir))
+        return Path.Combine(baseDir, varName, NarClim2Constants.Paths.LatestVersion);
+    }
+
+    public IEnumerable<string> GetInputFiles(ClimateVariable variable)
+    {
+        string dir = GetInputFilesDirectory(variable);
+        if (!Directory.Exists(dir))
             return Enumerable.Empty<string>();
 
-        if (expandWildcard)
-            return Directory.GetFiles(varDir, "*.nc").OrderBy(GetDateFromFilename);
-        return [Path.Combine(varDir, "*.nc")];
+        return Directory.GetFiles(dir, "*.nc").OrderBy(GetDateFromFilename);
     }
 
     public VariableInfo GetVariableInfo(ClimateVariable variable)
     {
         if (!_variableMap.TryGetValue(variable, out var info))
-        {
             throw new ArgumentException($"Variable {variable} not supported in NARCliM2 dataset");
-        }
         return new VariableInfo(info.name, info.units);
     }
 
