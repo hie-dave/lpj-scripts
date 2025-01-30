@@ -219,11 +219,14 @@ public class ScriptGenerator
         writer.WriteLine("");
 
         // Error handling.
+        writer.WriteLine("# Exit immediately if any command fails.");
         writer.WriteLine("set -euo pipefail");
         writer.WriteLine();
 
         // Load required modules.
-        writer.WriteLine("module load cdo nco");
+        writer.WriteLine("# Load required modules.");
+        writer.WriteLine("module purge");
+        writer.WriteLine("module load pbs netcdf cdo nco");
         writer.WriteLine();
 
         // Create temporary directory and cd into it.
@@ -285,6 +288,8 @@ public class ScriptGenerator
         // Add PBS header.
         writer.WriteLine("#!/usr/bin/env bash");
         writer.WriteLine($"# Job submission script for: {dataset.DatasetName}");
+        writer.WriteLine();
+        writer.WriteLine("# Exit immediately if any command fails.");
         writer.WriteLine("set -euo pipefail");
         writer.WriteLine();
 
