@@ -30,5 +30,4 @@ public interface IClimateDataset
     VariableInfo GetVariableInfo(ClimateVariable variable);
     string GenerateOutputFileName(ClimateVariable variable);
     string GetOutputDirectory();
-    Dictionary<string, string> GetMetadata();
 }

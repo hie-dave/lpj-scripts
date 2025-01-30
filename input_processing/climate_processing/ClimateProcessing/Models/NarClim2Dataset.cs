@@ -36,8 +36,6 @@ public class NarClim2Dataset : IClimateDataset
         { ClimateVariable.Precipitation, ("pr", "kg m-2 s-1") }
     };
 
-    private readonly Dictionary<string, string> _metadata;
-
     public NarClim2Dataset(
         string inputPath,
         NarClim2Domain domain = NarClim2Domain.AUS18,
@@ -52,7 +50,6 @@ public class NarClim2Dataset : IClimateDataset
         _experiment = experiment;
         _rcm = rcm;
         _frequency = frequency;
-        _metadata = GetMetadata();
     }
 
     public string DatasetName =>
@@ -91,17 +88,6 @@ public class NarClim2Dataset : IClimateDataset
             throw new ArgumentException($"Variable {variable} not supported in NARCliM2 dataset");
         return new VariableInfo(info.name, info.units);
     }
-
-    public Dictionary<string, string> GetMetadata() => new()
-    {
-        { "source", "NARCliM2.0" },
-        { "domain", NarClim2Constants.DomainNames.ToString(_domain) },
-        { "gcm", NarClim2Constants.GCMNames.ToString(_gcm) },
-        { "experiment", NarClim2Constants.ExperimentNames.ToString(_experiment) },
-        { "rcm", NarClim2Constants.RCMNames.ToString(_rcm) },
-        { "frequency", NarClim2Constants.FrequencyNames.ToString(_frequency) },
-        { "version", NarClim2Constants.Paths.Version }
-    };
 
     private static DateTime GetDateFromFilename(string filename)
     {
