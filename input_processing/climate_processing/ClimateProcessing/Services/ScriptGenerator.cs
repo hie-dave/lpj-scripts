@@ -13,6 +13,7 @@ public class ScriptGenerator
 {
     // Subdirectory of the output directory into which the scripts are written.
     private const string scriptDirectory = "scripts";
+    private const string logDirectory = "logs";
 
     private readonly ProcessingConfig _config;
 
@@ -143,12 +144,12 @@ vpd=(_esat-_e)/1000";
 
     private string GenerateVPDScript(IClimateDataset dataset)
     {
-        string script = CreateScript($"calc_vpd_{dataset.DatasetName}");
+        string jobName = $"calc_vpd_{dataset.DatasetName}";
+        string script = CreateScript(jobName);
         using TextWriter writer = new StreamWriter(script);
-        WritePBSHeader(writer);
-        writer.WriteLine();
+        WritePBSHeader(writer, jobName);
 
-        writer.WriteLine("# Calculate VPD using equation file");
+        writer.WriteLine("# Generate equation file.");
         writer.WriteLine("log \"Generating VPD equation file...\"");
 
         // Create equation file with selected method.
@@ -158,6 +159,7 @@ vpd=(_esat-_e)/1000";
         writer.WriteLine("EOF");
         writer.WriteLine();
 
+        writer.WriteLine("# File paths.");
         string humidityFile = GetOutputFilePath(dataset, ClimateVariable.SpecificHumidity);
         writer.WriteLine($"HUSS_FILE=\"{humidityFile}\"");
 
@@ -179,6 +181,7 @@ vpd=(_esat-_e)/1000";
         writer.WriteLine();
 
         // Calculate VPD using the equation file.
+        writer.WriteLine("# Calculate VPD.");
         writer.WriteLine($"log \"Calculating VPD...\"");
         writer.WriteLine($"cdo -O exprf,{eqnFile} {inFiles} \"${{OUT_FILE}}\"");
         writer.WriteLine($"log \"VPD calculation completed successfully.\"");
@@ -188,16 +191,22 @@ vpd=(_esat-_e)/1000";
         return script;
     }
 
-    private void WritePBSHeader(TextWriter writer)
+    private void WritePBSHeader(TextWriter writer, string jobName)
     {
         writer.WriteLine("#!/bin/bash");
-        writer.WriteLine($"#PBS -N {_config.JobName}");
+        writer.WriteLine($"#PBS -N {jobName}");
+        writer.WriteLine($"#PBS -o {GetLogPath()}/{jobName}.log");
         writer.WriteLine($"#PBS -P {_config.Project}");
         writer.WriteLine($"#PBS -q {_config.Queue}");
         writer.WriteLine($"#PBS -l walltime={_config.Walltime}");
         writer.WriteLine($"#PBS -l ncpus={_config.Ncpus}");
         writer.WriteLine($"#PBS -l mem={_config.Memory}GB");
         writer.WriteLine($"#PBS -j oe");
+        if (!string.IsNullOrEmpty(_config.Email))
+        {
+            writer.WriteLine($"#PBS -M {_config.Email}");
+            writer.WriteLine($"#PBS -m abe");
+        }
 
         // Add storage directives if required
         var storageDirectives = _config.GetRequiredStorageDirectives();
@@ -232,9 +241,8 @@ vpd=(_esat-_e)/1000";
         writer.WriteLine("log() {");
         writer.WriteLine("    echo \"[$(date)] $*\"");
         writer.WriteLine("}");
-        writer.WriteLine();
 
-        // Add blank line after header
+        // Add blank line after header.
         writer.WriteLine("");
     }
 
@@ -245,92 +253,22 @@ vpd=(_esat-_e)/1000";
         return scriptPath;
     }
 
+    private string GetLogPath()
+    {
+        string logPath = Path.Combine(_config.OutputDirectory, logDirectory);
+        Directory.CreateDirectory(logPath);
+        return logPath;
+    }
+
     // Generate processing scripts, and return the path to the top-level script.
     public string GenerateScripts(IClimateDataset dataset)
     {
-        string scriptFile = CreateScript($"submit_{dataset.DatasetName}");
-        using (TextWriter writer = new StreamWriter(scriptFile))
-            GenerateProcessingScript(writer, dataset);
-
-        return scriptFile;
-    }
-
-    // Create an empty script file and set execute permissions.
-    private string CreateScript(string scriptName)
-    {
-        string script = Path.Combine(GetScriptPath(), scriptName);
-        File.WriteAllText(script, string.Empty);
-        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
-            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        else
-            // Windows not supported.
-            throw new PlatformNotSupportedException();
-        return script;
-    }
-
-    private string GetOutputFilePath(IClimateDataset dataset, ClimateVariable variable)
-    {
-        string outFileName = dataset.GenerateOutputFileName(variable);
-        return Path.Combine(_config.OutputDirectory, outFileName);
-    }
-
-    private string GenerateVariableMergeScript(IClimateDataset dataset, ClimateVariable variable)
-    {
-        VariableInfo varInfo = dataset.GetVariableInfo(variable);
-        (string outVar, string targetUnits) = GetStandardConfig(variable);
-
-        // Create script directory if it doesn't already exist.
-        // This should be unnecessary at this point.
-        string scriptFile = CreateScript($"mergetime_{varInfo.Name}_{dataset.DatasetName}");
+        string jobName = $"submit_{dataset.DatasetName}";
+        string scriptFile = CreateScript(jobName);
         using TextWriter writer = new StreamWriter(scriptFile);
-        WritePBSHeader(writer);
 
-        writer.WriteLine($"echo \"Processing {variable}...\"");
-
-        string rename = GenerateRenameOperator(varInfo.Name, outVar);
-        string conversion = string.Join(" ", GenerateUnitConversionOperators(outVar, varInfo.Units, targetUnits, _config.InputTimeStep));
-        string aggregation = GenerateTimeAggregationOperator(variable);
-        string unpack = "-unpack";
-        string remap = $"-remapcon,{_config.GridFile}";
-        string operators = $"{aggregation} {conversion} {rename} {unpack} {remap}";
-
-        string outFileName = dataset.GenerateOutputFileName(variable);
-        string tmpFile = Path.Combine("\"${WORKDIR}\"", outFileName);
-
-        // TODO: quote file names.
-        // TODO: use variable name for output file?
-
-        // Merge files and perform all operations in a single step.
-        string inDir = dataset.GetInputFilesDirectory(variable);
-        writer.WriteLine($"IN_DIR=\"{inDir}\"");
-        writer.WriteLine($"TMP_FILE=\"${{TMPDIR}}/{tmpFile}\"");
-        writer.WriteLine();
-
-        writer.WriteLine("log \"Merging files...\"");
-        writer.WriteLine($"cdo -O mergetime {operators} \"${{IN_DIR}}\"/*.nc \"${{TMP_FILE}}\"");
-        writer.WriteLine("log \"All files merged successfully.\"");
-
-        // Reorder dimensions, improve chunking, and enable compression.
-        string ordering = "-a lat,lon,time";
-        string chunking = $"--cnk_dmn lat,{_config.ChunkSizeSpatial} --cnk_dmn lon,{_config.ChunkSizeSpatial} --cnk_dmn time,{_config.ChunkSizeTime}";
-        string compression = _config.CompressOutput ? $"-L{_config.CompressionLevel}" : "";
-        string outFile = GetOutputFilePath(dataset, variable);
-
-        writer.WriteLine("log \"Rechunking files...\"");
-        writer.WriteLine($"ncpdq -O {ordering} {chunking} {compression} \"{tmpFile}\" \"{outFile}\"");
-        writer.WriteLine("log \"All files rechunked successfully.\"");
-        writer.WriteLine();
-
-        writer.WriteLine("# Delete temporary file.");
-        writer.WriteLine($"rm -f \"{tmpFile}\"");
-
-        return scriptFile;
-    }
-
-    private void GenerateProcessingScript(TextWriter writer, IClimateDataset dataset)
-    {
         // Add PBS header.
-        WritePBSHeader(writer);
+        WritePBSHeader(writer, jobName);
 
         // Ensure output directory exists.
         writer.WriteLine($"mkdir -p \"{_config.OutputDirectory}\"");
@@ -375,5 +313,78 @@ vpd=(_esat-_e)/1000";
 
         writer.WriteLine("echo \"Job submission complete.\"");
         writer.WriteLine();
+
+        return scriptFile;
+    }
+
+    // Create an empty script file and set execute permissions.
+    private string CreateScript(string scriptName)
+    {
+        string script = Path.Combine(GetScriptPath(), scriptName);
+        File.WriteAllText(script, string.Empty);
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        else
+            // Windows not supported.
+            throw new PlatformNotSupportedException();
+        return script;
+    }
+
+    private string GetOutputFilePath(IClimateDataset dataset, ClimateVariable variable)
+    {
+        string outFileName = dataset.GenerateOutputFileName(variable);
+        return Path.Combine(_config.OutputDirectory, outFileName);
+    }
+
+    private string GenerateVariableMergeScript(IClimateDataset dataset, ClimateVariable variable)
+    {
+        VariableInfo varInfo = dataset.GetVariableInfo(variable);
+        (string outVar, string targetUnits) = GetStandardConfig(variable);
+
+        // Create script directory if it doesn't already exist.
+        // This should be unnecessary at this point.
+        string jobName = $"mergetime_{varInfo.Name}_{dataset.DatasetName}";
+        string scriptFile = CreateScript(jobName);
+        using TextWriter writer = new StreamWriter(scriptFile);
+        WritePBSHeader(writer, jobName);
+
+        writer.WriteLine($"log \"Processing {varInfo.Name}...\"");
+
+        // File paths.
+        string inDir = dataset.GetInputFilesDirectory(variable);
+        string outFileName = dataset.GenerateOutputFileName(variable);
+        string tmpFile = Path.Combine("\"${WORKDIR}\"", outFileName);
+        string outFile = GetOutputFilePath(dataset, variable);
+        writer.WriteLine($"IN_DIR=\"{inDir}\"");
+        writer.WriteLine($"TMP_FILE=\"${{TMPDIR}}/{tmpFile}\"");
+        writer.WriteLine($"OUT_FILE=\"{outFile}\"");
+        writer.WriteLine();
+
+        string rename = GenerateRenameOperator(varInfo.Name, outVar);
+        string conversion = string.Join(" ", GenerateUnitConversionOperators(outVar, varInfo.Units, targetUnits, _config.InputTimeStep));
+        string aggregation = GenerateTimeAggregationOperator(variable);
+        string unpack = "-unpack";
+        string remap = string.IsNullOrEmpty(_config.GridFile) ? "" : $"-remapcon,{_config.GridFile}";
+        string operators = $"{aggregation} {conversion} {rename} {unpack} {remap}";
+
+        // Merge files and perform all operations in a single step.
+        writer.WriteLine("log \"Merging files...\"");
+        writer.WriteLine($"cdo -O mergetime {operators} \"${{IN_DIR}}\"/*.nc \"${{TMP_FILE}}\"");
+        writer.WriteLine("log \"All files merged successfully.\"");
+
+        // Reorder dimensions, improve chunking, and enable compression.
+        string ordering = "-a lat,lon,time";
+        string chunking = $"--cnk_dmn lat,{_config.ChunkSizeSpatial} --cnk_dmn lon,{_config.ChunkSizeSpatial} --cnk_dmn time,{_config.ChunkSizeTime}";
+        string compression = _config.CompressOutput ? $"-L{_config.CompressionLevel}" : "";
+
+        writer.WriteLine("log \"Rechunking files...\"");
+        writer.WriteLine($"ncpdq -O {ordering} {chunking} {compression} \"${{TMP_FILE}}\" \"${{OUT_FILE}}\"");
+        writer.WriteLine("log \"All files rechunked successfully.\"");
+        writer.WriteLine();
+
+        writer.WriteLine("# Delete temporary file.");
+        writer.WriteLine($"rm -f \"${{TMP_FILE}}\"");
+
+        return scriptFile;
     }
 }

@@ -9,7 +9,6 @@ public class ScriptGeneratorTests
 {
     private readonly ProcessingConfig _config = new()
     {
-        JobName = "test",
         Project = "test",
         Queue = "normal",
         Walltime = "01:00:00",
@@ -69,7 +68,6 @@ public class ScriptGeneratorTests
     {
         var config = new ProcessingConfig
         {
-            JobName = _config.JobName,
             Project = _config.Project,
             Queue = _config.Queue,
             Walltime = _config.Walltime,

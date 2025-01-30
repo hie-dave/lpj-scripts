@@ -38,9 +38,6 @@ public class ProcessingConfig
     [Option('p', "project", Required = true, HelpText = "Project for job submission")]
     public string Project { get; set; } = string.Empty;
 
-    [Option('n', "job-name", Required = false, Default = "process_climate", HelpText = "Job name")]
-    public string JobName { get; set; } = "process_climate";
-
     [Option("ncpus", Required = false, Default = 4, HelpText = "Number of CPUs to request")]
     public int Ncpus { get; set; } = 4;
 
@@ -49,6 +46,9 @@ public class ProcessingConfig
 
     [Option("compression-level", Default = 5, HelpText = "Compression level (1-9)")]
     public int CompressionLevel { get; set; } = 5;
+
+    [Option("email", Required = false, HelpText = "Email address for job notifications (optional)")]
+    public string Email { get; set; } = string.Empty;
 
     [Option("vpd-method", Default = VPDMethod.Magnus, HelpText = "Method to calculate VPD: Magnus (default), Buck1981, AlduchovEskridge1996, AllenFAO1998, or Sonntag1990")]
     public VPDMethod VPDMethod { get; set; } = VPDMethod.Magnus;
