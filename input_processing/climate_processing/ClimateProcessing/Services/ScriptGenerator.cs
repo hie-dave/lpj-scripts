@@ -183,7 +183,7 @@ vpd=(_esat-_e)/1000";
         string logFile = Path.Combine(GetLogPath(), logFileName);
         string streamFile = Path.Combine(GetStreamPath(), logFileName);
 
-        writer.WriteLine("#!/bin/bash");
+        writer.WriteLine("#!/usr/bin/env bash");
         writer.WriteLine($"#PBS -N {jobName}");
         writer.WriteLine($"#PBS -o {logFile}");
         writer.WriteLine($"#PBS -P {_config.Project}");
@@ -214,23 +214,28 @@ vpd=(_esat-_e)/1000";
         writer.WriteLine("module load cdo nco");
         writer.WriteLine();
 
-        // Create working directory.
-        writer.WriteLine("# Working directory on jobfs - note this may be limited in capacity.");
-        writer.WriteLine("WORKDIR=\"${PBS_O_WORKDIR}\"");
-        writer.WriteLine("cd \"${WORKDIR}\"");
-        writer.WriteLine();
-
         // Create temporary directory and cd into it.
         writer.WriteLine("# Create temporary directory and cd into it.");
         writer.WriteLine("TMPDIR=\"$(mktemp -d)\"");
         writer.WriteLine("cd \"${TMPDIR}\"");
-        writer.WriteLine("trap 'cd \"${WORKDIR}\"; rm -rf \"${TMPDIR}\"' EXIT");
+        writer.WriteLine();
+
+        // Technically, deleting the temporary directory is unnecessary, because
+        // the tempfs on the compute nodes will be deleted when the job
+        // finishes. However, it's a good practice to clean up after ourselves.
+        writer.WriteLine("# Delete the temporary directory on exit.");
+        writer.WriteLine("trap 'cd; rm -rf \"${TMPDIR}\"' EXIT");
+        writer.WriteLine();
+
+        // Set up logging that streams all output into the stream directory.
+        writer.WriteLine($"STREAM_FILE=\"{streamFile}\"");
+        writer.WriteLine("rm -f \"${STREAM_FILE}\"");
+        writer.WriteLine("exec 1> >(tee -a \"${STREAM_FILE}\") 2>&1");
         writer.WriteLine();
 
         writer.WriteLine("# Print a log message");
         writer.WriteLine("log() {");
-        writer.WriteLine($"    local STREAM_FILE=\"{streamFile}\"");
-        writer.WriteLine("    echo \"[$(date)] $*\" | tee -a \"${STREAM_FILE}\"");
+        writer.WriteLine("    echo \"[$(date)] $*\"");
         writer.WriteLine("}");
 
         // Add blank line after header.
@@ -346,13 +351,12 @@ vpd=(_esat-_e)/1000";
         using TextWriter writer = new StreamWriter(scriptFile);
         WritePBSHeader(writer, jobName);
 
-        writer.WriteLine($"log \"Processing {varInfo.Name}...\"");
-
         // File paths.
         string inDir = dataset.GetInputFilesDirectory(variable);
         string outFileName = dataset.GenerateOutputFileName(variable);
-        string tmpFile = Path.Combine("\"${WORKDIR}\"", outFileName);
+        string tmpFile = Path.Combine("\"${TMPDIR}\"", outFileName);
         string outFile = GetOutputFilePath(dataset, variable);
+        writer.WriteLine("# File paths.");
         writer.WriteLine($"IN_DIR=\"{inDir}\"");
         writer.WriteLine($"TMP_FILE=\"${{TMPDIR}}/{tmpFile}\"");
         writer.WriteLine($"OUT_FILE=\"{outFile}\"");
@@ -369,6 +373,7 @@ vpd=(_esat-_e)/1000";
         writer.WriteLine("log \"Merging files...\"");
         writer.WriteLine($"cdo -L -O -v mergetime {operators} \"${{IN_DIR}}\"/*.nc \"${{TMP_FILE}}\"");
         writer.WriteLine("log \"All files merged successfully.\"");
+        writer.WriteLine();
 
         // Reorder dimensions, improve chunking, and enable compression.
         string ordering = "-a lat,lon,time";
