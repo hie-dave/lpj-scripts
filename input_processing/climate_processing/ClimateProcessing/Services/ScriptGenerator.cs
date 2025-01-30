@@ -236,7 +236,7 @@ public class ScriptGenerator
         // the tempfs on the compute nodes will be deleted when the job
         // finishes. However, it's a good practice to clean up after ourselves.
         writer.WriteLine("# Delete the temporary directory on exit.");
-        writer.WriteLine("trap 'cd; rm -rf \"${WORK_DIR}\"' EXIT");
+        writer.WriteLine("trap 'cd \"${PBS_JOBFS}\"; rm -rf \"${WORK_DIR}\"' EXIT");
         writer.WriteLine();
 
         // Set up logging that streams all output into the stream directory.
@@ -371,11 +371,11 @@ public class ScriptGenerator
         // File paths.
         string inDir = dataset.GetInputFilesDirectory(variable);
         string outFileName = dataset.GenerateOutputFileName(variable);
-        string tmpFile = Path.Combine("\"${WORK_DIR}\"", outFileName);
+        string tmpFile = Path.Combine("${WORK_DIR}", outFileName);
         string outFile = GetOutputFilePath(dataset, variable);
         writer.WriteLine("# File paths.");
         writer.WriteLine($"IN_DIR=\"{inDir}\"");
-        writer.WriteLine($"TMP_FILE=\"${{WORK_DIR}}/{tmpFile}\"");
+        writer.WriteLine($"TMP_FILE=\"{tmpFile}\"");
         writer.WriteLine($"OUT_FILE=\"{outFile}\"");
         writer.WriteLine();
 
