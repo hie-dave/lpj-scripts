@@ -134,7 +134,7 @@ public class ScriptGenerator
     /// </summary>
     private string GetCDOArgs()
     {
-        return $"-L -O -v";
+        return $"-L -O -v -z zip1";
     }
 
     private string GenerateVPDScript(IClimateDataset dataset)

@@ -41,8 +41,8 @@ public class ProcessingConfig
     [Option('p', "project", Required = true, HelpText = "Project for job submission")]
     public string Project { get; set; } = string.Empty;
 
-    [Option("ncpus", Required = false, Default = 4, HelpText = "Number of CPUs to request")]
-    public int Ncpus { get; set; } = 4;
+    [Option("ncpus", Required = false, Default = 1, HelpText = "Number of CPUs to request")]
+    public int Ncpus { get; set; } = 1;
 
     [Option("compress", Default = true, HelpText = "Enable netCDF compression")]
     public bool CompressOutput { get; set; } = true;
