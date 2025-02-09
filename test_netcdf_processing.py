@@ -34,15 +34,22 @@ def create_test_data():
             base_temp = annual_cycle + warming_trend + lat_effect + lon_effect
             temp_data[:, i, j] = base_temp + np.random.normal(0, 1, len(dates))
     
-    # Create precipitation-like data
-    # Seasonal pattern with many zeros and occasional heavy rainfall
+    # Create precipitation-like data with summer-dominated rainfall
     precip_data = np.zeros_like(temp_data)
-    seasonal_prob = 0.3 + 0.2 * np.sin(2 * np.pi * time_index / 365.25)  # More rain in winter
+    
+    # Phase shift to align peak with Southern Hemisphere summer (phase = +π/2 for peak in January)
+    # Higher amplitude (0.3) for more pronounced seasonality
+    # Higher baseline (0.4) for more frequent rain events
+    seasonal_prob = 0.4 + 0.3 * np.sin(2 * np.pi * time_index / 365.25 + np.pi/2)
+    
+    # Also make rain intensity higher in summer
+    seasonal_intensity = 5 + 3 * np.sin(2 * np.pi * time_index / 365.25 + np.pi/2)
     
     for i in range(len(lats)):
         for j in range(len(lons)):
             rain_days = np.random.random(len(dates)) < seasonal_prob
-            intensity = np.random.exponential(5, len(dates))  # Some days with heavy rain
+            # Use seasonal intensity for more summer rain
+            intensity = np.random.exponential(seasonal_intensity, len(dates))
             precip_data[:, i, j] = rain_days * intensity
     
     # Create datasets with proper CF attributes
@@ -129,7 +136,16 @@ def run_tests():
     precip_annual = rioxarray.open_rasterio('precip_annual_mean.tif')
     precip_sum_mean = rioxarray.open_rasterio('precip_annual_sum_mean.tif')
     
-    print(f"Mean daily precipitation (simple mean): {precip_mean.mean().values:.2f} mm/day")
+    # Add seasonal analysis
+    ds = xr.open_dataset(precip_file)
+    
+    print("\nMonthly precipitation patterns:")
+    monthly = ds.precipitation.groupby('time.month').mean(['time', 'latitude', 'longitude'])
+    for month in range(1, 13):
+        month_name = pd.Timestamp(2020, month, 1).strftime('%B')
+        print(f"{month_name}: {monthly.sel(month=month).values:.2f} mm/day")
+    
+    print(f"\nMean daily precipitation (simple mean): {precip_mean.mean().values:.2f} mm/day")
     print(f"Mean daily precipitation (annual mean): {precip_annual.mean().values:.2f} mm/day")
     print(f"Mean annual precipitation: {precip_sum_mean.mean().values:.2f} mm/year")
     
