@@ -49,7 +49,7 @@ COL_PLOT_LENGTH = "plotLength_metres"
 COL_PLOT_WIDTH = "plotWidth_metres"
 
 # Name of the date column.
-COL_DATE = "phenomenonTime"
+COL_DATE = "startVisitDate"
 
 # Name of the transect width column.
 COL_TRWIDTH = "transectWidth_metres"
@@ -69,8 +69,8 @@ _COL_INDIV = "plantId"
 # Name of the column which gives the patch name/ID.
 _COL_PATCH = "plotId"
 
-# Name of the column which gives the diameter.
-_COL_DIAMETER = "stemDiameter_centimetres"
+# Candidate names of the column which gives the diameter.
+_COLS_DIAMETER = ["stemDiameter_centimetres", "stemDiameter_centimeters"]
 
 # Name of the column which gives the height.
 _COL_HEIGHT = "stemHeight_metres"
@@ -140,7 +140,7 @@ class Patch:
 	def __init__(self, id: int, name: str, area: float):
 		self.id = id
 		self.name = name
-		self.area = area
+		self.area = area # can be NaN if data doesn't contain plot length/width.
 	def __str__(self) -> str:
 		return f"Patch {self.id}: {self.name} ({self.area}m2)"
 
@@ -156,12 +156,12 @@ class Inventory:
 		Get the area of a patch.
 
 		@param patch: Patch number.
-		@return Area of the patch (ha).
+		@return Area of the patch (m2).
 		"""
 		patches = [p for p in self.patches if p.id == patch]
 		if len(patches) != 1:
 			raise ValueError(f"Patch {patch} not found")
-		return patch.area
+		return patches[0].area
 	def __str__(self) -> str:
 		return "\n".join([f"{str(p)}: {len([r for r in self.readings if r.patch == p.id])} readings over {len(numpy.unique([r.date for r in self.readings if r.patch == p.id]))} timesteps" for p in self.patches])
 
@@ -242,6 +242,9 @@ def get_plot_area(data: pandas.DataFrame, row: int) -> float:
 	@param data: The data frame.
 	@param row: The row index.
 	"""
+	if not COL_PLOT_LENGTH in data or not COL_PLOT_WIDTH in data:
+		log_warning(f"Inventory data file does not contain plot length/width data")
+		return math.nan
 	# This will throw if these column don't exist.
 	plot_length = ozflux_common.get_length(data.iloc[row][COL_PLOT_LENGTH])
 	plot_width = ozflux_common.get_length(data.iloc[row][COL_PLOT_WIDTH])
@@ -340,10 +343,24 @@ def parse_inventory_reading(row: pandas.Series, patches: list[str], indivs: list
 	date = datetime.datetime.strptime(row[COL_DATE], _DATE_FMT)
 	patch = int(numpy.where(patches == row[_COL_PATCH])[0][0])
 	indiv = int(numpy.where(indivs == row[_COL_INDIV])[0][0])
-	diameter = parse_float(row, _COL_DIAMETER) * CM_TO_M
-	height = parse_float(row, _COL_HEIGHT) # already in m
-	live_biomass = parse_float(row, COL_LIVE) # kg
-	dead_biomass = parse_float(row, COL_DEAD) # kg
+
+	diameter = math.nan
+	height = math.nan
+	live_biomass = math.nan
+	dead_biomass = math.nan
+
+	diameter_cols = [c for c in _COLS_DIAMETER if c in row.keys()]
+	col_diameter = diameter_cols[0] if len(diameter_cols) > 0 else None
+	if col_diameter != None:
+		diameter = parse_float(row, col_diameter) * CM_TO_M
+
+	if _COL_HEIGHT in row.keys():
+		height = parse_float(row, _COL_HEIGHT) # already in m
+	if COL_LIVE in row.keys():
+		live_biomass = parse_float(row, COL_LIVE) # kg
+	if COL_DEAD in row.keys():
+		dead_biomass = parse_float(row, COL_DEAD) # kg
+
 	return InventoryReading(date, patch, indiv, diameter, height, live_biomass,
 							dead_biomass)
 

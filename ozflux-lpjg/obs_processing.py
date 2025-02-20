@@ -8,10 +8,11 @@
 
 import math
 import biom_processing, datetime, glob, numpy, pandas, time, traceback
-import merge_biomass_to_netcdf
 from multiprocessing import Lock
 import ozflux_common
-
+import difflib
+from itertools import groupby
+from operator import attrgetter
 from argparse import ArgumentParser
 from ozflux_logging import *
 from ozflux_netcdf import *
@@ -55,6 +56,12 @@ _NAME_LIVE = "live_biomass"
 
 # Name of the dead biomass column in the output file.
 _NAME_DEAD = "dead_biomass"
+
+# Name of the height column in the output file.
+_NAME_HEIGHT = "height"
+
+# Name of the diameter column in the output file.
+_NAME_DIAMETER = "diameter"
 
 # Name of the "site name" column in the LAI data file.
 _LAI_COL_ID = "ID"
@@ -174,6 +181,22 @@ _layer_variable_map = {
 	"YarIrr": [Layer("Sws_5cm", 5), Layer("Sws", 10)]
 }
 
+_inventory_site_names = {
+	"Alice_Mulga_diameter_height_biomass_data_lVZI0qg.csv": "AliceSpringsMulga",
+	"Boyagin_Wandoo_woodlands_diameter_height_biomass_da_iWYgPOL.csv": "Boyagin",
+	"Calperum_Mallee_diameter_height_biomass_data_2be0UM3.csv": "Calperum",
+	"Cumberland_Plain_diameter_height_biomass_data.csv": "CumberlandPlain",
+	"Gingin_Banksia_stem_diameter_height_biomass_basal_area_data.csv": "Gingin",
+	"GWW_diameter_height_biomass_basal_area_sapwood_data.csv": "GreatWesternWoodlands",
+	"Litchfield_Savanna_diameter_height_biomass_basal_area_data.csv": "Litchfield",
+	"Robson_Creek_diameter_height_biomass_data_CuQoBBH.csv": "RobsonCreek",
+	"Samford_diameter_height_biomass_data_mVFhel9.csv": "Samford",
+	"Tumbarumba_Wet_Eucalypt_diameter_height_biomass_dat_IbRz0nd.csv": "Tumbarumba",
+	"Warra_Tall_Eucalypt_diameter_height_biomass_data_teCJffC.csv": "Warra",
+	"Whroo_Dry_Eucalypt_diameter_height_biomass_data_15iHyyj.csv": "Whroo",
+	"Wombat_Stringybark_Eucalypt_diameter_height_biomass_EYriIKJ.csv": "WombatStateForest",
+}
+
 class Observation:
 	"""
 	An observation made on a particular date.
@@ -206,10 +229,12 @@ class Options:
 	@param parallel: True to process files in parallel.
 	@param timestep: Desired output timestep, in hours.
 	@param smips_path: Path to file containing SW content at 90cm as obtained from SMIPS.
+	@param smips_index_path: Path to file containing SMIPS index.
 	@param biomass_file: Optional file containing biomass readings
 	@param biomass_searchpath: Search path for biomass readings. If provided, will search under here for a file containing biomass readings for the site
 	@param lai_file: Path to file containing LAI observations.
 	@param greenness_file: Path to a .csv or .xlsx file containing greenness observations.
+	@param inventory_path: Path to directory containing site-level inventory data.
 	@param format: Output format (csv or netcdf).
 	@param compression_level: Compression quality for output file [0, 9]. 0 = none, 1 = fastest compression, largest filesize, 9 = slowest compression, smallest filesize.
 	@param compression_type: Compression algorithm to be used (default 'zlib').
@@ -217,7 +242,7 @@ class Options:
 	def __init__(self, log : LogLevel, files: list[str], odir: str, prog: bool,
 		parallel: bool, timestep: int, smips_path: str, smips_index_path: str
 		, biomass_file: str, biomass_searchpath: str, lai_file: str
-		, greenness_file: str, format: str, compression_level: int
+		, greenness_file: str, inventory_path: str, format: str, compression_level: int
 		, compression_type: str):
 		self.log_level = log
 		self.files = files
@@ -231,6 +256,7 @@ class Options:
 		self.greenness_file = greenness_file
 		self.smips_path = smips_path
 		self.smips_index_path = smips_index_path
+		self.inventory_path = inventory_path
 		self.output_format = format
 		self.compression_level = compression_level
 		self.compression_type = compression_type
@@ -255,6 +281,7 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-l", "--lai-file", required = True, help = "Path to a file containing lai observations")
 	parser.add_argument("-g", "--greenness-file", required = True, help = "Path to a .csv or .xlsx file containing greenness data")
 	parser.add_argument("-s", "--smips-path", required = True, help = "Path to directory containing site-level SW content at 90cm as obtained from SMIPS. Each file in this directory should be named site.csv")
+	parser.add_argument("-i", "--inventory-path", required = True, help = "Path to directory containing site-level inventory data. Each file should be named site.csv")
 	parser.add_argument("--compression-level", type = int, nargs = "?", default = 5, help = "Compression quality for output file [0, 9]. 0 = none, 1 = fastest compression, largest filesize, 9 = slowest compression, smallest filesize (default 5)")
 	parser.add_argument("--compression-type", default = "zlib", help = "Compression algorithm to be used (default 'zlib')")
 	parser.add_argument("--smips-index-path", help = "Optional path to directory containing site-level soil moisture index as obtained from smips. Each file should be named site.csv")
@@ -267,8 +294,8 @@ def parse_args(argv: list[str]) -> Options:
 
 	return Options(p.verbosity, p.files, p.out_dir, p.show_progress, p.parallel,
 		p.timestep, p.smips_path, p.smips_index_path, p.biomass_readings,
-		p.biomass_searchpath, p.lai_file, p.greenness_file, p.format
-		, p.compression_level, p.compression_type)
+		p.biomass_searchpath, p.lai_file, p.greenness_file, p.inventory_path,
+		p.format, p.compression_level, p.compression_type)
 
 def multiply_timedelta(delta: datetime.timedelta, n: int) -> datetime.timedelta:
 	"""
@@ -760,6 +787,103 @@ def get_greenness_data(data: pandas.DataFrame, lon: float, lat: float
 	]
 	return greenness
 
+def get_inventory_data_file(inventory_path: str, site: str) -> str | None:
+	"""
+	Return the path to the inventory data file for the specified site.
+
+	@param inventory_path: Path to a directory containing site-level csv files containing timeseries of inventory data.
+	@param site: Site name.
+	"""
+	inventory_files = [f for f in os.listdir(inventory_path) if f.endswith(".csv")]
+	inventory_files = [os.path.join(inventory_path, f) for f in inventory_files]
+	for file in inventory_files:
+		site_name = _inventory_site_names[os.path.basename(file)]
+		if site_name == site:
+			return file
+	return None
+
+def get_inventory_data(inventory_path: str, site: str) -> tuple[list[Observation], list[Observation], list[Observation], list[Observation]]:
+	"""
+	Read inventory data from the specified path.
+
+	Returns a tuple containing the height, diameter, live biomass, and dead biomass observations.
+
+	Returns a tuple containing the height, diameter, live biomass, and dead biomass observations.
+	Note that any or all of these observations may be empty, depending on the
+	input data.
+
+	The outputs are gridcell-level values.
+
+	@param inventory_path: Path to a directory containing site-level csv files containing timeseries of inventory data.
+	@param site: Site name.
+	"""
+	file = get_inventory_data_file(inventory_path, site)
+	if file is None:
+		log_warning(f"No inventory data for site '{site}'")
+		return ([], [], [], [])
+
+	# Read data from disk.
+	df = biom_processing.read_raw_data(file)
+	inventory = biom_processing.read_inventory_data(df)
+
+	# Initialise output lists.
+	heights: list[Observation] = []
+	diameters: list[Observation] = []
+	live_biomass: list[Observation] = []
+	dead_biomass: list[Observation] = []
+
+	# Probably not very pythonic but it works...
+	sorted_readings = sorted(inventory.readings, key=attrgetter("date"))
+	grouped = groupby(sorted_readings, key=attrgetter("date"))
+	for date, group in grouped:
+		sorted_patches = sorted(group, key=attrgetter("patch"))
+		patch_groups = groupby(sorted_patches, key=attrgetter("patch"))
+		date_heights = []
+		date_diameters = []
+		date_live_biomass = []
+		date_dead_biomass = []
+		for patch, patch_group in patch_groups:
+			# Convert iterator to list to avoid exhaustion
+			patch_group_list = list(patch_group)
+			# Get all values for this patch on this timestep.
+			patch_heights = [r.height for r in patch_group_list if not math.isnan(r.height)]
+			patch_diameters = [r.diameter for r in patch_group_list if not math.isnan(r.diameter)]
+			patch_live_biomass = [r.live_biomass for r in patch_group_list if not math.isnan(r.live_biomass)]
+			patch_dead_biomass = [r.dead_biomass for r in patch_group_list if not math.isnan(r.dead_biomass)]
+
+			# Store mean height/diameter (m), and total biomass (in kg/m2) for
+			# this patch.
+			mean_height = numpy.mean(patch_heights) # m
+			mean_diameter = numpy.mean(patch_diameters) # m
+			total_live_biomass = numpy.sum(patch_live_biomass) / inventory.get_area(patch) # kg/m2
+			total_dead_biomass = numpy.sum(patch_dead_biomass) / inventory.get_area(patch) # kg/m2
+			if not math.isnan(mean_height):
+				date_heights.append(mean_height)
+			if not math.isnan(mean_diameter):
+				date_diameters.append(mean_diameter)
+			if not math.isnan(total_live_biomass) and total_live_biomass > 0:
+				date_live_biomass.append(total_live_biomass)
+			if not math.isnan(total_dead_biomass) and total_dead_biomass > 0:
+				date_dead_biomass.append(total_dead_biomass)
+
+		# Mean value over all patches on this timestep. This should be
+		# comparable to gridcell-level model outputs (e.g. cmass.out).
+		mean_height = numpy.mean(date_heights)
+		mean_diameter = numpy.mean(date_diameters)
+		mean_live_biomass = numpy.mean(date_live_biomass)
+		mean_dead_biomass = numpy.mean(date_dead_biomass)
+
+		if not math.isnan(mean_height):
+			heights.append(Observation(date, mean_height))
+		if not math.isnan(mean_diameter):
+			diameters.append(Observation(date, mean_diameter))
+		if not math.isnan(mean_live_biomass):
+			live_biomass.append(Observation(date, mean_live_biomass))
+		if not math.isnan(mean_dead_biomass):
+			dead_biomass.append(Observation(date, mean_dead_biomass))
+
+	return (heights, diameters, live_biomass, dead_biomass)
+
 def get_smips_data_from_file(file: str, timestep: int, col: str, pcb: Callable[[float], None]) \
 		-> list[Observation]:
 	"""
@@ -791,6 +915,7 @@ def get_smips_data(site: str, path: str, timestep: int, col: str, pcb: Callable[
 def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 	, biomass_searchpath: str, lai_data: pandas.DataFrame
 	, greenness_data: pandas.DataFrame, smips_path: str, smips_index_path: str
+	, inventory_path: str
 	, lock: Lock, pcb: Callable[[float], None]):
 	"""
 	Extract the standard variables from the input file, write them to a .csv
@@ -841,6 +966,25 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 	timeseries: list[datetime.datetime] = []
 	latitude: float = 0
 	longitude: float = 0
+
+
+	(heights, diameters, live_biomass, dead_biomass) = get_inventory_data(inventory_path, site)
+	if len(heights) > 0:
+		height_data = Observations(_NAME_HEIGHT, "m", heights)
+		out_variables.append(height_data)
+
+	if len(diameters) > 0:
+		diameter_data = Observations(_NAME_DIAMETER, "m", diameters)
+		out_variables.append(diameter_data)
+
+	if len(live_biomass) > 0:
+		live_data = Observations(_NAME_LIVE, "kg/ha", live_biomass)
+		out_variables.append(live_data)
+
+	if len(dead_biomass) > 0:
+		dead_data = Observations(_NAME_DEAD, "kg/ha", dead_biomass)
+		out_variables.append(dead_data)
+
 	with open_netcdf(file) as nc:
 		latitude = nc.variables["latitude"][0]
 		longitude = nc.variables["longitude"][0]
@@ -956,7 +1100,7 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 class Processor:
 	def __init__(self, file: str, out_dir: str, timestep: int, biomass_file: str, biomass_searchpath: str
 	      , lai_data: pandas.DataFrame, greenness_data: pandas.DataFrame
-		  , smips_path: str, smips_index_path: str, lock: Lock):
+		  , smips_path: str, smips_index_path: str, inventory_path: str, lock: Lock):
 		self.file = file
 		self.out_dir = out_dir
 		self.timestep = timestep
@@ -965,12 +1109,14 @@ class Processor:
 		self.lai_data = lai_data
 		self.smips_path = smips_path
 		self.smips_index_path = smips_index_path
+		self.inventory_path = inventory_path
 		self.lock = lock
 		self.greenness_data = greenness_data
 	def exec(self, pcb: Callable[[float], None]):
 		process_file(self.file, self.out_dir, self.timestep, self.biomass_file
 	       , self.biomass_searchpath, self.lai_data, self.greenness_data
-		   , self.smips_path, self.smips_index_path, self.lock, pcb)
+		   , self.smips_path, self.smips_index_path, self.inventory_path
+		   , self.lock, pcb)
 
 def get_netcdf_output_filename(outpath: str) -> str:
 	return os.path.join(outpath, "ozflux-obs.nc")
@@ -995,7 +1141,7 @@ def read_lai_data(lai_file: str) -> pandas.DataFrame:
 
 	log_information("Reading LAI data...")
 	cols = [_LAI_COL_ID, _LAI_COL_DATE, _LAI_COL_LAI, _LAI_COL_QCFLAG]
-	_DATE_FMT = "%m/%d/%Y"
+	_DATE_FMT = "%d/%m/%Y" # 28/07/2002
 	return read_csv_or_excel_data(lai_file, cols, _LAI_COL_DATE, _DATE_FMT)
 
 def read_greenness_data(greenness_file: str) -> pandas.DataFrame:
@@ -1044,7 +1190,8 @@ def main(opts: Options):
 	for file in opts.files:
 		p = Processor(file, opts.out_dir, opts.timestep, opts.biomass_file
 				, opts.biomass_searchpath, lai_data, greenness_data
-				, opts.smips_path, opts.smips_index_path, lock)
+				, opts.smips_path, opts.smips_index_path, opts.inventory_path
+				, lock)
 		job_manager.add_job(p, os.path.getsize(file))
 
 	if opts.parallel:
