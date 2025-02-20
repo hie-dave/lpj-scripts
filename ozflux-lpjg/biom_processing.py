@@ -8,6 +8,7 @@
 #
 
 import datetime, math, ozflux_common, pandas, re, time, traceback
+import numpy
 
 from argparse import ArgumentParser
 from enum import Enum
@@ -15,6 +16,9 @@ from ozflux_logging import *
 from ozflux_netcdf import *
 from sys import argv
 from typing import Callable
+
+# Date format in input data.
+_DATE_FMT = "%d/%m/%Y"
 
 # Proportion of time spent reading data.
 _read_prop = 1 / 3
@@ -45,7 +49,7 @@ COL_PLOT_LENGTH = "plotLength_metres"
 COL_PLOT_WIDTH = "plotWidth_metres"
 
 # Name of the date column.
-COL_DATE = "startVisitDate"
+COL_DATE = "phenomenonTime"
 
 # Name of the transect width column.
 COL_TRWIDTH = "transectWidth_metres"
@@ -58,6 +62,21 @@ COL_LIVE = "aboveGroundBiomass_kilograms"
 
 # Name of the dead biomass column.
 COL_DEAD = "standingDeadAboveGroundBiomass_kilograms"
+
+# Name of the column which gives the individual ID.
+_COL_INDIV = "plantId"
+
+# Name of the column which gives the patch name/ID.
+_COL_PATCH = "plotId"
+
+# Name of the column which gives the diameter.
+_COL_DIAMETER = "stemDiameter_centimetres"
+
+# Name of the column which gives the height.
+_COL_HEIGHT = "stemHeight_metres"
+
+# Conversion factor from cm to m.
+CM_TO_M = 0.01
 
 class Options:
 	"""
@@ -89,6 +108,62 @@ class BiomassReading():
 		self.date = date
 		self.live = live
 		self.dead = dead
+
+class InventoryReading():
+	"""
+	Represents a biomass reading on a particular day.
+	"""
+	def __init__(self, date: datetime.date, patch: int, indiv: int, diameter: float, height: float, live_biomass: float, dead_biomass: float):
+		"""
+		@param date: Date of the reading.
+		@param patch: Patch number.
+		@param indiv: Individual number.
+		@param diameter: Diameter of the tree (m).
+		@param height: Height of the tree (m).
+		@param live_biomass: Live biomass of the tree (kg).
+		@param dead_biomass: Dead biomass of the tree (kg).
+		"""
+		self.date = date
+		self.patch = patch
+		self.indiv = indiv
+		self.diameter = diameter
+		self.height = height
+		self.live_biomass = live_biomass
+		self.dead_biomass = dead_biomass
+	def __str__(self) -> str:
+		return f"Patch {self.patch}, Individual {self.indiv}: {self.date} - {self.live_biomass}kg (live), {self.dead_biomass}kg (dead). Height: {self.height}m, Diameter: {self.diameter}m"
+
+class Patch:
+	"""
+	Represents a patch of land.
+	"""
+	def __init__(self, id: int, name: str, area: float):
+		self.id = id
+		self.name = name
+		self.area = area
+	def __str__(self) -> str:
+		return f"Patch {self.id}: {self.name} ({self.area}m2)"
+
+class Inventory:
+	"""
+	Represents the inventory of a gridcell.
+	"""
+	def __init__(self, patches: list[Patch], readings: list[InventoryReading]):
+		self.patches = patches
+		self.readings = readings
+	def get_area(self, patch: int) -> float:
+		"""
+		Get the area of a patch.
+
+		@param patch: Patch number.
+		@return Area of the patch (ha).
+		"""
+		patches = [p for p in self.patches if p.id == patch]
+		if len(patches) != 1:
+			raise ValueError(f"Patch {patch} not found")
+		return patch.area
+	def __str__(self) -> str:
+		return "\n".join([f"{str(p)}: {len([r for r in self.readings if r.patch == p.id])} readings over {len(numpy.unique([r.date for r in self.readings if r.patch == p.id]))} timesteps" for p in self.patches])
 
 def parse_args(argv: list[str]) -> Options:
 	"""
@@ -162,7 +237,7 @@ def transect_area_from_transect_dim(data: pandas.DataFrame, row: int) -> float:
 
 def get_plot_area(data: pandas.DataFrame, row: int) -> float:
 	"""
-	Get the plot area specified on the given row.
+	Get the plot area specified on the given row in m2.
 
 	@param data: The data frame.
 	@param row: The row index.
@@ -190,6 +265,31 @@ def get_transect_area(data: pandas.DataFrame, row: int) -> float:
 	# Assume measurements are per-plot, rather than per-transect.
 	return get_plot_area(data, row)
 
+def parse_int(row: pandas.Series, col_name: str) -> int:
+	"""
+	Get an integer value for a given row.
+	"""
+	value = int(row[col_name])
+	if math.isnan(value):
+		log_debug("NaN %s recorded on row %d. Using 0 instead..." % \
+			(col_name, row.name))
+		return 0
+
+	return value
+
+def parse_float(row: pandas.Series, col_name: str) -> float:
+	"""
+	Get a specific value for a given row.
+	"""
+	value = float(row[col_name])
+
+	if math.isnan(value):
+		log_debug("NaN %s recorded on row %d. Using 0 instead..." % \
+			(col_name, row.name))
+		return 0
+
+	return value
+
 def get_biomass(data: pandas.DataFrame, row: int, biom_type: BiomassType
 	, area: float) -> float:
 	"""
@@ -201,15 +301,7 @@ def get_biomass(data: pandas.DataFrame, row: int, biom_type: BiomassType
 	@param area: Transect area on this row.
 	"""
 	col_name = COL_LIVE if biom_type == BiomassType.Alive else COL_DEAD
-
-	biomass = float(data.iloc[row][col_name])
-
-	if math.isnan(biomass):
-		log_debug("NaN %s recorded on row %d. Using 0 instead..." % \
-			(col_name, row))
-		return 0
-
-	return biomass / area
+	return parse_float(data, row, col_name) / area
 
 def get_transectid_colname(data: pandas.DataFrame) -> str:
 	"""
@@ -237,6 +329,51 @@ def get_num_transects(data: pandas.DataFrame, rows: list[int]) -> int:
 		return 1
 	return data.iloc[rows].groupby(col_name).ngroups
 
+def parse_inventory_reading(row: pandas.Series, patches: list[str], indivs: list[str]) -> InventoryReading:
+	"""
+	Parse an inventory reading from a row in a data frame.
+
+	@param row: The row to parse.
+	@param patches: List of unique patch names.
+	@param indivs: List of unique individual IDs (note these may not be ints).
+	"""
+	date = datetime.datetime.strptime(row[COL_DATE], _DATE_FMT)
+	patch = int(numpy.where(patches == row[_COL_PATCH])[0][0])
+	indiv = int(numpy.where(indivs == row[_COL_INDIV])[0][0])
+	diameter = parse_float(row, _COL_DIAMETER) * CM_TO_M
+	height = parse_float(row, _COL_HEIGHT) # already in m
+	live_biomass = parse_float(row, COL_LIVE) # kg
+	dead_biomass = parse_float(row, COL_DEAD) # kg
+	return InventoryReading(date, patch, indiv, diameter, height, live_biomass,
+							dead_biomass)
+
+def parse_patch(data: pandas.DataFrame, patch_name: str, patches: list[str]) -> Patch:
+	"""
+	Parse a patch from a data frame.
+
+	@param data: The data frame.
+	@param patch_name: The name of the patch.
+	"""
+	patch_rows = data.where(data[_COL_PATCH] == patch_name)
+	if len(patch_rows) == 0:
+		raise ValueError(f"Patch '{patch_name}' has no data.")
+	area = get_plot_area(patch_rows, 0)
+	id = int(numpy.where(patches == patch_name)[0][0])
+	return Patch(id, patch_name, area)
+
+def read_inventory_data(data: pandas.DataFrame) -> Inventory:
+	"""
+	Get a list of inventory readings from a steam/diameter/biomass indiv-level
+	data file.
+
+	@param data: Data frame containing the data.
+	"""
+	patch_names = data[_COL_PATCH].unique()
+	indivs = data[_COL_INDIV].unique()
+	readings = data.apply(parse_inventory_reading, axis=1, args=(patch_names, indivs))
+	patches = [parse_patch(data, patch_name, patch_names) for patch_name in patch_names]
+	return Inventory(patches, readings)
+
 def read_biomass_data(data: pandas.DataFrame, pcb: Callable[[float], None]) \
 	-> list[BiomassReading]:
 	"""
@@ -244,9 +381,6 @@ def read_biomass_data(data: pandas.DataFrame, pcb: Callable[[float], None]) \
 
 	Returns a list of tuples of (date, live biomass, dead biomass).
 	"""
-	# Date format in input data.
-	date_fmt = "%d/%m/%y"
-
 	result = []
 
 	groups = data.groupby(COL_DATE)
@@ -258,8 +392,8 @@ def read_biomass_data(data: pandas.DataFrame, pcb: Callable[[float], None]) \
 		dead = 0 # kg/ha
 		for row in rows:
 			area = get_transect_area(data, row)
-			live += get_biomass(data, row, BiomassType.Alive, area)
-			dead += get_biomass(data, row, BiomassType.Dead, area)
+			live += parse_float(data.iloc[row], COL_LIVE) / area
+			dead += parse_float(data.iloc[row], COL_DEAD) / area
 
 		# Each date can contain readings from multiple transects. We need to
 		# take the mean of each transect's total biomass.
@@ -267,7 +401,7 @@ def read_biomass_data(data: pandas.DataFrame, pcb: Callable[[float], None]) \
 		live /= n_transects
 		dead /= n_transects
 
-		dt = datetime.datetime.strptime(date, date_fmt)
+		dt = datetime.datetime.strptime(date, _DATE_FMT)
 		result.append(BiomassReading(dt, live, dead))
 		i += 1
 		pcb(i / n)

@@ -8,6 +8,7 @@
 
 import math
 import biom_processing, datetime, glob, numpy, pandas, time, traceback
+import merge_biomass_to_netcdf
 from multiprocessing import Lock
 import ozflux_common
 
@@ -280,7 +281,7 @@ def multiply_timedelta(delta: datetime.timedelta, n: int) -> datetime.timedelta:
 
 def _create_observations(name: str, units: str, data: list[float]
 		, start: datetime.datetime, timestep: datetime.timedelta):
-	
+
 	obs = [Observation(start + multiply_timedelta(timestep, i), data[i]) for (i, _) in enumerate(data)]
 	return Observations(name, units, obs)
 
