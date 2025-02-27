@@ -1,6 +1,6 @@
 import datetime, numpy, os, pandas, re, threading, time
 import multiprocessing, multiprocessing.connection
-import traceback, sys
+import traceback, sys, warnings
 from ozflux_common import *
 from ozflux_logging import *
 from netCDF4 import Dataset, Variable, Dimension, default_fillvals, num2date
@@ -148,6 +148,12 @@ gd_tp_lock = multiprocessing.BoundedSemaphore(1)
 # global_*_prop variables.
 cd_tp_lock = multiprocessing.BoundedSemaphore(1)
 
+# Some flux data file names don't exactly match what we use as the "canonical"
+# name for this site in our processing scripts. These are mapped here.
+_CANONICAL_SITE_NAMES_LOOKUP = {
+	"FletcherviewTropicalRangeland": "Fletcherview"
+}
+
 # Common alternative names for various units which we may reasonably encounter.
 _units_synonyms = [
 	["W/m2", "W/m^2", "Wm^-2"],
@@ -195,7 +201,9 @@ units_conversions = {
 	("hPa", "kPa"): lambda x, _: x * PA_PER_HPA / PA_PER_KPA,
 }
 
+# https://github.com/OzFlux/PyFluxPro/wiki/QC-Flag-Definitions
 _qc_flag_definitions = {
+	# Table 1: Definition of QC flag values for Levels 1 to 3.
 	0: (True, "Data has passed all QC checks"),
 	1: (False, "Data missing from L1 Excel spreadsheet"),
 	2: (False, "Failed range check"),
@@ -238,6 +246,29 @@ _qc_flag_definitions = {
 	80: (False, "Partitioning Day: GPP/Re computed from light-response curves, GPP = Re - Fc"),
 	81: (False, "Partitioning Day: GPP night mask"),
 	82: (False, "Partitioning Day: Fc > Re, GPP = 0, Re = Fc"),
+	# Table 2: Definition of QC flag values for Level 4.
+	400: (False, "Reserved"),
+	410: (False, "Gap filled using automatic weather station (AWS) data."),
+	420: (False, "Gap filled using ACCESS-G numerical weather prediction (NWP) data."),
+	430: (False, "Gap filled using ECMWF Re-Analysis Interim (ERAI) data."),
+	440: (False, "Gap filled using ECMWF Re-Analysis 5 (ERA5) data."),
+	450: (False, "Gap filled using climatology, interpolated daily (default)"),
+	460: (False, "Gap filled using climatology, monthly (not implemented)"),
+	470: (False, "Gap filled using Marginal Distribution Sampling (MDS)"),
+	# Table 3: Definition of QC flag values for Level 5.
+	500: (False, "Reserved"),
+	501: (False, "Reserved"),
+	502: (False, "Fco2 masked by turbulence filter (flag only used in intermediate variable Fco2_filtered)"),
+	510: (False, "Flux gap filled using SOLO neural network (windowed)"),
+	520: (False, "Flux gap filled using SOLO neural network (long gaps)"),
+	570: (False, "Flux gap filled using Marginal Distribution Sampling (MDS)"),
+	# Table 4: Definition of QC flag values for Level 6.
+	600: (False, "Reserved"),
+	601: (False, "ER observation masked because Fco2 flag not in [0, 10]"),
+	602: (False, "ER observation masked because it is day time"),
+	610: (False, "ER estimated by SOLO neural network from nocturnal, u*-filtered NEE"),
+	620: (False, "ER estimated using Lloyd & Taylor (1994) from nocturnal, u*-filtered NEE"),
+	630: (False, "ER estimated using Lasslop et al (2010) from nocturnal, u*-filtered NEE (E0) and both daytime and nighttime NEE (alpha, beta0, VPD0, k, rb)")
 }
 
 _nc_type_lookup = {
@@ -308,18 +339,6 @@ def _get_qc_var_name(name: str):
 	"""
 	return "%s_QCFlag" % name
 
-def _is_good_qc(flag: float) -> bool:
-	"""
-	Return true iff the given QC flag indicates good data.
-	@param flag: A QC flag.
-	"""
-	if flag in _qc_flag_definitions:
-		(result, msg) = _qc_flag_definitions[flag]
-		if not result:
-			log_diagnostic("Filtering QC flag '%s'; reason: %s" % msg)
-		return result
-	return True
-
 def _filter_qc(data: list[float], qc: list[float]
 	, pcb: Callable[[float], None]) -> list[float]:
 	"""
@@ -342,7 +361,7 @@ def _filter_qc(data: list[float], qc: list[float]
 			(result, msg) = _qc_flag_definitions[qc_flag]
 			if not result:
 				data.mask[i] = True
-				log_diagnostic("Filtering QC flag %d: %s" % (i, msg))
+				log_debug("Filtering QC flag %d in row %d: %s" % (qc_flag, i, msg))
 	pcb(1)
 	return data
 
@@ -435,7 +454,7 @@ def _get_data(in_file: Dataset \
 			data = _filter_qc(data, qc_data, lambda p: progress_cb(step_start + step_size * p))
 			step_start += step_size
 
-		# Replace NaN with a mean of nearby values.
+		# Replace NaN/masked values with a mean of nearby values.
 		log_diagnostic("Removing NaNs")
 		step_start = read_time_proportion
 		step_size = fixnan_time_proportion
@@ -668,7 +687,9 @@ def get_data_timeseries(in_file: Dataset \
 			raise ValueError(f"Only supported output timestep is currently 24h")
 		df = pandas.DataFrame({"datetime": times, "value": data})
 		df.set_index("datetime", inplace = True)
-		data = df.resample("D").apply(aggregator) # D means daily. Can also use H for hourly, 3H for 3-hourly, S for second, etc.
+		with warnings.catch_warnings():
+			warnings.filterwarnings('ignore', category=FutureWarning, message='.*provided callable.*')
+			data = df.resample("D").apply(aggregator) # D means daily. Can also use H for hourly, 3H for 3-hourly, S for second, etc.
 
 		time_tot = read_tot + bounds_tot + unit_tot
 
@@ -1142,7 +1163,10 @@ def get_site_name_from_filename(file: str) -> str:
 
 	@param file: input file name.
 	"""
-	return os.path.basename(file).split("_")[0]
+	site = os.path.basename(file).split("_")[0]
+	if site in _CANONICAL_SITE_NAMES_LOOKUP:
+		site = _CANONICAL_SITE_NAMES_LOOKUP[site]
+	return site
 
 def get_site_name(nc_file: str) -> str:
 	"""

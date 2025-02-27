@@ -9,13 +9,19 @@
 
 import datetime, math, ozflux_common, pandas, re, time, traceback
 import numpy
-
+import chardet
+import warnings
+from functools import lru_cache
 from argparse import ArgumentParser
 from enum import Enum
 from ozflux_logging import *
 from ozflux_netcdf import *
 from sys import argv
 from typing import Callable
+
+# Number of KiB of data to read from each file to detect its encoding. Note that
+# encoding detection only occurs if the file fails to be parsed as UTF-8.
+ENCODING_DETECTION_CACHE_KB = 128
 
 # Date format in input data.
 _DATE_FMT = "%d/%m/%Y"
@@ -246,7 +252,9 @@ def get_plot_area(data: pandas.DataFrame, row: int) -> float:
 		log_warning(f"Inventory data file does not contain plot length/width data")
 		return math.nan
 	# This will throw if these column don't exist.
+	log_debug(f"Attempting to parse length from '{data.iloc[row][COL_PLOT_LENGTH]}'")
 	plot_length = ozflux_common.get_length(data.iloc[row][COL_PLOT_LENGTH])
+	log_debug(f"Attempting to parse width from '{data.iloc[row][COL_PLOT_WIDTH]}'")
 	plot_width = ozflux_common.get_length(data.iloc[row][COL_PLOT_WIDTH])
 	return plot_length * plot_width
 
@@ -268,18 +276,6 @@ def get_transect_area(data: pandas.DataFrame, row: int) -> float:
 	# Assume measurements are per-plot, rather than per-transect.
 	return get_plot_area(data, row)
 
-def parse_int(row: pandas.Series, col_name: str) -> int:
-	"""
-	Get an integer value for a given row.
-	"""
-	value = int(row[col_name])
-	if math.isnan(value):
-		log_debug("NaN %s recorded on row %d. Using 0 instead..." % \
-			(col_name, row.name))
-		return 0
-
-	return value
-
 def parse_float(row: pandas.Series, col_name: str) -> float:
 	"""
 	Get a specific value for a given row.
@@ -287,9 +283,8 @@ def parse_float(row: pandas.Series, col_name: str) -> float:
 	value = float(row[col_name])
 
 	if math.isnan(value):
-		log_debug("NaN %s recorded on row %d. Using 0 instead..." % \
-			(col_name, row.name))
-		return 0
+		log_debug(f"NaN {col_name} recorded on row {row.name}.")
+		return math.nan
 
 	return value
 
@@ -371,7 +366,7 @@ def parse_patch(data: pandas.DataFrame, patch_name: str, patches: list[str]) -> 
 	@param data: The data frame.
 	@param patch_name: The name of the patch.
 	"""
-	patch_rows = data.where(data[_COL_PATCH] == patch_name)
+	patch_rows = data[data[_COL_PATCH] == patch_name]
 	if len(patch_rows) == 0:
 		raise ValueError(f"Patch '{patch_name}' has no data.")
 	area = get_plot_area(patch_rows, 0)
@@ -424,6 +419,71 @@ def read_biomass_data(data: pandas.DataFrame, pcb: Callable[[float], None]) \
 		pcb(i / n)
 	return result
 
+@lru_cache(maxsize=128)
+def detect_encoding(file: str) -> str:
+	"""
+	Detect file encoding by reading a sample of the file.
+	Results are cached to avoid re-scanning the same file.
+	"""
+	# Read at most 128KB to detect encoding
+	sample_size = ENCODING_DETECTION_CACHE_KB * 1024
+	with open(file, "rb") as f:
+		raw = f.read(sample_size)
+		result = chardet.detect(raw)
+		if result["confidence"] < 1:
+			log_warning(f"Encoding for file '{file}' has been guessed as '{result['encoding']}' with confidence {result['confidence']}.")
+		return result["encoding"]
+
+def read_biomass_file(file: str, encoding: str) -> pandas.DataFrame:
+	"""
+	Read raw data from the input file, using the specified encoding.
+
+	@param file: The input file name.
+	@param encoding: The encoding to use.
+	"""
+	# The input files are inconsistent in their representation of missing data.
+	nas = ["Na", "NA", "na", "nA"]
+
+	# Using low_memory=False to avoid data type inference issues. The
+	# RobsonCreek inventory data file contains plant IDs that are mostly
+	# integer, but some look like 604_1. By coincidence, none of these
+	# non-numeric IDs appear in the first 16K lines. This causes the type
+	# inference engine to give mixed types - int for the first chunk, then str
+	# for the rest. Setting low_memory=False causes the entire file to be read
+	# in one go, which will cause the type inference engine to run on the entire
+	# column, which in this case will give us a string column. Without
+	# low_memory=False, we get a mixed column. Actually, we don't even use this
+	# column, so it doesn't matter too much, and we have small files and are
+	# going to hold the data in memory anyway, so this doesn't really cost us
+	# much, and it silences the type inference warning.
+	#
+	# Note though, that if we ever do want to use this column, we need to
+	# remember that it is, in principle string typed, and therefore needs to be
+	# handled similarly to the patch column.
+	return pandas.read_csv(file, parse_dates = True, na_values = nas,
+						   encoding=encoding,low_memory=False)
+
+def read_raw_data(file: str) -> pandas.DataFrame:
+	"""
+	Read raw data from the input file.
+	Attempts UTF-8 first, then tries to detect encoding, falling back to latin1 if needed.
+	"""
+	try:
+		# Try UTF-8 first.
+		return read_biomass_file(file, "utf-8")
+	except UnicodeDecodeError:
+		# If UTF-8 fails, detect encoding. Looking at you, GWW...
+		encoding = detect_encoding(file)
+		if encoding != "utf-8":
+			warn = f"File {file} is not UTF-8 encoded (detected {encoding})"
+			log_warning(warn)
+		else:
+			# Should hopefullly never happen. If it does, the below call will
+			# almost certainly fail.
+			log_warning(f"File {file} is allegedly UTF-8 encoded. Parsing failed, but the detected encoding is: {encoding}. Something is very wrong here.")
+
+		return read_biomass_file(file, encoding)
+
 def write(data: list[BiomassReading], out_file: str
 	, pcb: Callable[[float], None]):
 	"""
@@ -437,13 +497,6 @@ def write(data: list[BiomassReading], out_file: str
 			file.write("%s,%.2f,%.2f\n" % (date.strftime("%Y-%m-%d"), live, dead))
 			i += 1
 			pcb(i / len(data))
-
-def read_raw_data(file: str) -> pandas.DataFrame:
-	"""
-	Read raw data from the input file.
-	"""
-	nas = ["Na", "NA", "na", "nA"]
-	return pandas.read_csv(file, parse_dates = True, na_values = nas)
 
 def process_file(file: str, out_dir: str, pcb: Callable[[float], None]):
 	"""

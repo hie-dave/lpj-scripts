@@ -330,6 +330,7 @@ def get_lengths(length: str) -> list[float]:
 	conversions = "|".join(["(?:%s)" % x for x in _LENGTH_CONVERSIONS.keys()])
 	pattern = r'[ \t]*-?([0-9]*\.?[0-9]+)[ \t]*'
 	pattern += "(%s)?" % conversions
+	pattern += "[ \t]*" # allow trailing whitespace
 	matches = re.findall(pattern, length)
 	if matches == None:
 		raise ValueError("Cannot parse length from '%s'" % length)
