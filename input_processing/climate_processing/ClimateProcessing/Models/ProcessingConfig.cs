@@ -73,7 +73,7 @@ public class ProcessingConfig
         set => outputTimeStep = new TimeStep(value);
     }
 
-    [Option("dry-run", Default = true, HelpText = "If set, scripts will be generated but not submitted to the PBS queue.")]
+    [Option("dry-run", Default = false, HelpText = "If set, scripts will be generated but not submitted to the PBS queue.")]
     public bool DryRun { get; set; } = false;
 
     public TimeStep InputTimeStep => inputTimeStep;
