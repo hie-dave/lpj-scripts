@@ -391,6 +391,7 @@ public class ScriptGenerator
         string unpack = "-unpack";
         string remap = string.IsNullOrEmpty(_config.GridFile) ? "" : $"-remapcon,{_config.GridFile}";
         string operators = $"{aggregation} {conversion} {rename} {unpack} {remap}";
+        operators = operators.Replace("  ", " ");
 
         // Merge files and perform all operations in a single step.
         writer.WriteLine("log \"Merging files...\"");

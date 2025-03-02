@@ -112,6 +112,8 @@ public class ProcessingConfig
         List<string> paths = [InputDirectory];
         if (!string.IsNullOrEmpty(OutputDirectory))
             paths.Add(OutputDirectory);
+        if (!string.IsNullOrEmpty(GridFile))
+            paths.Add(GridFile);
         return PBSStorageHelper.GetStorageDirectives(paths);
     }
 
