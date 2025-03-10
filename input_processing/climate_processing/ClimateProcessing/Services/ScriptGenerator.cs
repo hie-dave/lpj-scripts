@@ -45,6 +45,12 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     protected readonly ProcessingConfig _config;
 
     /// <summary>
+    /// Name of the variable containing the directory holding all input files
+    /// used as operands for the mergetime command.
+    /// </summary>
+    protected const string inDirVariable = "IN_DIR";
+
+    /// <summary>
     /// List of standard variables and their output names and units.
     /// </summary>
     private static readonly Dictionary<ClimateVariable, (string outName, string outUnits)> _standardVariables = new()
@@ -500,7 +506,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         string tmpFile = Path.Combine("${WORK_DIR}", outFileName);
         string outFile = GetOutputFilePath(dataset, variable);
         await writer.WriteLineAsync("# File paths.");
-        await writer.WriteLineAsync($"IN_DIR=\"{inDir}\"");
+        await writer.WriteLineAsync($"{inDirVariable}=\"{inDir}\"");
         await writer.WriteLineAsync($"TMP_FILE=\"{tmpFile}\"");
         await writer.WriteLineAsync($"OUT_FILE=\"{outFile}\"");
         await writer.WriteLineAsync();
@@ -518,7 +524,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
 
         // Merge files and perform all operations in a single step.
         await writer.WriteLineAsync("log \"Merging files...\"");
-        await writer.WriteLineAsync($"cdo {GetCDOArgs()} mergetime {operators} \"${{IN_DIR}}\"/*.nc \"${{TMP_FILE}}\"");
+        await writer.WriteLineAsync($"cdo {GetCDOArgs()} mergetime {operators} \"${{{inDirVariable}}}\"/*.nc \"${{TMP_FILE}}\"");
         await writer.WriteLineAsync("log \"All files merged successfully.\"");
         await writer.WriteLineAsync();
 
