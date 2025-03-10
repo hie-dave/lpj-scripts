@@ -304,7 +304,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         // Load required modules.
         await writer.WriteLineAsync("# Load required modules.");
         await writer.WriteLineAsync("module purge");
-        await writer.WriteLineAsync("module load pbs netcdf cdo nco");
+        await writer.WriteLineAsync("module load pbs netcdf cdo nco python3/3.12.1");
         await writer.WriteLineAsync();
 
         // Create temporary directory and cd into it.

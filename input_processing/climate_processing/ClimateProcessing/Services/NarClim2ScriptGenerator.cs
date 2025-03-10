@@ -52,6 +52,7 @@ public class NarClim2ScriptGenerator : ScriptGenerator, IScriptGenerator<NarClim
         await writer.WriteLineAsync($"mkdir -p \"${{CORRECTED_RLON_DIR}}\"");
         await writer.WriteLineAsync("log \"Correcting rlon values...\"");
         await writer.WriteLineAsync($"for FILE in \"${{IN_DIR}}\"/*.nc; do");
+        await writer.WriteLineAsync($"    log \"Correcting rlon values in file $(basename \"${{FILE}}\")...\"");
         await writer.WriteLineAsync($"    setvar.py --in-file \"${{FILE}}\" --out-file \"${{CORRECTED_RLON_DIR}}/$(basename \"${{FILE}}\")\" --values-file \"${{RLON_VALUES_FILE}}\" --var rlon");
         await writer.WriteLineAsync("done");
         // The output of this step of the procesing is the new input directory.
