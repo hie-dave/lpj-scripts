@@ -20,6 +20,16 @@ public class NarClim2Dataset : IClimateDataset
     /// </summary>
     private readonly NarClim2Frequency _frequency;
 
+    /// <summary>
+    /// The domain of the data.
+    /// </summary>
+    public NarClim2Domain Domain { get => _domain; }
+
+    /// <summary>
+    /// The base path for all files in the dataset.
+    /// </summary>
+    public string BasePath { get => _inputPath; }
+
     // Variable names and units as they exist in the NARCliM2 dataset.
     private static readonly Dictionary<ClimateVariable, (string name, string units)> _variableMap = new()
     {

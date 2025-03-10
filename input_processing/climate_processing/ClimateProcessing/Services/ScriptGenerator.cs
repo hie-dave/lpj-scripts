@@ -9,7 +9,10 @@ using ClimateProcessing.Extensions;
 
 namespace ClimateProcessing.Services;
 
-public class ScriptGenerator
+/// <summary>
+/// Default implementation of script generator that works with any climate dataset.
+/// </summary>
+public class ScriptGenerator : IScriptGenerator<IClimateDataset>
 {
     /// <summary>
     /// Subdirectory of the output directory into which the scripts are written.
@@ -39,7 +42,7 @@ public class ScriptGenerator
     /// <summary>
     /// The processing configuration.
     /// </summary>
-    private readonly ProcessingConfig _config;
+    protected readonly ProcessingConfig _config;
 
     /// <summary>
     /// List of standard variables and their output names and units.
@@ -462,6 +465,17 @@ public class ScriptGenerator
     }
 
     /// <summary>
+    /// Write the pre-merge commands to the specified writer.
+    /// </summary>
+    /// <param name="writer">The text writer.</param>
+    /// <param name="dataset">The climate dataset being processed.</param>
+    /// <param name="variable">The variable of the dataset being processed.</param>
+    protected virtual Task WritePreMerge(TextWriter writer, IClimateDataset dataset, ClimateVariable variable)
+    {
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
     /// Generate a mergetime script for the specified variable, and return the
     /// path to the generated script file.
     /// </summary>
@@ -490,6 +504,8 @@ public class ScriptGenerator
         await writer.WriteLineAsync($"TMP_FILE=\"{tmpFile}\"");
         await writer.WriteLineAsync($"OUT_FILE=\"{outFile}\"");
         await writer.WriteLineAsync();
+
+        await WritePreMerge(writer, dataset, variable);
 
         string rename = GenerateRenameOperator(varInfo.Name, outVar);
         string conversion = string.Join(" ", GenerateUnitConversionOperators(outVar, varInfo.Units, targetUnits, _config.InputTimeStep));

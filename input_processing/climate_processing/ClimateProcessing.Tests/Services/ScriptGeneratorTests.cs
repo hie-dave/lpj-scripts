@@ -124,7 +124,7 @@ public class ScriptGeneratorTests
     public void HasPerAreaUnits_DetectsUnitsCorrectly(string units, bool expectedResult)
     {
         // Now we can test HasPerAreaUnits directly since it's internal
-        var result = _generator.HasPerAreaUnits(units);
+        var result = ScriptGenerator.HasPerAreaUnits(units);
         Assert.Equal(expectedResult, result);
     }
 
