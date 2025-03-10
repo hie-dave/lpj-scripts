@@ -49,10 +49,10 @@ public class DatasetCombinationProcessor
 
     public async Task ProcessAllCombinationsAsync()
     {
-        var combinations = GenerateDatasetCombinations();
-        var tasks = new List<Task<string>>();
+        IEnumerable<IClimateDataset> combinations = GenerateDatasetCombinations();
+        List<Task<string>> tasks = new List<Task<string>>();
 
-        foreach (var dataset in combinations)
+        foreach (IClimateDataset dataset in combinations)
         {
             // Create a new task for processing this combination
             tasks.Add(Task.Run(async () =>

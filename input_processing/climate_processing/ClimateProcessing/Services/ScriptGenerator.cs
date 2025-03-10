@@ -11,9 +11,19 @@ namespace ClimateProcessing.Services;
 
 public class ScriptGenerator
 {
-    // Subdirectory of the output directory into which the scripts are written.
+    /// <summary>
+    /// Subdirectory of the output directory into which the scripts are written.
+    /// </summary>
     private const string scriptDirectory = "scripts";
+
+    /// <summary>
+    /// Subdirectory of the output directory into which the logs are written.
+    /// </summary>
     private const string logDirectory = "logs";
+
+    /// <summary>
+    /// Subdirectory of the output directory into which stdout will be streamed.
+    /// </summary>
     private const string streamDirectory = "streams";
 
     /// <summary>
@@ -26,9 +36,14 @@ public class ScriptGenerator
     /// </summary>
     private const string remapBilinear = "remapbil";
 
+    /// <summary>
+    /// The processing configuration.
+    /// </summary>
     private readonly ProcessingConfig _config;
 
-    // List of standard variables and their output names and units.
+    /// <summary>
+    /// List of standard variables and their output names and units.
+    /// </summary>
     private static readonly Dictionary<ClimateVariable, (string outName, string outUnits)> _standardVariables = new()
     {
         { ClimateVariable.SpecificHumidity, ("huss", "1") },
@@ -39,6 +54,11 @@ public class ScriptGenerator
         { ClimateVariable.Precipitation, ("pr", "mm") }
     };
 
+    /// <summary>
+    /// Gets the standard configuration for the specified variable.
+    /// </summary>
+    /// <param name="variable">The variable.</param>
+    /// <returns>The standard configuration.</returns>
     private (string outName, string outUnits) GetStandardConfig(ClimateVariable variable)
     {
         if (!_standardVariables.TryGetValue(variable, out var config))
@@ -46,11 +66,21 @@ public class ScriptGenerator
         return config;
     }
 
+    /// <summary>
+    /// Creates a new script generator.
+    /// </summary>
+    /// <param name="config">The processing configuration.</param>
     public ScriptGenerator(ProcessingConfig config)
     {
         _config = config;
     }
 
+    /// <summary>
+    /// Generates the operator to rename a variable.
+    /// </summary>
+    /// <param name="inName">The name of the input variable.</param>
+    /// <param name="outName">The name of the output variable.</param>
+    /// <returns>The CDO operator to use for renaming.</returns>
     internal string GenerateRenameOperator(string inName, string outName)
     {
         if (inName == outName)
@@ -58,6 +88,14 @@ public class ScriptGenerator
         return $"-chname,'{inName}','{outName}'";
     }
 
+    /// <summary>
+    /// Generates the operators needed to convert the units of a variable.
+    /// </summary>
+    /// <param name="outputVar">The name of the output variable.</param>
+    /// <param name="inputUnits">The units of the input variable.</param>
+    /// <param name="targetUnits">The units of the output variable.</param>
+    /// <param name="timeStep">The time step of the variable.</param>
+    /// <returns>The CDO operators needed to convert the units.</returns>
     internal IEnumerable<string> GenerateUnitConversionOperators(
         string outputVar,
         string inputUnits,
@@ -83,6 +121,11 @@ public class ScriptGenerator
         return operators;
     }
 
+    /// <summary>
+    /// Generate the operator to temporally aggregate the data.
+    /// </summary>
+    /// <param name="variable">The variable to aggregate.</param>
+    /// <returns>The CDO operator to use for temporal aggregation.</returns>
     internal string GenerateTimeAggregationOperator(
         ClimateVariable variable)
     {
@@ -99,6 +142,12 @@ public class ScriptGenerator
         return $"-{@operator},{stepsToAggregate}";
     }
 
+    /// <summary>
+    /// Write the equations for estimating VPD to a text writer.
+    /// </summary>
+    /// <param name="writer">The writer to write to.</param>
+    /// <param name="method">The VPD estimation method to use.</param>
+    /// <exception cref="ArgumentException">If the specified VPD method is not supported.</exception>
     private async Task WriteVPDEquations(TextWriter writer, VPDMethod method)
     {
         // All methods follow the same general pattern:
@@ -147,6 +196,11 @@ public class ScriptGenerator
         return $"-L -O -v -z zip1";
     }
 
+    /// <summary>
+    /// Generate a processing script for calculating the VPD for a dataset.
+    /// </summary>
+    /// <param name="dataset">The dataset.</param>
+    /// <returns>The script.</returns>
     private async Task<string> GenerateVPDScript(IClimateDataset dataset)
     {
         string jobName = $"calc_vpd_{dataset.DatasetName}";
@@ -198,6 +252,11 @@ public class ScriptGenerator
         return script;
     }
 
+    /// <summary>
+    /// Write the PBS header for a job.
+    /// </summary>
+    /// <param name="writer">The text writer to which the header will be written.</param>
+    /// <param name="jobName">The job name.</param>
     private async Task WritePBSHeader(TextWriter writer, string jobName)
     {
         string logFileName = $"{jobName}.log";
@@ -268,6 +327,11 @@ public class ScriptGenerator
         await writer.WriteLineAsync("");
     }
 
+    /// <summary>
+    /// Get the path to the directory in which the scripts will be stored, and
+    /// create it if it doesn't exist.
+    /// </summary>
+    /// <returns>The path to the script directory.</returns>
     private string GetScriptPath()
     {
         string scriptPath = Path.Combine(_config.OutputDirectory, scriptDirectory);
@@ -275,6 +339,11 @@ public class ScriptGenerator
         return scriptPath;
     }
 
+    /// <summary>
+    /// Get the path to the directory in which log files will be stored, and
+    /// create it if it doesn't exist.
+    /// </summary>
+    /// <returns>The path to the log directory.</returns>
     private string GetLogPath()
     {
         string logPath = Path.Combine(_config.OutputDirectory, logDirectory);
@@ -282,6 +351,11 @@ public class ScriptGenerator
         return logPath;
     }
 
+    /// <summary>
+    /// Get the path to the directory in which stdout/stderr will be streamed,
+    /// and create it if it doesn't exist.
+    /// </summary>
+    /// <returns>The path to the stream directory.</returns>
     private string GetStreamPath()
     {
         string streamPath = Path.Combine(_config.OutputDirectory, streamDirectory);
@@ -289,7 +363,11 @@ public class ScriptGenerator
         return streamPath;
     }
 
-    // Generate processing scripts, and return the path to the top-level script.
+    /// <summary>
+    /// Generate processing scripts, and return the path to the top-level script.
+    /// </summary>
+    /// <param name="dataset">The dataset.</param>
+    /// <returns>The path to the top-level script.</returns>
     public async Task<string> GenerateScriptsAsync(IClimateDataset dataset)
     {
         string jobName = $"submit_{dataset.DatasetName}";
@@ -351,7 +429,11 @@ public class ScriptGenerator
         return scriptFile;
     }
 
-    // Create an empty script file and set execute permissions.
+    /// <summary>
+    /// Create an empty script file and set execute permissions.
+    /// </summary>
+    /// <param name="scriptName">The name of the script file to create.</param>
+    /// <returns>The path to the script file.</returns>
     private string CreateScript(string scriptName)
     {
         string script = Path.Combine(GetScriptPath(), scriptName);
@@ -364,6 +446,13 @@ public class ScriptGenerator
         return script;
     }
 
+    /// <summary>
+    /// Generate a path that will be used as the output file for a particular
+    /// variable in a dataset.
+    /// </summary>
+    /// <param name="dataset">The dataset.</param>
+    /// <param name="variable">The variable.</param>
+    /// <returns>The path to the output file.</returns>
     private string GetOutputFilePath(IClimateDataset dataset, ClimateVariable variable)
     {
         string directory = Path.Combine(_config.OutputDirectory, dataset.GetOutputDirectory());
@@ -372,6 +461,13 @@ public class ScriptGenerator
         return Path.Combine(directory, outFileName);
     }
 
+    /// <summary>
+    /// Generate a mergetime script for the specified variable, and return the
+    /// path to the generated script file.
+    /// </summary>
+    /// <param name="dataset">The dataset to process.</param>
+    /// <param name="variable">The variable to process.</param>
+    /// <returns>The path to the generated script file.</returns>
     private async Task<string> GenerateVariableMergeScript(IClimateDataset dataset, ClimateVariable variable)
     {
         VariableInfo varInfo = dataset.GetVariableInfo(variable);
@@ -427,7 +523,13 @@ public class ScriptGenerator
         return scriptFile;
     }
 
-    internal bool HasPerAreaUnits(string units)
+    /// <summary>
+    /// Check if a variable is expressed on a per-ground-area basis.
+    /// </summary>
+    /// <param name="units">The units of the variable.</param>
+    /// <returns>True iff the variable is expressed on a per-ground-area basis.</returns>
+    /// <remarks>This is used to decide whether to perform conservative remapping.</remarks>
+    internal static bool HasPerAreaUnits(string units)
     {
         // Convert to lowercase and remove whitespace and periods for consistent matching
         units = units.ToLower().Replace(" ", "").Replace(".", "");
@@ -439,6 +541,13 @@ public class ScriptGenerator
             @"(m\^?-2|/m2)");
     }
 
+    /// <summary>
+    /// Get an interpolation algorithm to be used when remapping the specified
+    /// variable.
+    /// </summary>
+    /// <param name="info">Metadata for the variable in the dataset being processed.</param>
+    /// <param name="variable">The variable to remap.</param>
+    /// <returns>The interpolation algorithm to use.</returns>
     internal InterpolationAlgorithm GetInterpolationAlgorithm(VariableInfo info, ClimateVariable variable)
     {
         // Precipitation and shortwave radiation may require conservative
@@ -458,12 +567,20 @@ public class ScriptGenerator
         return InterpolationAlgorithm.Bilinear;
     }
 
+    /// <summary>
+    /// Get the CDO remap operator to be used when remapping the specified
+    /// variable.
+    /// </summary>
+    /// <param name="info">Metadata for the variable in the dataset being processed.</param>
+    /// <param name="variable">The variable to remap.</param>
+    /// <returns>The CDO remap operator to use.</returns>
+    /// <exception cref="ArgumentException"></exception>
     private string GetRemapOperator(VariableInfo info, ClimateVariable variable)
     {
         return GetInterpolationAlgorithm(info, variable) switch
         {
-            InterpolationAlgorithm.Bilinear => "remapbil",
-            InterpolationAlgorithm.Conservative => "remapcon",
+            InterpolationAlgorithm.Bilinear => remapBilinear,
+            InterpolationAlgorithm.Conservative => remapConservative,
             _ => throw new ArgumentException($"Unknown remap algorithm: {GetInterpolationAlgorithm(info, variable)}")
         };
     }
