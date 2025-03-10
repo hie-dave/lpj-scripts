@@ -5,28 +5,17 @@ using ClimateProcessing.Services;
 // Parse command line arguments
 var result = Parser.Default.ParseArguments<ProcessingConfig>(args);
 
-result.WithParsed(config =>
+await result.WithParsedAsync(async config =>
 {
     try
     {
         config.Validate();
 
-        // Create dataset instance based on type
-        IClimateDataset dataset = config.DatasetType.ToLower() switch
-        {
-            "narclim2" => NarClim2Dataset.Create(config),
-            _ => throw new ArgumentException($"Unsupported dataset type: {config.DatasetType}")
-        };
+        var processor = new DatasetCombinationProcessor(config);
+        await processor.ProcessAllCombinations();
 
-        var scriptGenerator = new ScriptGenerator(config);
-
-        // Generate scripts.
-        string submissionScript = scriptGenerator.GenerateScripts(dataset);
-
-        Console.WriteLine($"Processing scripts have been generated in:");
-        Console.WriteLine($"{Path.GetDirectoryName(submissionScript)}");
-        Console.WriteLine("\nTo submit the job to PBS, run:");
-        Console.WriteLine($"{submissionScript}");
+        Console.WriteLine("\nAll dataset combinations have been processed.");
+        Console.WriteLine("To submit the jobs to PBS, run each submission script in the output directories.");
     }
     catch (Exception ex)
     {
