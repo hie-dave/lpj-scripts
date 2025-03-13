@@ -39,7 +39,7 @@ PARALLEL_AGGREGATION = True
 # the number of input files. (This assumes 1 grid point per input file.)
 UNLIMITED_DIMS = False
 
-# Data format in output file.
+# Data format for double-precision floating point numbers.
 FORMAT_FLOAT = "f8"
 
 # Data format for single-precision floating point numbers.
