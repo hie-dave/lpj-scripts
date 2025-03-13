@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Get path to current directory.
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+
+# Name of sample input file.
+FILE_NAME="huss_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_1hr_1951010100-1951123123.nc"
+
+# Paths to input and output directories.
+IN_DIR="${DIR}/raw"
+
+# Output directory.
+OUT_DIR="${DIR}/processed"
+
+# Create temporary directory for intermediate files.
+TMP_DIR="${DIR}/tmp"
+
+# Full path to input file.
+IN_FILE="${IN_DIR}/${FILE_NAME}"
+
+# Grid file.
+GRID_FILE="${DIR}/1deg.grid"
+
+# File containing corrected rlon values, one per line.
+RLON_CORRECTION_FILE="${DIR}/rlon-correction-AUS-18.txt"
+
+# Create required directory structure.
+mkdir -p "${OUT_DIR}" "${TMP_DIR}"
+
+# Temporary file with corrected rlon values.
+TMP_FILE="${TMP_DIR}/${FILE_NAME}"
+
+# Apply corrected rlon values to file.
+if [ ! -f "${TMP_FILE}" ]; then
+    "${DIR}/setvar.py" --in-file "${IN_FILE}" --out-file "${TMP_FILE}" --variable-name rlon --values-file "${RLON_CORRECTION_FILE}"
+fi
+
+# # Calculate cell bounds on the temporary file.
+# "${DIR}/set_bounds.py" "${TMP_FILE}"
+
+# Remap file.
+cdo -v remapcon,"${GRID_FILE}" "${TMP_FILE}" "${OUT_DIR}/$(basename "${IN_FILE}")"
+# cdo    remapcon (Abort): Source grid cell corner coordinates missing!
