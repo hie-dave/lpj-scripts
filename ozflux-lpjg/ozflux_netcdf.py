@@ -154,53 +154,6 @@ _CANONICAL_SITE_NAMES_LOOKUP = {
 	"FletcherviewTropicalRangeland": "Fletcherview"
 }
 
-# Common alternative names for various units which we may reasonably encounter.
-_units_synonyms = [
-	["W/m2", "W/m^2", "Wm^-2"],
-	["kg/m2/s", "kg/m^2/s", "kgm^-2s^-1", "kg m-2 s-1"],
-	["kg/m2/day", "kg/m^2/day", "mm/day"],
-	["K", "k"],
-	["m/s", "ms^-1"],
-	["Pa", "pa"],
-	["kg/kg", "kg kg-1", "", "mm/mm", "m/m", "1"], # debatable
-	["ppm", "umol/mol"],
-	["degC", "°C", "degrees C"],
-	["umol/m2/s", "umol/m^2/s"],
-	["m3/m3", "m^3/m^3"],
-	["gC/m^2/day", "gC/m2/day"]
-]
-
-#
-# Recipes for unit conversions.
-#
-# The keys are a tuple of two strings:
-#
-# 1. The input units
-# 2. The output units.
-#
-# The values are functions which convert a value from the input units into the
-# output units. These functions take two arguments:
-#
-# x: The input value in input units.
-# t: The timestep length (in seconds).
-#
-# Note that units are changed after timestep aggregation occurs. So the input
-# variable will already be in the output timestep at this point in time.
-units_conversions = {
-	("g", "kg"): lambda x, _: x * KG_PER_G, # (as an example)
-	("mm", "kg/m2/s"): lambda x, t: x / t, # Assuming mm means mm per timestep
-	("kg/m2/s", "mm"): lambda x, t: t * x,
-	("kg/m2/s", "mm/day"): lambda x, t: SECONDS_PER_DAY * x,
-	("degC", "K"): lambda x, _: x + DEG_C_TO_K,
-	("K", "degC"): lambda x, _: x - DEG_C_TO_K,
-	("kPa", "Pa"): lambda x, _: x * PA_PER_KPA,
-	("umol/m2/s", "kgC/m2/day"): lambda x, _: x * MOL_PER_UMOL * G_C_PER_MOL * KG_PER_G * SECONDS_PER_DAY,
-	("umol/m2/s", "gC/m2/day"): lambda x, _: x * MOL_PER_UMOL * G_C_PER_MOL * SECONDS_PER_DAY,
-	("Pa", "kPa"): lambda x, _: x / PA_PER_KPA,
-	("hPa", "Pa"): lambda x, _: x * PA_PER_HPA,
-	("hPa", "kPa"): lambda x, _: x * PA_PER_HPA / PA_PER_KPA,
-}
-
 # https://github.com/OzFlux/PyFluxPro/wiki/QC-Flag-Definitions
 _qc_flag_definitions = {
 	# Table 1: Definition of QC flag values for Levels 1 to 3.
@@ -802,19 +755,6 @@ def trim_to_start_year(in_file: Dataset, timestep: int
 	log_debug(m % (n_trim, next_year.year))
 	return data[n_trim:]
 
-def units_match(unit0: str, unit1: str) -> str:
-	"""
-	Check if the two units are equivalent.
-	E.g. m/s and ms^-1 would return true, but not m and kg.
-	"""
-	if unit0 == unit1:
-		return True
-
-	for case in _units_synonyms:
-		if unit0 in case and unit1 in case:
-			return True
-	return False
-
 def remove_nans(data: list[float]
 	, progress_cb: Callable[[float], None]) -> list[float]:
 	"""
@@ -1082,59 +1022,6 @@ def get_next_year(start_date: datetime.datetime) -> datetime.datetime:
 		log_debug(m % start_date)
 		return start_date
 	return datetime.datetime(start_date.year + 1, 1, 1, 0, 0, 0)
-
-def find_units_conversion(current_units: str, desired_units: str) \
-	-> Callable[[float], float]:
-	"""
-	Find a conversion between two different units. Throw if not found.
-	The return value is a function which takes and returns a float.
-	"""
-	# units_conversions is a dict mapping unit combos to a conversion.
-	# units_conversions: dict[tuple[str, str], Callable[[float],float]]
-	combination = (current_units, desired_units)
-	if combination in units_conversions:
-		return units_conversions[combination]
-	for units_type in _units_synonyms:
-		if current_units in units_type:
-			for synonym in units_type:
-				combination = (synonym, desired_units)
-				if (combination in units_conversions):
-					return units_conversions[combination]
-
-	m = "No unit conversion exists from '%s' to '%s'"
-	raise ValueError(m % (current_units, desired_units))
-
-def units_match(x: str, y: str) -> bool:
-	"""
-	Check if the two units are identical or equivalent.
-	"""
-	if x == y:
-		return True
-
-	for units_type in _units_synonyms:
-		if x in units_type and y in units_type:
-			return True
-
-	return False
-
-def find_units_conversion_opt(current: str, desired: str) -> Callable[[float], float]:
-	"""
-	Find a conversion between two different units, if one is required. This will
-	be returned in the form of a function which may be called, taking two
-	arguments:
-
-	1. The data (n-dimensional list of floats) to be converted
-	2. The timestep width in seconds
-
-	If no units conversion is required, this will return a function which
-	returns the original data.
-
-	An exception will be raised if the input units cannot be converted to the
-	specified output units.
-	"""
-	if units_match(current, desired):
-		return lambda x, _: x
-	return find_units_conversion(current, desired)
 
 def get_start_minute(in_file: Dataset):
 	"""
