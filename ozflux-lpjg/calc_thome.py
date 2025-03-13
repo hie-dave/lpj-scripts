@@ -55,10 +55,10 @@ def parse_output_format(s: str) -> OutputFormat:
 class Options:
     """Command line options for calc_thome.py."""
 
-    def __init__(self, input_file: str, output_file: str, log_level: LogLevel,
+    def __init__(self, input_files: list[str], output_file: str, log_level: LogLevel,
                  show_progress: bool, format: OutputFormat):
         """Initialize with default values."""
-        self.input_file = input_file
+        self.input_files = input_files
         self.output_file = output_file
         self.log_level = log_level
         self.show_progress = show_progress
@@ -78,12 +78,12 @@ def parse_args(argv: list[str]) -> Options:
     parser = argparse.ArgumentParser(description = "Calculate Thome from air temperature data")
     parser.add_argument("-v", "--verbosity", type = int, help = f"Logging verbosity ({LogLevel.ERROR}-{LogLevel.DEBUG}, default: {LogLevel.INFORMATION})", default = LogLevel.INFORMATION)
     parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
-    parser.add_argument("-i", "--in-file", help = "Input NetCDF file containing air temperature data")
-    parser.add_argument("-o", "--out-file", help = "Output NetCDF file to write Thome values")
+    parser.add_argument("-o", "--out-file", required = True, help = "Output NetCDF file to write Thome values")
     parser.add_argument("-f", "--format", default = "csv", help = "Output file format (csv|nc)")
+    parser.add_argument("files", nargs = "+", help = "Input NetCDF files containing air temperature data to be processed")
 
     args = parser.parse_args(argv[1:])
-    opts = Options(args.in_file, args.out_file, args.verbosity,
+    opts = Options(args.files, args.out_file, args.verbosity,
                    args.show_progress, parse_output_format(args.format))
     return opts
 
@@ -237,64 +237,61 @@ def calculate_thome(nc: Dataset) -> list[DataPoint]:
 
     return data
 
-def write_netcdf(nc_in: Dataset, out_file: str, data: list[DataPoint]):
-    log_information(f"Writing output to {out_file} in NetCDF format")
+def write_netcdf(opts: Options, data: list[DataPoint]):
+    log_information(f"Writing output to {opts.output_file} in NetCDF format")
 
-    if os.path.exists(out_file):
-        log_information(f"Clobbering existing output file: '{out_file}'")
-        os.remove(out_file)
+    if os.path.exists(opts.output_file):
+        log_information(f"Clobbering existing output file: '{opts.output_file}'")
+        os.remove(opts.output_file)
+
+    lats = numpy.unique(numpy.sort([d.latitude for d in data]))
+    lons = numpy.unique(numpy.sort([d.longitude for d in data]))
 
     # Create output file
-    with open_netcdf(out_file, True) as nc_out:
-        # Get coordinate dimensions and variables.
-        lat_dim = get_dim_from_std_name(nc_in, STD_LAT)
-        lon_dim = get_dim_from_std_name(nc_in, STD_LON)
+    with open_netcdf(opts.output_file, True) as nc_out:
+        # Create coordinate dimensions.
+        create_dim_if_not_exists(nc_out, DIM_LAT, len(lats))
+        create_dim_if_not_exists(nc_out, DIM_LON, len(lons))
 
-        lat_var = get_dimension_variable(nc_in, lat_dim)
-        lon_var = get_dimension_variable(nc_in, lon_dim)
+        # Create coordinate variables.
+        create_var_if_not_exists(nc_out, DIM_LAT, FORMAT_FLOAT, (DIM_LAT,))
+        create_var_if_not_exists(nc_out, DIM_LON, FORMAT_FLOAT, (DIM_LON,))
 
-        # Create dimensions and variables in output file.
-        create_dim_if_not_exists(nc_out, lat_dim.name, len(lat_dim))
-        create_dim_if_not_exists(nc_out, lon_dim.name, len(lon_dim))
+        # Write coordinates.
+        nc_out.variables[DIM_LAT][:] = lats
+        nc_out.variables[DIM_LON][:] = lons
 
-        lat_type = get_nc_datatype(str(lat_var.dtype))
-        create_var_if_not_exists(nc_out, lat_var.name, lat_type, (lat_dim.name,))
+        # Write coordinate metadata.
+        setattr(nc_out.variables[DIM_LAT], ATTR_UNITS, UNITS_LAT)
+        setattr(nc_out.variables[DIM_LAT], ATTR_STD_NAME, STD_LAT)
+        setattr(nc_out.variables[DIM_LAT], ATTR_LONG_NAME, LONG_LAT)
 
-        lon_type = get_nc_datatype(str(lon_var.dtype))
-        create_var_if_not_exists(nc_out, lon_var.name, lon_type, (lon_dim.name,))
+        setattr(nc_out.variables[DIM_LON], ATTR_UNITS, UNITS_LON)
+        setattr(nc_out.variables[DIM_LON], ATTR_STD_NAME, STD_LON)
+        setattr(nc_out.variables[DIM_LON], ATTR_LONG_NAME, LONG_LON)
 
-        # Copy coordinates.
-        nc_out.variables[lat_var.name][:] = lat_var[:]
-        nc_out.variables[lon_var.name][:] = lon_var[:]
-
-        # Copy attributes
-        copy_attributes(lat_var, nc_out.variables[lat_var.name])
-        copy_attributes(lon_var, nc_out.variables[lon_var.name])
-
-        # Create Thome variable
-        create_var_if_not_exists(nc_out, NAME_THOME, FORMAT_FLOAT, (lat_dim.name, lon_dim.name))
+        # Create data variable.
+        create_var_if_not_exists(nc_out, NAME_THOME, FORMAT_FLOAT, (DIM_LAT, DIM_LON))
         thome_var = nc_out.variables[NAME_THOME]
-        for i in range(lat_var.shape[0]):
-            for j in range(lon_var.shape[0]):
-                lat = float(lat_var[i])
-                lon = float(lon_var[j])
-                # Find DataPoint in data with matching latitude and longitude.
-                values = [d.thome for d in data if floats_equal(d.latitude, lat) and floats_equal(d.longitude, lon)]
-                if len(values) < 1:
-                    raise ValueError(f"No DataPoint found with latitude={lat} and longitude={lon}")
-                if len(values) > 1:
-                    raise ValueError(f"Multiple DataPoints found with latitude={lat} and longitude={lon}")
-                thome_var[i, j] = values[0]
 
-        # Add metadata
+        # Write data.
+        # Technically, the data should be correctly ordered, but just to be safe
+        # we will still use a linear search on each iteration. This could be
+        # optimised if needed by having calc_thome return a 2D array or similar.
+        for i in range(len(data)):
+            i = index_of_throw(data[i].latitude, lats, lambda: f"Failed to get latitude index for latitude {data[i].latitude}")
+            j = index_of_throw(data[i].longitude, lons, lambda: f"Failed to get longitude index for longitude {data[i].longitude}")
+            thome_var[i, j] = data[i].thome
+
+        # Write meatadata to data variable.
         thome_var.long_name = LONG_NAME_THOME
         thome_var.units = "degC"
-        # Doesn't really make sense to add a standard_name to Thome.
+        # No standard name - t_home is not a CF-recognised variable.
 
-        # Add global attributes
+        # Write global metadata.
         nc_out.description = 'Thome (long-term mean maximum temperature of warmest month)'
         nc_out.history = f'Created {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
-        nc_out.source = f'Calculated from {os.path.basename(nc_in.filepath())}'
+        nc_out.source = f'Calculated from {", ".join([os.path.basename(f) for f in opts.input_files])}'
 
 def write_csv(out_file: str, data: list[DataPoint]):
     """
@@ -319,8 +316,7 @@ def write_output(opts: Options, data: list[DataPoint]):
     if opts.format == OutputFormat.CSV:
         write_csv(opts.output_file, data)
     elif opts.format == OutputFormat.NETCDF:
-        with open_netcdf(opts.input_file) as nc_in:
-            write_netcdf(nc_in, opts.output_file, data)
+        write_netcdf(opts, data)
 
 def main(opts: Options):
     """
@@ -328,13 +324,14 @@ def main(opts: Options):
 
     @param opts: Parsed CLI options.
     """
-    log_information(f"Processing {opts.input_file}")
-
     # Open input file.
-    with open_netcdf(opts.input_file) as nc_in:
-        # Calculate Thome.
-        log_information("Calculating Thome...")
-        thome = calculate_thome(nc_in)
+    thome: list[DataPoint] = []
+    for in_file in opts.input_files:
+        log_information(f"Processing {in_file}")
+        with open_netcdf(in_file) as nc_in:
+            # Calculate Thome.
+            log_information("Calculating Thome...")
+            thome.extend(calculate_thome(nc_in))
 
         # Write output.
         log_information("Writing output...")
