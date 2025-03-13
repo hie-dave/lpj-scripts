@@ -209,12 +209,14 @@ class Observations:
 	"""
 	A collection of observations for a particular variable.
 
-	@param name: Name of the data variable.
+	@param name: Name of the data variable (no spaces).
+	@param long_name: Long name of the data variable (human readable).
 	@param units: Units of the data.
 	@param observations: List of time/value pairs.
 	"""
-	def __init__(self, name: str, units: str, observations: list[Observation]):
+	def __init__(self, name: str, long_name: str, units: str, observations: list[Observation]):
 		self.name = name
+		self.long_name = long_name
 		self.units = units
 		self.data = sorted(observations, key = lambda b: b.date)
 
@@ -306,11 +308,11 @@ def multiply_timedelta(delta: datetime.timedelta, n: int) -> datetime.timedelta:
 	"""
 	return datetime.timedelta(seconds = n * delta.total_seconds())
 
-def _create_observations(name: str, units: str, data: list[float]
+def _create_observations(name: str, long_name: str, units: str, data: list[float]
 		, start: datetime.datetime, timestep: datetime.timedelta):
 
 	obs = [Observation(start + multiply_timedelta(timestep, i), data[i]) for (i, _) in enumerate(data)]
-	return Observations(name, units, obs)
+	return Observations(name, long_name, units, obs)
 
 def write_csv(outfile: str, variables: list[Observations]
 	#names: list[str], data: list[list[float]]
@@ -390,14 +392,29 @@ def write_netcdf(outfile: str, variables: list[Observations]
 	with lock:
 		with open_netcdf(outfile, write = True) as nc:
 			time = nc[VAR_TIME]
+			time_values = time[:]
 			calendar = getattr(time, ATTR_CALENDAR)
+			date_values = num2date(time_values, time.units, calendar)
+			first_date = min(date_values)
+			last_date = max(date_values)
 
 			(ilon, ilat) = get_coord_indices(nc, lon, lat)
+			dates = numpy.sort(numpy.unique([d.date for v in variables for d in v.data]))
+			nums = date2num(dates, time.units, time.calendar)
+			allowed_dates = [n for n in nums if n in time_values]
+			if len(allowed_dates) != len(nums):
+				log_warning(f"Data contains dates outside of flux data range. Total number of dates: {len(nums)}, number of dates within ozflux range: {len(allowed_dates)}. Data points removed={len(nums) - len(allowed_dates)}")
+			# time[:] = nums # dangerous!
 
 			for obs_var in variables:
 				if len(obs_var.data) == 0:
+					log_warning(f"Observed variable {obs_var.name} has no data")
 					continue
-				times = [x.date for x in obs_var.data]
+				log_diagnostic(f"Writing variable {obs_var.name}...")
+				data = [d for d in obs_var.data if d.date >= first_date and d.date <= last_date]
+				if len(data) != len(obs_var.data):
+					log_warning(f"{obs_var.name}: Discarded {len(obs_var.data) - len(data)} data points which lie outside of ozflux timespan")
+				times = [x.date for x in data]
 				if timestep % HOURS_PER_DAY == 0:
 					# If daily timestep, discard the time part of the times.
 					times = [datetime.datetime(x.year, x.month, x.day) for x in times]
@@ -405,12 +422,16 @@ def write_netcdf(outfile: str, variables: list[Observations]
 
 				name = obs_var.name
 				if not name in nc.variables:
+					# Variable doesn't exist, create it.
 					create_var_if_not_exists(nc, name, FORMAT_FLOAT, _VAR_DIMS
 						, compression_level, compression_alg
 						, (_TIME_CHUNK_SIZE, 1, 1))
+					# Set metadata.
+					# todo: std_name?
 					nc.variables[name].units = obs_var.units
+					setattr(nc.variables[name], ATTR_LONG_NAME, obs_var.long_name)
 				var = nc.variables[name]
-				values = [x.value for x in obs_var.data]
+				values = [x.value for x in data]
 				n = len(times)
 				if n == 1:
 					# date2index returns a scalar when n==1 for some reason.
@@ -528,6 +549,8 @@ def init_outfile(filename: str, infiles: list[str], timestep: int
 		# Populate the time variable.
 		dlt = datetime.timedelta(seconds = timestep_seconds)
 		dates = [start_date + i * dlt for i in range(ntime)]
+		# Don't write time data yet, as the exact time coverage depends on the
+		# input data.
 		nums = date2num(dates, var_time.units, var_time.calendar)
 		var_time[0:ntime] = nums
 
@@ -547,7 +570,7 @@ def get_biomass_data(nc_file: str, biom_file: str, biom_searchpath: str,
 		return biom_processing.read_biomass_data(raw, pcb)
 
 	if biom_searchpath == None:
-		log_warning("No biomass input data file was given. No biomass data will be included in output file.")
+		log_information(f"No biomass input data file was given. No biomass data will be included.")
 		return []
 
 	# Determine site name, convert to lower case.
@@ -685,12 +708,14 @@ def get_sw_data(file: str, timestep: int, pcb: Callable[[float], None]) \
 			# Read volumetric SW content for this layer.
 			var = ForcingVariable(layer.name, layer.name, "m3/m3", numpy.mean
 			 	, 0, 1)
-			layer_vol = get_data(nc, var, timestep_min, True, False
+			layer_vol = get_data(nc, var, timestep_min, True, True
 				, lambda p: pcb(step_start + step_size * p))
+
+			long_name = f"Volumetric soil water content at {layer.depth}cm"
 
 			delta_t = datetime.timedelta(hours = timestep)
 			layer = _create_observations(get_sw_layer_name(layer.depth)
-				, var.out_units, layer_vol, start_date, delta_t)
+				, long_name, var.out_units, layer_vol, start_date, delta_t)
 			layers.append(layer)
 
 			step_start += step_size
@@ -853,10 +878,10 @@ def get_inventory_data(inventory_path: str, site: str) -> tuple[list[Observation
 
 			# Store mean height/diameter (m), and total biomass (in kg/m2) for
 			# this patch.
-			mean_height = numpy.mean(patch_heights) # m
-			mean_diameter = numpy.mean(patch_diameters) # m
-			total_live_biomass = numpy.sum(patch_live_biomass) / inventory.get_area(patch) # kg/m2
-			total_dead_biomass = numpy.sum(patch_dead_biomass) / inventory.get_area(patch) # kg/m2
+			mean_height = math.nan if len(patch_heights) == 0 else numpy.mean(patch_heights) # m
+			mean_diameter = math.nan if len(patch_diameters) == 0 else numpy.mean(patch_diameters) # m
+			total_live_biomass = math.nan if len(patch_live_biomass) == 0 else numpy.sum(patch_live_biomass) / inventory.get_area(patch) # kg/m2
+			total_dead_biomass = math.nan if len(patch_dead_biomass) == 0 else numpy.sum(patch_dead_biomass) / inventory.get_area(patch) # kg/m2
 			if not math.isnan(mean_height):
 				date_heights.append(mean_height)
 			if not math.isnan(mean_diameter):
@@ -868,10 +893,10 @@ def get_inventory_data(inventory_path: str, site: str) -> tuple[list[Observation
 
 		# Mean value over all patches on this timestep. This should be
 		# comparable to gridcell-level model outputs (e.g. cmass.out).
-		mean_height = numpy.mean(date_heights)
-		mean_diameter = numpy.mean(date_diameters)
-		mean_live_biomass = numpy.mean(date_live_biomass)
-		mean_dead_biomass = numpy.mean(date_dead_biomass)
+		mean_height = math.nan if len(date_heights) == 0 else numpy.mean(date_heights)
+		mean_diameter = math.nan if len(date_diameters) == 0 else numpy.mean(date_diameters)
+		mean_live_biomass = math.nan if len(date_live_biomass) == 0 else numpy.mean(date_live_biomass)
+		mean_dead_biomass = math.nan if len(date_dead_biomass) == 0 else numpy.mean(date_dead_biomass)
 
 		if not math.isnan(mean_height):
 			heights.append(Observation(date, mean_height))
@@ -951,7 +976,7 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 	site = get_site_name(file)
 	lai_data = get_lai_data(lai_data, site, timestep
 			, lambda p: pcb(step_start + lai_prop * p))
-	out_variables.append(Observations(_NAME_LAI, "m2/m2", lai_data))
+	out_variables.append(Observations(_NAME_LAI, "Leaf Area Index", "m2/m2", lai_data))
 	lai_time = time.time() - lai_start
 
 	log_debug("Opening input file '%s' for reading..." % file)
@@ -967,22 +992,23 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 	latitude: float = 0
 	longitude: float = 0
 
-
-	(heights, diameters, live_biomass, dead_biomass) = get_inventory_data(inventory_path, site)
+	site_canonical = get_site_name_from_filename(file)
+	(heights, diameters, live_biomass, dead_biomass) = get_inventory_data(inventory_path, site_canonical)
+	log_diagnostic(f"{site_canonical}: Retrieved {len(heights)} height observations, {len(diameters)} diameter observations, {len(live_biomass)} live biomass observations, and {len(dead_biomass)} dead biomass observations")
 	if len(heights) > 0:
-		height_data = Observations(_NAME_HEIGHT, "m", heights)
+		height_data = Observations(_NAME_HEIGHT, "Stem height", "m", heights)
 		out_variables.append(height_data)
 
 	if len(diameters) > 0:
-		diameter_data = Observations(_NAME_DIAMETER, "m", diameters)
+		diameter_data = Observations(_NAME_DIAMETER, "Stem diameter", "m", diameters)
 		out_variables.append(diameter_data)
 
 	if len(live_biomass) > 0:
-		live_data = Observations(_NAME_LIVE, "kg/ha", live_biomass)
+		live_data = Observations(_NAME_LIVE, "Above-Ground Live biomass", "kg/m2", live_biomass)
 		out_variables.append(live_data)
 
 	if len(dead_biomass) > 0:
-		dead_data = Observations(_NAME_DEAD, "kg/ha", dead_biomass)
+		dead_data = Observations(_NAME_DEAD, "Above-Ground Dead biomass", "kg/m2", dead_biomass)
 		out_variables.append(dead_data)
 
 	with open_netcdf(file) as nc:
@@ -1017,13 +1043,16 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 				timeseries = data.index
 				end_date = timeseries[len(timeseries) - 1]
 			parsed = [Observation(x, y) for x, y in data.itertuples()]
-			out_variables.append(Observations(var.out_name, units, parsed))
+			long_name = var.out_name
+			if hasattr(variable, ATTR_LONG_NAME):
+				long_name = getattr(variable, ATTR_LONG_NAME)
+			out_variables.append(Observations(var.out_name, long_name, units, parsed))
 			step_start += step_size
 	read_time = time.time() - read_start
 
 	greenness_data = get_greenness_data(greenness_data, longitude, latitude
 		, lambda _: ...)
-	greenness = Observations(_VAR_GREENNESS, _GREENNESS_UNITS, greenness_data)
+	greenness = Observations(_VAR_GREENNESS, "NDVI", _GREENNESS_UNITS, greenness_data)
 	out_variables.append(greenness)
 
 	sw_start = time.time()
@@ -1038,23 +1067,25 @@ def process_file(file: str, out_dir: str, timestep: int, biomass_file: str
 	site_name = get_site_name_from_filename(file)
 	sw90_data = get_smips_data(site_name, smips_path, timestep, _SMIPS_COL_SW
 			    , lambda p: pcb(step_start + 0.5 * smips_prop * p))
-	out_variables.append(Observations(_NAME_SMIPS, "?mm?", sw90_data))
+	out_variables.append(Observations(_NAME_SMIPS, _SMIPS_COL_SW, "?mm?", sw90_data))
 	if os.path.exists(smips_index_path):
 		swindex_data = get_smips_data(site_name, smips_index_path, timestep
 				, _SMIPS_COL_SWINDEX
 				, lambda p: pcb(step_start + smips_prop * (0.5 * p + 0.5)))
-		out_variables.append(Observations(_NAME_SWINDEX, "0-1", swindex_data))
+		out_variables.append(Observations(_NAME_SWINDEX, _SMIPS_COL_SWINDEX, "0-1", swindex_data))
 	smips_time = time.time() - smips_start
 	step_start += smips_prop
 
 	biom_start = time.time()
-	biomass_data = get_biomass_data(file, biomass_file, biomass_searchpath
-		, lambda p: pcb(step_start + biom_prop * p))
-	biomass_data = [b for b in biomass_data if b.date >= start_date and b.date <= end_date]
-	biomass_data = sorted(biomass_data, key = lambda b: b.date)
+	biomass_data: list[biom_processing.BiomassReading] = []
+	if biomass_file is not None or biomass_searchpath is not None:
+		biomass_data = get_biomass_data(file, biomass_file, biomass_searchpath
+			, lambda p: pcb(step_start + biom_prop * p))
+		biomass_data = [b for b in biomass_data if b.date >= start_date and b.date <= end_date]
+		biomass_data = sorted(biomass_data, key = lambda b: b.date)
 	if len(biomass_data) > 0:
-		live_data = Observations(_NAME_LIVE, "kg/ha", [Observation(d.date, d.live) for d in biomass_data])
-		dead_data = Observations(_NAME_DEAD, "kg/ha", [Observation(d.date, d.dead) for d in biomass_data])
+		live_data = Observations(_NAME_LIVE, "Live Biomass", "kg/ha", [Observation(d.date, d.live) for d in biomass_data])
+		dead_data = Observations(_NAME_DEAD, "Dead Biomass", "kg/ha", [Observation(d.date, d.dead) for d in biomass_data])
 		out_variables.append(live_data)
 		out_variables.append(dead_data)
 
@@ -1141,7 +1172,8 @@ def read_lai_data(lai_file: str) -> pandas.DataFrame:
 
 	log_information("Reading LAI data...")
 	cols = [_LAI_COL_ID, _LAI_COL_DATE, _LAI_COL_LAI, _LAI_COL_QCFLAG]
-	_DATE_FMT = "%d/%m/%Y" # 28/07/2002
+	# _DATE_FMT = "%d/%m/%Y" # 28/07/2002
+	_DATE_FMT = "%m/%d/%Y" # 07/28/2002
 	return read_csv_or_excel_data(lai_file, cols, _LAI_COL_DATE, _DATE_FMT)
 
 def read_greenness_data(greenness_file: str) -> pandas.DataFrame:

@@ -71,6 +71,18 @@ public enum NarClim2Frequency
 /// </summary>
 public static class NarClim2Constants
 {
+    public static class Files
+    {
+        public const string RlonValuesFileSEAus04 = "rlon-correction-NARCliM2-0-SEAus-04.txt";
+        public const string RlonValuesFileAUS18 = "rlon-correction-AUS-18.txt";
+        public static string GetRlonValuesFile(NarClim2Domain domain) => domain switch
+        {
+            NarClim2Domain.AUS18 => RlonValuesFileAUS18,
+            NarClim2Domain.SEAus04 => RlonValuesFileSEAus04,
+            _ => throw new ArgumentException($"Unknown domain: {domain}")
+        };
+    }
+
     public static class Paths
     {
         public const string MipEra = "CMIP6";

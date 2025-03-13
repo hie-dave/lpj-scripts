@@ -42,6 +42,21 @@ _start_time = datetime.datetime.now()
 _progress_reporting_start: datetime.datetime
 _progress_reporting_start = datetime.datetime.now()
 
+# Time of the last progress report.
+# Initial value is a long time in the past, to force a progress report
+# on the first iteration.
+_last_progress_report: datetime.datetime
+_last_progress_report = datetime.datetime(1900, 1, 1)
+
+# Minimum interval between progress reports, in seconds.
+# Note that this only applies when EOL character is newline, in order to prevent
+# spam in stdout.
+# TODO: this could be configurable.
+_progress_interval: int
+_progress_interval = 5
+
+# End of line character. Depends on whether output is to a terminal or not.
+# Default is "\r" if stdout is a terminal, otherwise "\n".
 _progress_end: str
 _progress_end = "\r" if sys.stdout.isatty() else "\n"
 if MPI.COMM_WORLD.size > 1:
@@ -99,7 +114,8 @@ def log(msg: str, log_level: LogLevel):
 		# _clear_line(file = file)
 		msg_len = len(msg)
 		global _progress_len
-		if msg_len < _progress_len:
+		global _progress_end
+		if msg_len < _progress_len and _progress_end == "\r":
 			msg += " " * (_progress_len - msg_len)
 
 		print(msg, file = file)
@@ -143,6 +159,8 @@ def log_progress(progress: float):
 	global _show_progress
 	global _progress_reporting_start
 	global _progress_end
+	global _progress_interval
+	global _last_progress_report
 	if progress > 1:
 		log_warning("Attempted to display progress > 1")
 
@@ -157,10 +175,16 @@ def log_progress(progress: float):
 	remaining = remaining - datetime.timedelta(microseconds = remaining.microseconds)
 
 	if _show_progress:
+		if _progress_end == "\n" and current_time - _last_progress_report < datetime.timedelta(seconds = _progress_interval):
+			# Ensure that, when using \n as EOL character, progress reports
+			# aren't too frequent.
+			return
+
+		_last_progress_report = current_time
 		msg = "Working: %.2f%%; elapsed: %s; remaining: %s" % (100 * progress, elapsed, remaining)
 		progress_len = len(msg)
 		global _progress_len
-		if _progress_len > progress_len:
+		if _progress_len > progress_len and _progress_end == "\r":
 			msg += " " * (progress_len - progress_len)
 			progress_len = _progress_len
 		print(msg, end = _progress_end)

@@ -1,6 +1,6 @@
 import datetime, numpy, os, pandas, re, threading, time
 import multiprocessing, multiprocessing.connection
-import traceback, sys
+import traceback, sys, warnings
 from ozflux_common import *
 from ozflux_logging import *
 from netCDF4 import Dataset, Variable, Dimension, default_fillvals, num2date
@@ -148,54 +148,15 @@ gd_tp_lock = multiprocessing.BoundedSemaphore(1)
 # global_*_prop variables.
 cd_tp_lock = multiprocessing.BoundedSemaphore(1)
 
-# Common alternative names for various units which we may reasonably encounter.
-_units_synonyms = [
-	["W/m2", "W/m^2", "Wm^-2"],
-	["kg/m2/s", "kg/m^2/s", "kgm^-2s^-1", "kg m-2 s-1"],
-	["kg/m2/day", "kg/m^2/day", "mm/day"],
-	["K", "k"],
-	["m/s", "ms^-1"],
-	["Pa", "pa"],
-	["kg/kg", "kg kg-1", "", "mm/mm", "m/m", "1"], # debatable
-	["ppm", "umol/mol"],
-	["degC", "°C", "degrees C"],
-	["umol/m2/s", "umol/m^2/s"],
-	["m3/m3", "m^3/m^3"],
-	["gC/m^2/day", "gC/m2/day"]
-]
-
-#
-# Recipes for unit conversions.
-#
-# The keys are a tuple of two strings:
-#
-# 1. The input units
-# 2. The output units.
-#
-# The values are functions which convert a value from the input units into the
-# output units. These functions take two arguments:
-#
-# x: The input value in input units.
-# t: The timestep length (in seconds).
-#
-# Note that units are changed after timestep aggregation occurs. So the input
-# variable will already be in the output timestep at this point in time.
-units_conversions = {
-	("g", "kg"): lambda x, _: x * KG_PER_G, # (as an example)
-	("mm", "kg/m2/s"): lambda x, t: x / t, # Assuming mm means mm per timestep
-	("kg/m2/s", "mm"): lambda x, t: t * x,
-	("kg/m2/s", "mm/day"): lambda x, t: SECONDS_PER_DAY * x,
-	("degC", "K"): lambda x, _: x + DEG_C_TO_K,
-	("K", "degC"): lambda x, _: x - DEG_C_TO_K,
-	("kPa", "Pa"): lambda x, _: x * PA_PER_KPA,
-	("umol/m2/s", "kgC/m2/day"): lambda x, _: x * MOL_PER_UMOL * G_C_PER_MOL * KG_PER_G * SECONDS_PER_DAY,
-	("umol/m2/s", "gC/m2/day"): lambda x, _: x * MOL_PER_UMOL * G_C_PER_MOL * SECONDS_PER_DAY,
-	("Pa", "kPa"): lambda x, _: x / PA_PER_KPA,
-	("hPa", "Pa"): lambda x, _: x * PA_PER_HPA,
-	("hPa", "kPa"): lambda x, _: x * PA_PER_HPA / PA_PER_KPA,
+# Some flux data file names don't exactly match what we use as the "canonical"
+# name for this site in our processing scripts. These are mapped here.
+_CANONICAL_SITE_NAMES_LOOKUP = {
+	"FletcherviewTropicalRangeland": "Fletcherview"
 }
 
+# https://github.com/OzFlux/PyFluxPro/wiki/QC-Flag-Definitions
 _qc_flag_definitions = {
+	# Table 1: Definition of QC flag values for Levels 1 to 3.
 	0: (True, "Data has passed all QC checks"),
 	1: (False, "Data missing from L1 Excel spreadsheet"),
 	2: (False, "Failed range check"),
@@ -238,6 +199,29 @@ _qc_flag_definitions = {
 	80: (False, "Partitioning Day: GPP/Re computed from light-response curves, GPP = Re - Fc"),
 	81: (False, "Partitioning Day: GPP night mask"),
 	82: (False, "Partitioning Day: Fc > Re, GPP = 0, Re = Fc"),
+	# Table 2: Definition of QC flag values for Level 4.
+	400: (False, "Reserved"),
+	410: (False, "Gap filled using automatic weather station (AWS) data."),
+	420: (False, "Gap filled using ACCESS-G numerical weather prediction (NWP) data."),
+	430: (False, "Gap filled using ECMWF Re-Analysis Interim (ERAI) data."),
+	440: (False, "Gap filled using ECMWF Re-Analysis 5 (ERA5) data."),
+	450: (False, "Gap filled using climatology, interpolated daily (default)"),
+	460: (False, "Gap filled using climatology, monthly (not implemented)"),
+	470: (False, "Gap filled using Marginal Distribution Sampling (MDS)"),
+	# Table 3: Definition of QC flag values for Level 5.
+	500: (False, "Reserved"),
+	501: (False, "Reserved"),
+	502: (False, "Fco2 masked by turbulence filter (flag only used in intermediate variable Fco2_filtered)"),
+	510: (False, "Flux gap filled using SOLO neural network (windowed)"),
+	520: (False, "Flux gap filled using SOLO neural network (long gaps)"),
+	570: (False, "Flux gap filled using Marginal Distribution Sampling (MDS)"),
+	# Table 4: Definition of QC flag values for Level 6.
+	600: (False, "Reserved"),
+	601: (False, "ER observation masked because Fco2 flag not in [0, 10]"),
+	602: (False, "ER observation masked because it is day time"),
+	610: (False, "ER estimated by SOLO neural network from nocturnal, u*-filtered NEE"),
+	620: (False, "ER estimated using Lloyd & Taylor (1994) from nocturnal, u*-filtered NEE"),
+	630: (False, "ER estimated using Lasslop et al (2010) from nocturnal, u*-filtered NEE (E0) and both daytime and nighttime NEE (alpha, beta0, VPD0, k, rb)")
 }
 
 _nc_type_lookup = {
@@ -308,18 +292,6 @@ def _get_qc_var_name(name: str):
 	"""
 	return "%s_QCFlag" % name
 
-def _is_good_qc(flag: float) -> bool:
-	"""
-	Return true iff the given QC flag indicates good data.
-	@param flag: A QC flag.
-	"""
-	if flag in _qc_flag_definitions:
-		(result, msg) = _qc_flag_definitions[flag]
-		if not result:
-			log_diagnostic("Filtering QC flag '%s'; reason: %s" % msg)
-		return result
-	return True
-
 def _filter_qc(data: list[float], qc: list[float]
 	, pcb: Callable[[float], None]) -> list[float]:
 	"""
@@ -342,7 +314,7 @@ def _filter_qc(data: list[float], qc: list[float]
 			(result, msg) = _qc_flag_definitions[qc_flag]
 			if not result:
 				data.mask[i] = True
-				log_diagnostic("Filtering QC flag %d: %s" % (i, msg))
+				log_debug("Filtering QC flag %d in row %d: %s" % (qc_flag, i, msg))
 	pcb(1)
 	return data
 
@@ -435,7 +407,7 @@ def _get_data(in_file: Dataset \
 			data = _filter_qc(data, qc_data, lambda p: progress_cb(step_start + step_size * p))
 			step_start += step_size
 
-		# Replace NaN with a mean of nearby values.
+		# Replace NaN/masked values with a mean of nearby values.
 		log_diagnostic("Removing NaNs")
 		step_start = read_time_proportion
 		step_size = fixnan_time_proportion
@@ -668,7 +640,9 @@ def get_data_timeseries(in_file: Dataset \
 			raise ValueError(f"Only supported output timestep is currently 24h")
 		df = pandas.DataFrame({"datetime": times, "value": data})
 		df.set_index("datetime", inplace = True)
-		data = df.resample("D").apply(aggregator) # D means daily. Can also use H for hourly, 3H for 3-hourly, S for second, etc.
+		with warnings.catch_warnings():
+			warnings.filterwarnings('ignore', category=FutureWarning, message='.*provided callable.*')
+			data = df.resample("D").apply(aggregator) # D means daily. Can also use H for hourly, 3H for 3-hourly, S for second, etc.
 
 		time_tot = read_tot + bounds_tot + unit_tot
 
@@ -780,19 +754,6 @@ def trim_to_start_year(in_file: Dataset, timestep: int
 	m = "Trimming %d values to get to start of %d"
 	log_debug(m % (n_trim, next_year.year))
 	return data[n_trim:]
-
-def units_match(unit0: str, unit1: str) -> str:
-	"""
-	Check if the two units are equivalent.
-	E.g. m/s and ms^-1 would return true, but not m and kg.
-	"""
-	if unit0 == unit1:
-		return True
-
-	for case in _units_synonyms:
-		if unit0 in case and unit1 in case:
-			return True
-	return False
 
 def remove_nans(data: list[float]
 	, progress_cb: Callable[[float], None]) -> list[float]:
@@ -1062,59 +1023,6 @@ def get_next_year(start_date: datetime.datetime) -> datetime.datetime:
 		return start_date
 	return datetime.datetime(start_date.year + 1, 1, 1, 0, 0, 0)
 
-def find_units_conversion(current_units: str, desired_units: str) \
-	-> Callable[[float], float]:
-	"""
-	Find a conversion between two different units. Throw if not found.
-	The return value is a function which takes and returns a float.
-	"""
-	# units_conversions is a dict mapping unit combos to a conversion.
-	# units_conversions: dict[tuple[str, str], Callable[[float],float]]
-	combination = (current_units, desired_units)
-	if combination in units_conversions:
-		return units_conversions[combination]
-	for units_type in _units_synonyms:
-		if current_units in units_type:
-			for synonym in units_type:
-				combination = (synonym, desired_units)
-				if (combination in units_conversions):
-					return units_conversions[combination]
-
-	m = "No unit conversion exists from '%s' to '%s'"
-	raise ValueError(m % (current_units, desired_units))
-
-def units_match(x: str, y: str) -> bool:
-	"""
-	Check if the two units are identical or equivalent.
-	"""
-	if x == y:
-		return True
-
-	for units_type in _units_synonyms:
-		if x in units_type and y in units_type:
-			return True
-
-	return False
-
-def find_units_conversion_opt(current: str, desired: str) -> Callable[[float], float]:
-	"""
-	Find a conversion between two different units, if one is required. This will
-	be returned in the form of a function which may be called, taking two
-	arguments:
-
-	1. The data (n-dimensional list of floats) to be converted
-	2. The timestep width in seconds
-
-	If no units conversion is required, this will return a function which
-	returns the original data.
-
-	An exception will be raised if the input units cannot be converted to the
-	specified output units.
-	"""
-	if units_match(current, desired):
-		return lambda x, _: x
-	return find_units_conversion(current, desired)
-
 def get_start_minute(in_file: Dataset):
 	"""
 	Determine the minute at which the dataset starts (0-59).
@@ -1142,7 +1050,10 @@ def get_site_name_from_filename(file: str) -> str:
 
 	@param file: input file name.
 	"""
-	return os.path.basename(file).split("_")[0]
+	site = os.path.basename(file).split("_")[0]
+	if site in _CANONICAL_SITE_NAMES_LOOKUP:
+		site = _CANONICAL_SITE_NAMES_LOOKUP[site]
+	return site
 
 def get_site_name(nc_file: str) -> str:
 	"""

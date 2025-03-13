@@ -9,16 +9,50 @@ using ClimateProcessing.Extensions;
 
 namespace ClimateProcessing.Services;
 
-public class ScriptGenerator
+/// <summary>
+/// Default implementation of script generator that works with any climate dataset.
+/// </summary>
+public class ScriptGenerator : IScriptGenerator<IClimateDataset>
 {
-    // Subdirectory of the output directory into which the scripts are written.
+    /// <summary>
+    /// Subdirectory of the output directory into which the scripts are written.
+    /// </summary>
     private const string scriptDirectory = "scripts";
+
+    /// <summary>
+    /// Subdirectory of the output directory into which the logs are written.
+    /// </summary>
     private const string logDirectory = "logs";
+
+    /// <summary>
+    /// Subdirectory of the output directory into which stdout will be streamed.
+    /// </summary>
     private const string streamDirectory = "streams";
 
-    private readonly ProcessingConfig _config;
+    /// <summary>
+    /// CDO's conservative remapping operator.
+    /// </summary>
+    private const string remapConservative = "-remapcon";
 
-    // List of standard variables and their output names and units.
+    /// <summary>
+    /// CDO's bilinear remapping operator.
+    /// </summary>
+    private const string remapBilinear = "remapbil";
+
+    /// <summary>
+    /// The processing configuration.
+    /// </summary>
+    protected readonly ProcessingConfig _config;
+
+    /// <summary>
+    /// Name of the variable containing the directory holding all input files
+    /// used as operands for the mergetime command.
+    /// </summary>
+    protected const string inDirVariable = "IN_DIR";
+
+    /// <summary>
+    /// List of standard variables and their output names and units.
+    /// </summary>
     private static readonly Dictionary<ClimateVariable, (string outName, string outUnits)> _standardVariables = new()
     {
         { ClimateVariable.SpecificHumidity, ("huss", "1") },
@@ -29,6 +63,11 @@ public class ScriptGenerator
         { ClimateVariable.Precipitation, ("pr", "mm") }
     };
 
+    /// <summary>
+    /// Gets the standard configuration for the specified variable.
+    /// </summary>
+    /// <param name="variable">The variable.</param>
+    /// <returns>The standard configuration.</returns>
     private (string outName, string outUnits) GetStandardConfig(ClimateVariable variable)
     {
         if (!_standardVariables.TryGetValue(variable, out var config))
@@ -36,11 +75,21 @@ public class ScriptGenerator
         return config;
     }
 
+    /// <summary>
+    /// Creates a new script generator.
+    /// </summary>
+    /// <param name="config">The processing configuration.</param>
     public ScriptGenerator(ProcessingConfig config)
     {
         _config = config;
     }
 
+    /// <summary>
+    /// Generates the operator to rename a variable.
+    /// </summary>
+    /// <param name="inName">The name of the input variable.</param>
+    /// <param name="outName">The name of the output variable.</param>
+    /// <returns>The CDO operator to use for renaming.</returns>
     internal string GenerateRenameOperator(string inName, string outName)
     {
         if (inName == outName)
@@ -48,6 +97,14 @@ public class ScriptGenerator
         return $"-chname,'{inName}','{outName}'";
     }
 
+    /// <summary>
+    /// Generates the operators needed to convert the units of a variable.
+    /// </summary>
+    /// <param name="outputVar">The name of the output variable.</param>
+    /// <param name="inputUnits">The units of the input variable.</param>
+    /// <param name="targetUnits">The units of the output variable.</param>
+    /// <param name="timeStep">The time step of the variable.</param>
+    /// <returns>The CDO operators needed to convert the units.</returns>
     internal IEnumerable<string> GenerateUnitConversionOperators(
         string outputVar,
         string inputUnits,
@@ -73,6 +130,11 @@ public class ScriptGenerator
         return operators;
     }
 
+    /// <summary>
+    /// Generate the operator to temporally aggregate the data.
+    /// </summary>
+    /// <param name="variable">The variable to aggregate.</param>
+    /// <returns>The CDO operator to use for temporal aggregation.</returns>
     internal string GenerateTimeAggregationOperator(
         ClimateVariable variable)
     {
@@ -89,7 +151,13 @@ public class ScriptGenerator
         return $"-{@operator},{stepsToAggregate}";
     }
 
-    private void WriteVPDEquations(TextWriter writer, VPDMethod method)
+    /// <summary>
+    /// Write the equations for estimating VPD to a text writer.
+    /// </summary>
+    /// <param name="writer">The writer to write to.</param>
+    /// <param name="method">The VPD estimation method to use.</param>
+    /// <exception cref="ArgumentException">If the specified VPD method is not supported.</exception>
+    private async Task WriteVPDEquations(TextWriter writer, VPDMethod method)
     {
         // All methods follow the same general pattern:
         // 1. Calculate saturation vapor pressure (_esat)
@@ -120,12 +188,12 @@ public class ScriptGenerator
             _ => throw new ArgumentException($"Unsupported VPD calculation method: {method}")
         };
 
-        writer.WriteLine($@"# Saturation vapor pressure (Pa)");
-        writer.WriteLine(esatEquation);
-        writer.WriteLine("# Actual vapor pressure (Pa)");
-        writer.WriteLine("_e=(huss*ps)/(0.622+0.378*huss)");
-        writer.WriteLine("# VPD (kPa)");
-        writer.WriteLine("vpd=(_esat-_e)/1000");
+        await writer.WriteLineAsync($@"# Saturation vapor pressure (Pa)");
+        await writer.WriteLineAsync(esatEquation);
+        await writer.WriteLineAsync("# Actual vapor pressure (Pa)");
+        await writer.WriteLineAsync("_e=(huss*ps)/(0.622+0.378*huss)");
+        await writer.WriteLineAsync("# VPD (kPa)");
+        await writer.WriteLineAsync("vpd=(_esat-_e)/1000");
     }
 
     /// <summary>
@@ -137,22 +205,27 @@ public class ScriptGenerator
         return $"-L -O -v -z zip1";
     }
 
-    private string GenerateVPDScript(IClimateDataset dataset)
+    /// <summary>
+    /// Generate a processing script for calculating the VPD for a dataset.
+    /// </summary>
+    /// <param name="dataset">The dataset.</param>
+    /// <returns>The script.</returns>
+    private async Task<string> GenerateVPDScript(IClimateDataset dataset)
     {
         string jobName = $"calc_vpd_{dataset.DatasetName}";
         string script = CreateScript(jobName);
         using TextWriter writer = new StreamWriter(script);
-        WritePBSHeader(writer, jobName);
+        await WritePBSHeader(writer, jobName);
 
-        writer.WriteLine("# File paths.");
+        await writer.WriteLineAsync("# File paths.");
         string humidityFile = GetOutputFilePath(dataset, ClimateVariable.SpecificHumidity);
-        writer.WriteLine($"HUSS_FILE=\"{humidityFile}\"");
+        await writer.WriteLineAsync($"HUSS_FILE=\"{humidityFile}\"");
 
         string pressureFile = GetOutputFilePath(dataset, ClimateVariable.SurfacePressure);
-        writer.WriteLine($"PS_FILE=\"{pressureFile}\"");
+        await writer.WriteLineAsync($"PS_FILE=\"{pressureFile}\"");
 
         string temperatureFile = GetOutputFilePath(dataset, ClimateVariable.Temperature);
-        writer.WriteLine($"TAS_FILE=\"{temperatureFile}\"");
+        await writer.WriteLineAsync($"TAS_FILE=\"{temperatureFile}\"");
 
         string inFiles = "\"${HUSS_FILE}\" \"${PS_FILE}\" \"${TAS_FILE}\"";
 
@@ -162,102 +235,112 @@ public class ScriptGenerator
         string baseName = fileName.ReplaceFirst($"{tempName}_", "vpd_");
         string outFile = Path.Combine(Path.GetDirectoryName(temperatureFile)!, baseName);
 
-        writer.WriteLine($"OUT_FILE=\"{outFile}\"");
+        await writer.WriteLineAsync($"OUT_FILE=\"{outFile}\"");
 
         string eqnFile = "${WORK_DIR}/vpd_equations.txt";
-        writer.WriteLine($"EQN_FILE=\"{eqnFile}\"");
-        writer.WriteLine();
+        await writer.WriteLineAsync($"EQN_FILE=\"{eqnFile}\"");
+        await writer.WriteLineAsync();
 
-        writer.WriteLine("# Generate equation file.");
-        writer.WriteLine("log \"Generating VPD equation file...\"");
+        await writer.WriteLineAsync("# Generate equation file.");
+        await writer.WriteLineAsync("log \"Generating VPD equation file...\"");
 
         // Create equation file with selected method.
-        writer.WriteLine($"cat >\"${{EQN_FILE}}\" <<EOF");
-        WriteVPDEquations(writer, _config.VPDMethod);
-        writer.WriteLine("EOF");
-        writer.WriteLine();
+        await writer.WriteLineAsync($"cat >\"${{EQN_FILE}}\" <<EOF");
+        await WriteVPDEquations(writer, _config.VPDMethod);
+        await writer.WriteLineAsync("EOF");
+        await writer.WriteLineAsync();
 
         // Calculate VPD using the equation file.
-        writer.WriteLine("# Calculate VPD.");
-        writer.WriteLine($"log \"Calculating VPD...\"");
-        writer.WriteLine($"cdo {GetCDOArgs()} exprf,\"${{EQN_FILE}}\" {inFiles} \"${{OUT_FILE}}\"");
-        writer.WriteLine($"log \"VPD calculation completed successfully.\"");
-        writer.WriteLine();
+        await writer.WriteLineAsync("# Calculate VPD.");
+        await writer.WriteLineAsync($"log \"Calculating VPD...\"");
+        await writer.WriteLineAsync($"cdo {GetCDOArgs()} exprf,\"${{EQN_FILE}}\" {inFiles} \"${{OUT_FILE}}\"");
+        await writer.WriteLineAsync($"log \"VPD calculation completed successfully.\"");
+        await writer.WriteLineAsync();
 
         // Return the path to the generated script.
         return script;
     }
 
-    private void WritePBSHeader(TextWriter writer, string jobName)
+    /// <summary>
+    /// Write the PBS header for a job.
+    /// </summary>
+    /// <param name="writer">The text writer to which the header will be written.</param>
+    /// <param name="jobName">The job name.</param>
+    private async Task WritePBSHeader(TextWriter writer, string jobName)
     {
         string logFileName = $"{jobName}.log";
         string logFile = Path.Combine(GetLogPath(), logFileName);
         string streamFile = Path.Combine(GetStreamPath(), logFileName);
 
-        writer.WriteLine("#!/usr/bin/env bash");
-        writer.WriteLine($"#PBS -N {jobName}");
-        writer.WriteLine($"#PBS -o {logFile}");
-        writer.WriteLine($"#PBS -P {_config.Project}");
-        writer.WriteLine($"#PBS -q {_config.Queue}");
-        writer.WriteLine($"#PBS -l walltime={_config.Walltime}");
-        writer.WriteLine($"#PBS -l ncpus={_config.Ncpus}");
-        writer.WriteLine($"#PBS -l mem={_config.Memory}GB");
-        writer.WriteLine($"#PBS -l jobfs={_config.JobFS}GB");
-        writer.WriteLine($"#PBS -j oe");
+        await writer.WriteLineAsync("#!/usr/bin/env bash");
+        await writer.WriteLineAsync($"#PBS -N {jobName}");
+        await writer.WriteLineAsync($"#PBS -o {logFile}");
+        await writer.WriteLineAsync($"#PBS -P {_config.Project}");
+        await writer.WriteLineAsync($"#PBS -q {_config.Queue}");
+        await writer.WriteLineAsync($"#PBS -l walltime={_config.Walltime}");
+        await writer.WriteLineAsync($"#PBS -l ncpus={_config.Ncpus}");
+        await writer.WriteLineAsync($"#PBS -l mem={_config.Memory}GB");
+        await writer.WriteLineAsync($"#PBS -l jobfs={_config.JobFS}GB");
+        await writer.WriteLineAsync($"#PBS -j oe");
         if (!string.IsNullOrEmpty(_config.Email))
         {
-            writer.WriteLine($"#PBS -M {_config.Email}");
-            writer.WriteLine($"#PBS -m abe");
+            await writer.WriteLineAsync($"#PBS -M {_config.Email}");
+            await writer.WriteLineAsync($"#PBS -m abe");
         }
 
         // Add storage directives if required
         var storageDirectives = _config.GetRequiredStorageDirectives();
         if (storageDirectives.Any())
-            writer.WriteLine(PBSStorageHelper.FormatStorageDirectives(storageDirectives));
+            await writer.WriteLineAsync(PBSStorageHelper.FormatStorageDirectives(storageDirectives));
 
         // Add blank line after header
-        writer.WriteLine("");
+        await writer.WriteLineAsync("");
 
         // Error handling.
-        writer.WriteLine("# Exit immediately if any command fails.");
-        writer.WriteLine("set -euo pipefail");
-        writer.WriteLine();
+        await writer.WriteLineAsync("# Exit immediately if any command fails.");
+        await writer.WriteLineAsync("set -euo pipefail");
+        await writer.WriteLineAsync();
 
         // Load required modules.
-        writer.WriteLine("# Load required modules.");
-        writer.WriteLine("module purge");
-        writer.WriteLine("module load pbs netcdf cdo nco");
-        writer.WriteLine();
+        await writer.WriteLineAsync("# Load required modules.");
+        await writer.WriteLineAsync("module purge");
+        await writer.WriteLineAsync("module load pbs netcdf cdo nco python3/3.12.1");
+        await writer.WriteLineAsync();
 
         // Create temporary directory and cd into it.
-        writer.WriteLine("# Create temporary directory and cd into it.");
-        writer.WriteLine("WORK_DIR=\"$(mktemp -d -p \"${PBS_JOBFS}\")\"");
-        writer.WriteLine("cd \"${WORK_DIR}\"");
-        writer.WriteLine();
+        await writer.WriteLineAsync("# Create temporary directory and cd into it.");
+        await writer.WriteLineAsync("WORK_DIR=\"$(mktemp -d -p \"${PBS_JOBFS}\")\"");
+        await writer.WriteLineAsync("cd \"${WORK_DIR}\"");
+        await writer.WriteLineAsync();
 
         // Technically, deleting the temporary directory is unnecessary, because
         // the tempfs on the compute nodes will be deleted when the job
         // finishes. However, it's a good practice to clean up after ourselves.
-        writer.WriteLine("# Delete the temporary directory on exit.");
-        writer.WriteLine("trap 'cd \"${PBS_JOBFS}\"; rm -rf \"${WORK_DIR}\"' EXIT");
-        writer.WriteLine();
+        await writer.WriteLineAsync("# Delete the temporary directory on exit.");
+        await writer.WriteLineAsync("trap 'cd \"${PBS_JOBFS}\"; rm -rf \"${WORK_DIR}\"' EXIT");
+        await writer.WriteLineAsync();
 
         // Set up logging that streams all output into the stream directory.
-        writer.WriteLine("# Stream all output to a log file without buffering.");
-        writer.WriteLine($"STREAM_FILE=\"{streamFile}\"");
-        writer.WriteLine("rm -f \"${STREAM_FILE}\"");
-        writer.WriteLine("exec 1> >(tee -a \"${STREAM_FILE}\") 2>&1");
-        writer.WriteLine();
+        await writer.WriteLineAsync("# Stream all output to a log file without buffering.");
+        await writer.WriteLineAsync($"STREAM_FILE=\"{streamFile}\"");
+        await writer.WriteLineAsync("rm -f \"${STREAM_FILE}\"");
+        await writer.WriteLineAsync("exec 1> >(tee -a \"${STREAM_FILE}\") 2>&1");
+        await writer.WriteLineAsync();
 
-        writer.WriteLine("# Print a log message.");
-        writer.WriteLine("log() {");
-        writer.WriteLine("    echo \"[$(date)] $*\"");
-        writer.WriteLine("}");
+        await writer.WriteLineAsync("# Print a log message.");
+        await writer.WriteLineAsync("log() {");
+        await writer.WriteLineAsync("    echo \"[$(date)] $*\"");
+        await writer.WriteLineAsync("}");
 
         // Add blank line after header.
-        writer.WriteLine("");
+        await writer.WriteLineAsync("");
     }
 
+    /// <summary>
+    /// Get the path to the directory in which the scripts will be stored, and
+    /// create it if it doesn't exist.
+    /// </summary>
+    /// <returns>The path to the script directory.</returns>
     private string GetScriptPath()
     {
         string scriptPath = Path.Combine(_config.OutputDirectory, scriptDirectory);
@@ -265,6 +348,11 @@ public class ScriptGenerator
         return scriptPath;
     }
 
+    /// <summary>
+    /// Get the path to the directory in which log files will be stored, and
+    /// create it if it doesn't exist.
+    /// </summary>
+    /// <returns>The path to the log directory.</returns>
     private string GetLogPath()
     {
         string logPath = Path.Combine(_config.OutputDirectory, logDirectory);
@@ -272,6 +360,11 @@ public class ScriptGenerator
         return logPath;
     }
 
+    /// <summary>
+    /// Get the path to the directory in which stdout/stderr will be streamed,
+    /// and create it if it doesn't exist.
+    /// </summary>
+    /// <returns>The path to the stream directory.</returns>
     private string GetStreamPath()
     {
         string streamPath = Path.Combine(_config.OutputDirectory, streamDirectory);
@@ -279,31 +372,35 @@ public class ScriptGenerator
         return streamPath;
     }
 
-    // Generate processing scripts, and return the path to the top-level script.
-    public string GenerateScripts(IClimateDataset dataset)
+    /// <summary>
+    /// Generate processing scripts, and return the path to the top-level script.
+    /// </summary>
+    /// <param name="dataset">The dataset.</param>
+    /// <returns>The path to the top-level script.</returns>
+    public async Task<string> GenerateScriptsAsync(IClimateDataset dataset)
     {
         string jobName = $"submit_{dataset.DatasetName}";
         string scriptFile = CreateScript(jobName);
         using TextWriter writer = new StreamWriter(scriptFile);
 
         // Add PBS header.
-        writer.WriteLine("#!/usr/bin/env bash");
-        writer.WriteLine($"# Job submission script for: {dataset.DatasetName}");
-        writer.WriteLine();
-        writer.WriteLine("# Exit immediately if any command fails.");
-        writer.WriteLine("set -euo pipefail");
-        writer.WriteLine();
+        await writer.WriteLineAsync("#!/usr/bin/env bash");
+        await writer.WriteLineAsync($"# Job submission script for: {dataset.DatasetName}");
+        await writer.WriteLineAsync();
+        await writer.WriteLineAsync("# Exit immediately if any command fails.");
+        await writer.WriteLineAsync("set -euo pipefail");
+        await writer.WriteLineAsync();
 
         // Ensure output directory exists.
-        writer.WriteLine($"mkdir -p \"{_config.OutputDirectory}\"");
-        writer.WriteLine();
+        await writer.WriteLineAsync($"mkdir -p \"{_config.OutputDirectory}\"");
+        await writer.WriteLineAsync();
 
         // Process each variable.
         List<string> vpdDependencies = new List<string>();
         List<string> variableScripts = new List<string>();
         foreach (ClimateVariable variable in Enum.GetValues<ClimateVariable>())
         {
-            string subscript = GenerateVariableMergeScript(dataset, variable);
+            string subscript = await GenerateVariableMergeScript(dataset, variable);
             if (variable == ClimateVariable.SpecificHumidity
                 || variable == ClimateVariable.SurfacePressure
                 || variable == ClimateVariable.Temperature)
@@ -318,30 +415,34 @@ public class ScriptGenerator
         if (variableScripts.Count == 0)
             throw new InvalidOperationException("No scripts were generated.");
 
-        string vpdScript = GenerateVPDScript(dataset);
+        string vpdScript = await GenerateVPDScript(dataset);
 
         // Add job submission logic.
-        writer.WriteLine("echo \"Submitting jobs...\"");
-        writer.WriteLine();
+        await writer.WriteLineAsync("echo \"Submitting jobs...\"");
+        await writer.WriteLineAsync();
 
-        writer.WriteLine($"DEPS=\"$(qsub \"{variableScripts[0]}\")\"");
+        await writer.WriteLineAsync($"DEPS=\"$(qsub \"{variableScripts[0]}\")\"");
         for (int i = 1; i < variableScripts.Count; i++)
-            writer.WriteLine($"DEPS=\"${{DEPS}}:$(qsub \"{variableScripts[i]}\")\"");
+            await writer.WriteLineAsync($"DEPS=\"${{DEPS}}:$(qsub \"{variableScripts[i]}\")\"");
 
-        writer.WriteLine($"VPD_DEPS=\"$(qsub \"{vpdDependencies[0]}\")\"");
+        await writer.WriteLineAsync($"VPD_DEPS=\"$(qsub \"{vpdDependencies[0]}\")\"");
         for (int i = 1; i < vpdDependencies.Count; i++)
-            writer.WriteLine($"VPD_DEPS=\"${{VPD_DEPS}}:$(qsub \"{vpdDependencies[i]}\")\"");
+            await writer.WriteLineAsync($"VPD_DEPS=\"${{VPD_DEPS}}:$(qsub \"{vpdDependencies[i]}\")\"");
 
-        writer.WriteLine($"DEPS=\"${{DEPS}}:$(qsub -W depend=afterok:\"${{VPD_DEPS}}\" \"{vpdScript}\")\"");
-        writer.WriteLine();
+        await writer.WriteLineAsync($"DEPS=\"${{DEPS}}:$(qsub -W depend=afterok:\"${{VPD_DEPS}}\" \"{vpdScript}\")\"");
+        await writer.WriteLineAsync();
 
-        writer.WriteLine("echo \"Job submission complete.\"");
-        writer.WriteLine();
+        await writer.WriteLineAsync("echo \"Job submission complete.\"");
+        await writer.WriteLineAsync();
 
         return scriptFile;
     }
 
-    // Create an empty script file and set execute permissions.
+    /// <summary>
+    /// Create an empty script file and set execute permissions.
+    /// </summary>
+    /// <param name="scriptName">The name of the script file to create.</param>
+    /// <returns>The path to the script file.</returns>
     private string CreateScript(string scriptName)
     {
         string script = Path.Combine(GetScriptPath(), scriptName);
@@ -354,6 +455,13 @@ public class ScriptGenerator
         return script;
     }
 
+    /// <summary>
+    /// Generate a path that will be used as the output file for a particular
+    /// variable in a dataset.
+    /// </summary>
+    /// <param name="dataset">The dataset.</param>
+    /// <param name="variable">The variable.</param>
+    /// <returns>The path to the output file.</returns>
     private string GetOutputFilePath(IClimateDataset dataset, ClimateVariable variable)
     {
         string directory = Path.Combine(_config.OutputDirectory, dataset.GetOutputDirectory());
@@ -362,7 +470,25 @@ public class ScriptGenerator
         return Path.Combine(directory, outFileName);
     }
 
-    private string GenerateVariableMergeScript(IClimateDataset dataset, ClimateVariable variable)
+    /// <summary>
+    /// Write the pre-merge commands to the specified writer.
+    /// </summary>
+    /// <param name="writer">The text writer.</param>
+    /// <param name="dataset">The climate dataset being processed.</param>
+    /// <param name="variable">The variable of the dataset being processed.</param>
+    protected virtual Task WritePreMerge(TextWriter writer, IClimateDataset dataset, ClimateVariable variable)
+    {
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Generate a mergetime script for the specified variable, and return the
+    /// path to the generated script file.
+    /// </summary>
+    /// <param name="dataset">The dataset to process.</param>
+    /// <param name="variable">The variable to process.</param>
+    /// <returns>The path to the generated script file.</returns>
+    private async Task<string> GenerateVariableMergeScript(IClimateDataset dataset, ClimateVariable variable)
     {
         VariableInfo varInfo = dataset.GetVariableInfo(variable);
         (string outVar, string targetUnits) = GetStandardConfig(variable);
@@ -372,45 +498,112 @@ public class ScriptGenerator
         string jobName = $"mergetime_{varInfo.Name}_{dataset.DatasetName}";
         string scriptFile = CreateScript(jobName);
         using TextWriter writer = new StreamWriter(scriptFile);
-        WritePBSHeader(writer, jobName);
+        await WritePBSHeader(writer, jobName);
 
         // File paths.
         string inDir = dataset.GetInputFilesDirectory(variable);
         string outFileName = dataset.GenerateOutputFileName(variable);
         string tmpFile = Path.Combine("${WORK_DIR}", outFileName);
         string outFile = GetOutputFilePath(dataset, variable);
-        writer.WriteLine("# File paths.");
-        writer.WriteLine($"IN_DIR=\"{inDir}\"");
-        writer.WriteLine($"TMP_FILE=\"{tmpFile}\"");
-        writer.WriteLine($"OUT_FILE=\"{outFile}\"");
-        writer.WriteLine();
+        await writer.WriteLineAsync("# File paths.");
+        await writer.WriteLineAsync($"{inDirVariable}=\"{inDir}\"");
+        await writer.WriteLineAsync($"TMP_FILE=\"{tmpFile}\"");
+        await writer.WriteLineAsync($"OUT_FILE=\"{outFile}\"");
+        await writer.WriteLineAsync();
+
+        await WritePreMerge(writer, dataset, variable);
 
         string rename = GenerateRenameOperator(varInfo.Name, outVar);
         string conversion = string.Join(" ", GenerateUnitConversionOperators(outVar, varInfo.Units, targetUnits, _config.InputTimeStep));
         string aggregation = GenerateTimeAggregationOperator(variable);
         string unpack = "-unpack";
-        string remap = string.IsNullOrEmpty(_config.GridFile) ? "" : $"-remapcon,{_config.GridFile}";
+        string remapOperator = GetRemapOperator(varInfo, variable);
+        string remap = string.IsNullOrEmpty(_config.GridFile) ? "" : $"-{remapOperator},{_config.GridFile}";
         string operators = $"{aggregation} {conversion} {rename} {unpack} {remap}";
+        operators = operators.Replace("  ", " ");
 
         // Merge files and perform all operations in a single step.
-        writer.WriteLine("log \"Merging files...\"");
-        writer.WriteLine($"cdo {GetCDOArgs()} mergetime {operators} \"${{IN_DIR}}\"/*.nc \"${{TMP_FILE}}\"");
-        writer.WriteLine("log \"All files merged successfully.\"");
-        writer.WriteLine();
+        await writer.WriteLineAsync("log \"Merging files...\"");
+        await writer.WriteLineAsync($"cdo {GetCDOArgs()} mergetime {operators} \"${{{inDirVariable}}}\"/*.nc \"${{TMP_FILE}}\"");
+        await writer.WriteLineAsync("log \"All files merged successfully.\"");
+        await writer.WriteLineAsync();
 
         // Reorder dimensions, improve chunking, and enable compression.
         string ordering = "-a lat,lon,time";
         string chunking = $"--cnk_dmn lat,{_config.ChunkSizeSpatial} --cnk_dmn lon,{_config.ChunkSizeSpatial} --cnk_dmn time,{_config.ChunkSizeTime}";
         string compression = _config.CompressOutput ? $"-L{_config.CompressionLevel}" : "";
 
-        writer.WriteLine("log \"Rechunking files...\"");
-        writer.WriteLine($"ncpdq -O {ordering} {chunking} {compression} \"${{TMP_FILE}}\" \"${{OUT_FILE}}\"");
-        writer.WriteLine("log \"All files rechunked successfully.\"");
-        writer.WriteLine();
+        await writer.WriteLineAsync("log \"Rechunking files...\"");
+        await writer.WriteLineAsync($"ncpdq -O {ordering} {chunking} {compression} \"${{TMP_FILE}}\" \"${{OUT_FILE}}\"");
+        await writer.WriteLineAsync("log \"All files rechunked successfully.\"");
+        await writer.WriteLineAsync();
 
-        writer.WriteLine("# Delete temporary file.");
-        writer.WriteLine($"rm -f \"${{TMP_FILE}}\"");
+        await writer.WriteLineAsync("# Delete temporary file.");
+        await writer.WriteLineAsync($"rm -f \"${{TMP_FILE}}\"");
+        await writer.WriteLineAsync();
 
         return scriptFile;
+    }
+
+    /// <summary>
+    /// Check if a variable is expressed on a per-ground-area basis.
+    /// </summary>
+    /// <param name="units">The units of the variable.</param>
+    /// <returns>True iff the variable is expressed on a per-ground-area basis.</returns>
+    /// <remarks>This is used to decide whether to perform conservative remapping.</remarks>
+    internal static bool HasPerAreaUnits(string units)
+    {
+        // Convert to lowercase and remove whitespace and periods for consistent matching
+        units = units.ToLower().Replace(" ", "").Replace(".", "");
+        
+        // Match any of these patterns:
+        // - m-2 or m^-2 (negative exponent notation)
+        // - /m2 (division notation)
+        return System.Text.RegularExpressions.Regex.IsMatch(units, 
+            @"(m\^?-2|/m2)");
+    }
+
+    /// <summary>
+    /// Get an interpolation algorithm to be used when remapping the specified
+    /// variable.
+    /// </summary>
+    /// <param name="info">Metadata for the variable in the dataset being processed.</param>
+    /// <param name="variable">The variable to remap.</param>
+    /// <returns>The interpolation algorithm to use.</returns>
+    internal InterpolationAlgorithm GetInterpolationAlgorithm(VariableInfo info, ClimateVariable variable)
+    {
+        // Precipitation and shortwave radiation may require conservative
+        // remapping, if they are NOT expressed on a per-ground-area basis.
+        if (variable != ClimateVariable.Precipitation
+            && variable != ClimateVariable.ShortwaveRadiation)
+            return InterpolationAlgorithm.Bilinear;
+
+        // Check if units are expressed on a per-ground-area basis.
+        if (!HasPerAreaUnits(info.Units))
+            // E.g. W
+            // E.g. kg s-1
+            return InterpolationAlgorithm.Conservative;
+
+        // If, for example, precipitation is expressed in kg m-2 s-1, there's
+        // no need for conservative remapping.
+        return InterpolationAlgorithm.Bilinear;
+    }
+
+    /// <summary>
+    /// Get the CDO remap operator to be used when remapping the specified
+    /// variable.
+    /// </summary>
+    /// <param name="info">Metadata for the variable in the dataset being processed.</param>
+    /// <param name="variable">The variable to remap.</param>
+    /// <returns>The CDO remap operator to use.</returns>
+    /// <exception cref="ArgumentException"></exception>
+    private string GetRemapOperator(VariableInfo info, ClimateVariable variable)
+    {
+        return GetInterpolationAlgorithm(info, variable) switch
+        {
+            InterpolationAlgorithm.Bilinear => remapBilinear,
+            InterpolationAlgorithm.Conservative => remapConservative,
+            _ => throw new ArgumentException($"Unknown remap algorithm: {GetInterpolationAlgorithm(info, variable)}")
+        };
     }
 }
