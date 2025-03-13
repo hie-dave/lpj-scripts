@@ -1148,6 +1148,7 @@ def get_dim_with_attr(nc: Dataset, attr_name: str, attr_value: str
 	@param err_txt: Text of the error message.s
 	"""
 	return find_dimension(nc, lambda dim: \
+		hasattr(nc.variables[dim.name], attr_name) and
 		getattr(nc.variables[dim.name], attr_name) == attr_value, err_txt)
 
 
@@ -1158,7 +1159,7 @@ def get_dim_from_std_name(nc, standard_name) -> Dimension:
 	@param nc: The netcdf file.
 	"""
 	return get_dim_with_attr(nc, ATTR_STD_NAME, standard_name,
-		f"Input file contains no dimension with standard name {standard_name}")
+		f"Input file {nc.filepath()} contains no dimension with standard name {standard_name}")
 
 def count_gridpoints(file: str) -> int:
 	"""
@@ -1753,7 +1754,7 @@ def get_var_from_std_name(nc: Dataset, name: str) -> Variable:
 		if hasattr(var, ATTR_STD_NAME):
 			if getattr(var, ATTR_STD_NAME) == name:
 				return var
-	raise ValueError(f"No variable found with standard_name '{name}'")
+	raise ValueError(f"No variable found in file '{nc.filepath()}' with standard_name '{name}'")
 
 def get_first_time(nc: Dataset) -> datetime.datetime:
 	"""
