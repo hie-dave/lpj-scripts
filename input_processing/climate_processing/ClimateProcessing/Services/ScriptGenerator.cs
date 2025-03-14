@@ -544,7 +544,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     /// <returns>The path to the output file.</returns>
     private string GetMergetimeOutputPath(IClimateDataset dataset, ClimateVariable variable)
     {
-        string directory = Path.Combine(_config.OutputDirectory, dataset.GetOutputDirectory(), "tmp");
+        string directory = Path.Combine(_config.OutputDirectory, "tmp", dataset.GetOutputDirectory());
         Directory.CreateDirectory(directory);
         string outFileName = dataset.GenerateOutputFileName(variable);
         return Path.Combine(directory, outFileName);
