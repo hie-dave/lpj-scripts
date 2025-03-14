@@ -642,7 +642,19 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         // must perform them as a separate step to the mergetime.
         if (!string.IsNullOrWhiteSpace(operators))
         {
-            await writer.WriteLineAsync("# Perform corrective operations on input files.");
+            // Write description of processing steps.
+            await writer.WriteLineAsync("# Perform corrective operations on input files:");
+            if (!string.IsNullOrEmpty(aggregation))
+                await writer.WriteLineAsync($"# - Aggregate data from {_config.InputTimeStep} to {_config.OutputTimeStep}.");
+            if (!string.IsNullOrEmpty(conversion))
+                await writer.WriteLineAsync($"# - Convert units from {varInfo.Units} to {targetUnits}.");
+            if (!string.IsNullOrEmpty(rename))
+                await writer.WriteLineAsync($"# - Rename variable from {varInfo.Name} to {outVar}.");
+            if (!string.IsNullOrEmpty(unpack))
+                await writer.WriteLineAsync("# - Unpack data.");
+            if (!string.IsNullOrEmpty(remap))
+                await writer.WriteLineAsync("# - Remap input files to target grid.");
+
             await writer.WriteLineAsync($"for FILE in \"${{{inDirVariable}}}\"/*.nc");
             await writer.WriteLineAsync($"do");
             await writer.WriteLineAsync($"    cdo {GetCDOArgs()} {operators} \"${{FILE}}\" \"${{{remapDirVariable}}}/$(basename \"${{FILE}}\")\"");

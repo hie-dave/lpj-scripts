@@ -24,4 +24,14 @@ public record struct TimeStep
     public static TimeStep Daily => new(24);
 
     public int GetSecondsInPeriod() => Hours * 3600; // hours * seconds per hour
+
+    public override string ToString()
+    {
+        if (Hours < 24)
+            return $"{Hours}hour";
+        else if (Hours == 24)
+            return "day";
+        else
+            return $"{Hours / 24}day";
+    }
 }
