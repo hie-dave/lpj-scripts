@@ -629,31 +629,31 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
 
         await WritePreMerge(writer, dataset, variable);
 
-        // The cdo remap operator takes a single file as input; therefore we
-        // must remap the input files as a separate step to the mergetime.
-        if (!string.IsNullOrEmpty(_config.GridFile))
-        {
-            string remapOperator = GetRemapOperator(varInfo, variable);
-            string remap = $"{remapOperator},\"${{GRID_FILE}}\"";
-            await writer.WriteLineAsync("# Remap input files to target grid.");
-            await writer.WriteLineAsync($"for FILE in \"${{{inDirVariable}}}\"/*.nc");
-            await writer.WriteLineAsync($"do");
-            await writer.WriteLineAsync($"    cdo {GetCDOArgs()} {remap} \"${{FILE}}\" \"${{{remapDirVariable}}}/$(basename \"${{FILE}}\")\"");
-            await writer.WriteLineAsync("done");
-            await writer.WriteLineAsync();
-        }
-
         string rename = GenerateRenameOperator(varInfo.Name, outVar);
         string conversion = string.Join(" ", GenerateUnitConversionOperators(outVar, varInfo.Units, targetUnits, _config.InputTimeStep));
         string aggregation = GenerateTimeAggregationOperator(variable);
         string unpack = "-unpack";
-        string operators = $"{aggregation} {conversion} {rename} {unpack}";
+        string remapOperator = GetRemapOperator(varInfo, variable);
+        string remap = string.IsNullOrEmpty(_config.GridFile) ? string.Empty : $"-{remapOperator},\"${{GRID_FILE}}\"";
+        string operators = $"{aggregation} {conversion} {rename} {unpack} {remap}";
         operators = Regex.Replace(operators, " +", " ");
-        string mergetimeInputDir = string.IsNullOrEmpty(_config.GridFile) ? inDirVariable : remapDirVariable;
+
+        // The above operators all take a single file as input; therefore we
+        // must perform them as a separate step to the mergetime.
+        if (!string.IsNullOrWhiteSpace(operators))
+        {
+            await writer.WriteLineAsync("# Perform corrective operations on input files.");
+            await writer.WriteLineAsync($"for FILE in \"${{{inDirVariable}}}\"/*.nc");
+            await writer.WriteLineAsync($"do");
+            await writer.WriteLineAsync($"    cdo {GetCDOArgs()} {operators} \"${{FILE}}\" \"${{{remapDirVariable}}}/$(basename \"${{FILE}}\")\"");
+            await writer.WriteLineAsync("done");
+            await writer.WriteLineAsync($"{inDirVariable}=\"${{{remapDirVariable}}}\"");
+            await writer.WriteLineAsync();
+        }
 
         // Merge files and perform all operations in a single step.
         await writer.WriteLineAsync("log \"Merging files...\"");
-        await writer.WriteLineAsync($"cdo {GetCDOArgs()} mergetime {operators} \"${{{mergetimeInputDir}}}\"/*.nc \"${{OUT_FILE}}\"");
+        await writer.WriteLineAsync($"cdo {GetCDOArgs()} mergetime \"${{{inDirVariable}}}\"/*.nc \"${{OUT_FILE}}\"");
         await writer.WriteLineAsync("log \"All files merged successfully.\"");
         await writer.WriteLineAsync();
 
