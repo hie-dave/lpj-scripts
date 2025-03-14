@@ -4,6 +4,7 @@ using System.IO;
 using ClimateProcessing.Units;
 using System.Runtime.CompilerServices;
 using ClimateProcessing.Extensions;
+using System.Web;
 
 [assembly: InternalsVisibleTo("ClimateProcessing.Tests")]
 
@@ -509,6 +510,8 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         await writer.WriteLineAsync($"{inDirVariable}=\"{inDir}\"");
         await writer.WriteLineAsync($"TMP_FILE=\"{tmpFile}\"");
         await writer.WriteLineAsync($"OUT_FILE=\"{outFile}\"");
+        if (!string.IsNullOrEmpty(_config.GridFile))
+            await writer.WriteLineAsync($"GRID_FILE=\"{_config.GridFile}\"");
         await writer.WriteLineAsync();
 
         await WritePreMerge(writer, dataset, variable);
@@ -518,7 +521,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         string aggregation = GenerateTimeAggregationOperator(variable);
         string unpack = "-unpack";
         string remapOperator = GetRemapOperator(varInfo, variable);
-        string remap = string.IsNullOrEmpty(_config.GridFile) ? "" : $"-{remapOperator},{_config.GridFile}";
+        string remap = string.IsNullOrEmpty(_config.GridFile) ? "" : $"-{remapOperator},\"${{GRID_FILE}}\"";
         string operators = $"{aggregation} {conversion} {rename} {unpack} {remap}";
         operators = operators.Replace("  ", " ");
 
