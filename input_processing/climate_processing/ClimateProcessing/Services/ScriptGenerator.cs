@@ -48,9 +48,15 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
 
     /// <summary>
     /// Name of the variable containing the directory holding all input files
-    /// used as operands for the mergetime command.
+    /// used as operands for the remap command.
     /// </summary>
     protected const string inDirVariable = "IN_DIR";
+
+    /// <summary>
+    /// Name of the variable containing the directory holding all remapped input
+    /// files used as operands for the mergetime command.
+    /// </summary>
+    protected const string remapDirVariable = "REMAP_DIR";
 
     /// <summary>
     /// List of standard variables and their output names and units.
@@ -609,14 +615,17 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         await writer.WriteLineAsync("# File paths.");
         await writer.WriteLineAsync($"{inDirVariable}=\"{inDir}\"");
         if (!string.IsNullOrEmpty(_config.GridFile))
-            await writer.WriteLineAsync("REMAP_DIR=\"{{WORK_DIR}}/remap\"");
+            await writer.WriteLineAsync($"{remapDirVariable}=\"${{WORK_DIR}}/remap\"");
         await writer.WriteLineAsync($"OUT_FILE=\"{outFile}\"");
         if (!string.IsNullOrEmpty(_config.GridFile))
             await writer.WriteLineAsync($"GRID_FILE=\"{_config.GridFile}\"");
         await writer.WriteLineAsync();
 
         if (!string.IsNullOrEmpty(_config.GridFile))
-            await writer.WriteLineAsync("mkdir -p \"${REMAP_DIR}\"");
+        {
+            await writer.WriteLineAsync($"mkdir -p \"${{{remapDirVariable}}}\"");
+            await writer.WriteLineAsync();
+        }
 
         await WritePreMerge(writer, dataset, variable);
 
@@ -625,12 +634,13 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         if (!string.IsNullOrEmpty(_config.GridFile))
         {
             string remapOperator = GetRemapOperator(varInfo, variable);
-            string remap = $"-{remapOperator},\"${{GRID_FILE}}\"";
+            string remap = $"{remapOperator},\"${{GRID_FILE}}\"";
             await writer.WriteLineAsync("# Remap input files to target grid.");
-            await writer.WriteLineAsync("for FILE in \"${{inDirVariable}}\"/*.nc");
+            await writer.WriteLineAsync($"for FILE in \"${{{inDirVariable}}}\"/*.nc");
             await writer.WriteLineAsync($"do");
-            await writer.WriteLineAsync($"    cdo {GetCDOArgs()} {remap} \"${{FILE}}\" \"${{REMAP_DIR}}/$(basename \"${{FILE}}\")\"");
+            await writer.WriteLineAsync($"    cdo {GetCDOArgs()} {remap} \"${{FILE}}\" \"${{{remapDirVariable}}}/$(basename \"${{FILE}}\")\"");
             await writer.WriteLineAsync("done");
+            await writer.WriteLineAsync();
         }
 
         string rename = GenerateRenameOperator(varInfo.Name, outVar);
@@ -639,7 +649,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         string unpack = "-unpack";
         string operators = $"{aggregation} {conversion} {rename} {unpack}";
         operators = Regex.Replace(operators, " +", " ");
-        string mergetimeInputDir = string.IsNullOrEmpty(_config.GridFile) ? inDirVariable : "${REMAP_DIR}";
+        string mergetimeInputDir = string.IsNullOrEmpty(_config.GridFile) ? inDirVariable : remapDirVariable;
 
         // Merge files and perform all operations in a single step.
         await writer.WriteLineAsync("log \"Merging files...\"");
