@@ -400,12 +400,23 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     /// Get the path to the directory in which the scripts will be stored, and
     /// create it if it doesn't exist.
     /// </summary>
+    /// <param name="outputDirectory">The output directory.</param>
+    /// <returns>The path to the script directory.</returns>
+    private static string GetScriptPath(string outputDirectory)
+    {
+        string scriptPath = Path.Combine(outputDirectory, scriptDirectory);
+        Directory.CreateDirectory(scriptPath);
+        return scriptPath;
+    }
+
+    /// <summary>
+    /// Get the path to the directory in which the scripts will be stored, and
+    /// create it if it doesn't exist.
+    /// </summary>
     /// <returns>The path to the script directory.</returns>
     private string GetScriptPath()
     {
-        string scriptPath = Path.Combine(_config.OutputDirectory, scriptDirectory);
-        Directory.CreateDirectory(scriptPath);
-        return scriptPath;
+        return GetScriptPath(_config.OutputDirectory);
     }
 
     /// <summary>
@@ -521,11 +532,12 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     /// <summary>
     /// Create an empty script file and set execute permissions.
     /// </summary>
+    /// <param name="scriptPath">The path to the directory in which the script will be created.</param>
     /// <param name="scriptName">The name of the script file to create.</param>
     /// <returns>The path to the script file.</returns>
-    private string CreateScript(string scriptName)
+    private static string CreateScript(string scriptPath, string scriptName)
     {
-        string script = Path.Combine(GetScriptPath(), scriptName);
+        string script = Path.Combine(scriptPath, scriptName);
         File.WriteAllText(script, string.Empty);
         if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
             File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -533,6 +545,17 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
             // Windows not supported.
             throw new PlatformNotSupportedException();
         return script;
+    }
+
+    /// <summary>
+    /// Create an empty script file and set execute permissions.
+    /// </summary>
+    /// <param name="scriptName">The name of the script file to create.</param>
+    /// <returns>The path to the script file.</returns>
+    private string CreateScript(string scriptName)
+    {
+        string scriptPath = GetScriptPath();
+        return CreateScript(scriptPath, scriptName);
     }
 
     /// <summary>
@@ -734,6 +757,29 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         else
             await writer.WriteLineAsync("# Input file cannot (necessarily) be deleted yet, since it is required for VPD estimation.");
 
+        return scriptFile;
+    }
+
+    /// <summary>
+    /// Generate a wrapper script that executes the given scripts.
+    /// </summary>
+    /// <param name="scripts">The script files to execute.</param>
+    public static async Task<string> GenerateWrapperScript(string outputDirectory, IEnumerable<string> scripts)
+    {
+        string jobName = "wrapper";
+        string scriptFile = CreateScript(GetScriptPath(outputDirectory), jobName);
+        using TextWriter writer = new StreamWriter(scriptFile);
+
+        await writer.WriteLineAsync("#!/usr/bin/env bash");
+        await writer.WriteLineAsync("# Master-level script which executes all job submission scripts to submit all PBS jobs.");
+        await writer.WriteLineAsync();
+
+        await writer.WriteLineAsync("set -euo pipefail");
+        await writer.WriteLineAsync();
+
+        // Execute all scripts (making assumptions about file permissions).
+        foreach (string script in scripts)
+            await writer.WriteLineAsync($"{script}");
         return scriptFile;
     }
 
