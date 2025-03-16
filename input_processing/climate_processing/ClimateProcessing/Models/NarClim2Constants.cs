@@ -35,7 +35,6 @@ public enum NarClim2Experiment
 {
     Historical,
     SSP126,
-    SSP245,
     SSP370
 }
 
@@ -128,14 +127,12 @@ public static class NarClim2Constants
     {
         public const string Historical = "historical";
         public const string SSP126 = "ssp126";
-        public const string SSP245 = "ssp245";
         public const string SSP370 = "ssp370";
 
         public static string ToString(NarClim2Experiment experiment) => experiment switch
         {
             NarClim2Experiment.Historical => Historical,
             NarClim2Experiment.SSP126 => SSP126,
-            NarClim2Experiment.SSP245 => SSP245,
             NarClim2Experiment.SSP370 => SSP370,
             _ => throw new ArgumentException($"Unknown experiment: {experiment}")
         };
