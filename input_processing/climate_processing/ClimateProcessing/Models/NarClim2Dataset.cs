@@ -230,7 +230,7 @@ public class NarClim2Dataset : IClimateDataset
         IEnumerable<string> inputFiles = GetInputFiles(variable);
 
         if (!inputFiles.Any())
-            throw new InvalidOperationException($"No input files found for variable {GetVariableInfo(variable).Name}");
+            throw new InvalidOperationException($"No input files found for variable {GetVariableInfo(variable).Name} in domain {_domain}, GCM {_gcm}, experiment {_experiment}, RCM {_rcm}.");
 
         DateTime startDate = GetDateFromFilename(inputFiles.First(), true);
         DateTime endDate = GetDateFromFilename(inputFiles.Last(), false);
