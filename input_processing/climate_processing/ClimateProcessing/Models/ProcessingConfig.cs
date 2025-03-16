@@ -3,19 +3,17 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using ClimateProcessing.Units;
+using ClimateProcessing.Services;
 
 namespace ClimateProcessing.Models;
 
-public class ProcessingConfig
+public abstract class ProcessingConfig
 {
     [Option('i', "input-dir", Required = true, HelpText = "Input directory containing climate data files")]
     public string InputDirectory { get; set; } = string.Empty;
 
     [Option('o', "output-dir", Required = false, HelpText = "Output directory for processed files")]
     public string OutputDirectory { get; set; } = string.Empty;
-
-    [Option('d', "dataset-type", Required = true, HelpText = "Type of climate dataset (e.g., narclim2)")]
-    public string DatasetType { get; set; } = string.Empty;
 
     [Option('g', "grid-file", Required = false, HelpText = "Path to target grid file for spatial remapping")]
     public string? GridFile { get; set; }
@@ -117,7 +115,7 @@ public class ProcessingConfig
         return PBSStorageHelper.GetStorageDirectives(paths);
     }
 
-    public void Validate()
+    public virtual void Validate()
     {
         if (!Directory.Exists(InputDirectory))
             throw new ArgumentException($"Input directory does not exist: '{InputDirectory}'");
@@ -147,4 +145,14 @@ public class ProcessingConfig
         if (InputTimeStepHours > OutputTimeStepHours)
             throw new ArgumentException("Input timestep cannot be coarser than the output timestep.");
     }
+
+    /// <summary>
+    /// Creates the datasets that will be used to generate the script.
+    /// </summary>
+    public abstract IEnumerable<NarClim2Dataset> CreateDatasets();
+
+    /// <summary>
+    /// Creates the script generator used to generate the script.
+    /// </summary>
+    public abstract ScriptGenerator CreateScriptGenerator();
 }

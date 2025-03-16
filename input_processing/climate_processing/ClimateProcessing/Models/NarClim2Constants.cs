@@ -102,6 +102,13 @@ public static class NarClim2Constants
             NarClim2Domain.SEAus04 => SEAus04,
             _ => throw new ArgumentException($"Unknown domain: {domain}")
         };
+
+        public static NarClim2Domain FromString(string domain) => domain switch
+        {
+            AUS18 => NarClim2Domain.AUS18,
+            SEAus04 => NarClim2Domain.SEAus04,
+            _ => throw new ArgumentException($"Unknown domain: {domain}")
+        };
     }
 
     public static class GCMNames
@@ -121,6 +128,16 @@ public static class NarClim2Constants
             NarClim2GCM.Ukesm10Ll => Ukesm10Ll,
             _ => throw new ArgumentException($"Unknown GCM: {gcm}")
         };
+
+        public static NarClim2GCM FromString(string gcm) => gcm switch
+        {
+            AccessEsm15 => NarClim2GCM.AccessEsm15,
+            EcEarth3Veg => NarClim2GCM.EcEarth3Veg,
+            MpiEsm12Hr => NarClim2GCM.MpiEsm12Hr,
+            NorEsm2Mm => NarClim2GCM.NorEsm2Mm,
+            Ukesm10Ll => NarClim2GCM.Ukesm10Ll,
+            _ => throw new ArgumentException($"Unknown GCM: {gcm}")
+        };
     }
 
     public static class ExperimentNames
@@ -136,6 +153,14 @@ public static class NarClim2Constants
             NarClim2Experiment.SSP370 => SSP370,
             _ => throw new ArgumentException($"Unknown experiment: {experiment}")
         };
+
+        public static NarClim2Experiment FromString(string experiment) => experiment switch
+        {
+            Historical => NarClim2Experiment.Historical,
+            SSP126 => NarClim2Experiment.SSP126,
+            SSP370 => NarClim2Experiment.SSP370,
+            _ => throw new ArgumentException($"Unknown experiment: {experiment}")
+        };
     }
 
     public static class RCMNames
@@ -147,6 +172,13 @@ public static class NarClim2Constants
         {
             NarClim2RCM.WRF412R3 => WRF412R3,
             NarClim2RCM.WRF412R5 => WRF412R5,
+            _ => throw new ArgumentException($"Unknown RCM: {rcm}")
+        };
+
+        public static NarClim2RCM FromString(string rcm) => rcm switch
+        {
+            WRF412R3 => NarClim2RCM.WRF412R3,
+            WRF412R5 => NarClim2RCM.WRF412R5,
             _ => throw new ArgumentException($"Unknown RCM: {rcm}")
         };
     }

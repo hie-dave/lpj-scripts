@@ -17,7 +17,7 @@ public class NarClim2ScriptGenerator : ScriptGenerator, IScriptGenerator<NarClim
     /// Creates a new instance of the <see cref="NarClim2ScriptGenerator"/> class.
     /// </summary>
     /// <param name="config">The processing configuration.</param>
-    public NarClim2ScriptGenerator(ProcessingConfig config) : base(config)
+    public NarClim2ScriptGenerator(NarClim2Config config) : base(config)
     {
     }
 

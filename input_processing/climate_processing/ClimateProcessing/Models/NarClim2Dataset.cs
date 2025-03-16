@@ -84,27 +84,6 @@ public class NarClim2Dataset : IClimateDataset
             frequency: NarClim2Constants.ParseFrequency(config.InputTimeStep.Hours));
     }
 
-    public static IEnumerable<NarClim2Dataset> CreateAll(ProcessingConfig config)
-    {
-        var domains = Enum.GetValues<NarClim2Domain>();
-        var gcms = Enum.GetValues<NarClim2GCM>();
-        var experiments = Enum.GetValues<NarClim2Experiment>();
-        var rcms = Enum.GetValues<NarClim2RCM>();
-        var frequency = NarClim2Constants.ParseFrequency(config.InputTimeStep.Hours);
-
-        return from domain in domains
-               from gcm in gcms
-               from experiment in experiments
-               from rcm in rcms
-               select new NarClim2Dataset(
-                   inputPath: config.InputDirectory,
-                   domain: domain,
-                   gcm: gcm,
-                   experiment: experiment,
-                   rcm: rcm,
-                   frequency: frequency);
-    }
-
     public string DatasetName =>
         $"NARCliM2.0_{NarClim2Constants.DomainNames.ToString(_domain)}_{NarClim2Constants.GCMNames.ToString(_gcm)}_{NarClim2Constants.ExperimentNames.ToString(_experiment)}_{NarClim2Constants.RCMNames.ToString(_rcm)}";
 

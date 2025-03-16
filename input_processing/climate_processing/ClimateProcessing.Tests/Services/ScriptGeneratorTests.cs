@@ -7,7 +7,7 @@ namespace ClimateProcessing.Tests.Services;
 
 public class ScriptGeneratorTests
 {
-    private readonly ProcessingConfig _config = new()
+    private readonly NarClim2Config _config = new()
     {
         Project = "test",
         Queue = "normal",
@@ -66,7 +66,7 @@ public class ScriptGeneratorTests
         int outputHours,
         bool requiresAggregation)
     {
-        var config = new ProcessingConfig
+        var config = new NarClim2Config
         {
             Project = _config.Project,
             Queue = _config.Queue,
