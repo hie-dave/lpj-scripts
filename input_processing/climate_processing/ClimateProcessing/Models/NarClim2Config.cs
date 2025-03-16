@@ -30,6 +30,15 @@ public class NarClim2Config : ProcessingConfig
         IEnumerable<NarClim2RCM> rcms = GetRCMs();
         NarClim2Frequency frequency = NarClim2Constants.ParseFrequency(InputTimeStep.Hours);
 
+        if (!domains.Any())
+            throw new InvalidOperationException("No domains specified. Use the --domain option to specify at least one domain.");
+        if (!gcms.Any())
+            throw new InvalidOperationException("No GCMs specified. Use the --gcm option to specify at least one GCM.");
+        if (!experiments.Any())
+            throw new InvalidOperationException("No experiments specified. Use the --experiment option to specify at least one experiment.");
+        if (!rcms.Any())
+            throw new InvalidOperationException("No RCMs specified. Use the --rcm option to specify at least one RCM.");
+
         return from domain in domains
                from gcm in gcms
                from experiment in experiments
@@ -55,7 +64,7 @@ public class NarClim2Config : ProcessingConfig
     /// <returns>The list of domains to process.</returns>
     private IEnumerable<NarClim2Domain> GetDomains()
     {
-        if (Domains == null)
+        if (Domains == null || !Domains.Any())
             return Enum.GetValues<NarClim2Domain>();
         return Domains.Select(NarClim2Constants.DomainNames.FromString);
     }
@@ -66,7 +75,7 @@ public class NarClim2Config : ProcessingConfig
     /// <returns>The list of GCMs to process.</returns>
     private IEnumerable<NarClim2GCM> GetGCMs()
     {
-        if (GCMs == null)
+        if (GCMs == null || !GCMs.Any())
             return Enum.GetValues<NarClim2GCM>();
         return GCMs.Select(NarClim2Constants.GCMNames.FromString);
     }
@@ -77,7 +86,7 @@ public class NarClim2Config : ProcessingConfig
     /// <returns>The list of experiments to process.</returns>
     private IEnumerable<NarClim2Experiment> GetExperiments()
     {
-        if (Experiments == null)
+        if (Experiments == null || !Experiments.Any())
             return Enum.GetValues<NarClim2Experiment>();
         return Experiments.Select(NarClim2Constants.ExperimentNames.FromString);
     }
@@ -88,7 +97,7 @@ public class NarClim2Config : ProcessingConfig
     /// <returns>The list of RCMs to process.</returns>
     private IEnumerable<NarClim2RCM> GetRCMs()
     {
-        if (RCMs == null)
+        if (RCMs == null || !RCMs.Any())
             return Enum.GetValues<NarClim2RCM>();
         return RCMs.Select(NarClim2Constants.RCMNames.FromString);
     }
