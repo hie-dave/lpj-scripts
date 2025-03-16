@@ -507,7 +507,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
             if (IsVpdDependency(variable))
             {
                 if (vpdEmpty)
-                    await writer.WriteLineAsync("VPD_DEPS=\"${{JOB_ID}}\"");
+                    await writer.WriteLineAsync("VPD_DEPS=\"${JOB_ID}\"");
                 else
                     await writer.WriteLineAsync($"VPD_DEPS=\"${{VPD_DEPS}}:${{JOB_ID}}\"");
                 vpdEmpty = false;
