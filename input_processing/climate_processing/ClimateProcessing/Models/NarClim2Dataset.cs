@@ -106,7 +106,7 @@ public class NarClim2Dataset : IClimateDataset
     }
 
     public string DatasetName =>
-        $"NARCliM2.0_{NarClim2Constants.GCMNames.ToString(_gcm)}_{NarClim2Constants.ExperimentNames.ToString(_experiment)}_{NarClim2Constants.RCMNames.ToString(_rcm)}";
+        $"NARCliM2.0_{NarClim2Constants.DomainNames.ToString(_domain)}_{NarClim2Constants.GCMNames.ToString(_gcm)}_{NarClim2Constants.ExperimentNames.ToString(_experiment)}_{NarClim2Constants.RCMNames.ToString(_rcm)}";
 
     public string GetInputFilesDirectory(ClimateVariable variable)
     {
