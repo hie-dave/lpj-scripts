@@ -20,8 +20,8 @@ public static class UnitConverter
 
     private static readonly Dictionary<(string From, string To), ConversionDefinition> ConversionExpressions = new()
     {
-        [("K", "degC")] = new("subc,273.15", false),
-        [("kg m-2 s-1", "mm")] = new("mulc,{timestep}", true)  // Multiply by seconds in period to get accumulation
+        [("K", "degC")] = new("-subc,273.15", false),
+        [("kg m-2 s-1", "mm")] = new("-mulc,{timestep}", true)  // Multiply by seconds in period to get accumulation
     };
 
     public record ConversionResult(
