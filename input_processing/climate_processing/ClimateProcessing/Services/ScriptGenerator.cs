@@ -129,7 +129,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
                 inputUnits,
                 targetUnits,
                 timeStep);
-            operators.Add($"-expr,'{expression}'");
+            operators.Add(expression);
         }
 
         if (result.RequiresRenaming)
