@@ -754,7 +754,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         if (cleanup)
         {
             await writer.WriteLineAsync("# Delete temporary file.");
-            await writer.WriteLineAsync($"rm -f \"${{TMP_FILE}}\"");
+            await writer.WriteLineAsync($"rm -f \"${{IN_FILE}}\"");
             await writer.WriteLineAsync();
         }
         else
