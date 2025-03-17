@@ -172,6 +172,9 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         // 2. Calculate actual vapor pressure (_e)
         // 3. Calculate VPD as (_esat - _e) / 1000 to convert to kPa
 
+        // Other assumptions:
+        // - Temperature is assumed to be in ℃. (TODO: dynamic equations based on actual tas output units)
+        // - Temperature variable name is assumed to be tas. fixme!
         var esatEquation = method switch
         {
             // Magnus equation (default)
@@ -196,7 +199,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
             _ => throw new ArgumentException($"Unsupported VPD calculation method: {method}")
         };
 
-        await writer.WriteLineAsync($@"# Saturation vapor pressure (Pa)");
+        await writer.WriteLineAsync($@"# Saturation vapor pressure (Pa) (tas in degC)");
         await writer.WriteLineAsync(esatEquation);
         await writer.WriteLineAsync("# Actual vapor pressure (Pa)");
         await writer.WriteLineAsync("_e=(huss*ps)/(0.622+0.378*huss)");
