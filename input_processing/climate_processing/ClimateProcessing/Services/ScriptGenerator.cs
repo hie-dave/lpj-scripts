@@ -301,7 +301,6 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         await writer.WriteLineAsync($"log \"Calculating VPD...\"");
         await writer.WriteLineAsync($"cdo {GetCDOArgs()} exprf,\"${{EQN_FILE}}\" -merge {inFiles} \"${{OUT_FILE}}\"");
         await writer.WriteLineAsync($"log \"VPD calculation completed successfully.\"");
-        await writer.WriteLineAsync();
 
         // We can't delete the intermediate files yet, because they are required
         // by the rechunk_X jobs, which may not have run yet.
