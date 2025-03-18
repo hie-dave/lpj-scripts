@@ -57,8 +57,8 @@ public abstract class ProcessingConfig
     [Option("version", Default = ModelVersion.Dave, HelpText = "The version of LPJ-Guess by which the data is going to be used.")]
     public ModelVersion Version { get; set; } = ModelVersion.Dave;
 
-    private TimeStep inputTimeStep = new TimeStep(0);
-    private TimeStep outputTimeStep = new TimeStep(0);
+    private TimeStep inputTimeStep = TimeStep.Hourly;
+    private TimeStep outputTimeStep = TimeStep.ThreeHourly;
 
     [Option("input-timestep", HelpText = "Input time step in hours")]
     public int InputTimeStepHours
@@ -107,20 +107,8 @@ public abstract class ProcessingConfig
         if (!string.IsNullOrEmpty(GridFile) && !File.Exists(GridFile))
             throw new ArgumentException($"Grid file does not exist: {GridFile}");
 
-        if (Version == ModelVersion.Dave)
+        if (Version == ModelVersion.Trunk)
         {
-            if (InputTimeStepHours == 0)
-                throw new ArgumentException("Input timestep must be specified when using dave version");
-            if (OutputTimeStepHours == 0)
-                throw new ArgumentException("Output timestep must be specified when using dave version");
-        }
-        else if (Version == ModelVersion.Trunk)
-        {
-            if (InputTimeStepHours != 0)
-                throw new ArgumentException("Input timestep must not be specified when using trunk version (it is ignored, as daily will always be used).");
-            if (OutputTimeStepHours != 0)
-                throw new ArgumentException("Output timestep must not be specified when using trunk version (it is ignored, as daily will always be used).");
-
             // Always use a daily timestep.
             inputTimeStep = TimeStep.Daily;
             outputTimeStep = TimeStep.Daily;
