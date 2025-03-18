@@ -61,27 +61,39 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     /// <summary>
     /// List of standard variables and their output names and units.
     /// </summary>
-    private static readonly Dictionary<ClimateVariable, (string outName, string outUnits)> _standardVariables = new()
+    private static readonly Dictionary<ClimateVariable, string> outputNames = new()
     {
-        { ClimateVariable.SpecificHumidity, ("huss", "1") },
-        { ClimateVariable.SurfacePressure, ("ps", "Pa") },
-        { ClimateVariable.ShortwaveRadiation, ("rsds", "W m-2") },
-        { ClimateVariable.WindSpeed, ("sfcWind", "m s-1") },
-        { ClimateVariable.Temperature, ("tas", "degC") },
-        { ClimateVariable.Precipitation, ("pr", "mm") }
+        { ClimateVariable.SpecificHumidity, "huss" }, // "1"
+        { ClimateVariable.SurfacePressure, "ps" }, // "Pa"
+        { ClimateVariable.ShortwaveRadiation, "rsds" }, // "W m-2"
+        { ClimateVariable.WindSpeed, "sfcWind" }, // "m s-1"
+        { ClimateVariable.Temperature, "tas" }, // "degC"
+        { ClimateVariable.Precipitation, "pr" }, // "mm"
+        { ClimateVariable.MaxTemperature, "tasmax" }, // "degC"
+        { ClimateVariable.MinTemperature, "tasmin" }, // "degC"
     };
 
-    /// <summary>
-    /// Gets the standard configuration for the specified variable.
-    /// </summary>
-    /// <param name="variable">The variable.</param>
-    /// <returns>The standard configuration.</returns>
-    private (string outName, string outUnits) GetStandardConfig(ClimateVariable variable)
+    private static readonly Dictionary<ClimateVariable, (string units, AggregationMethod aggregation)> daveVariables = new()
     {
-        if (!_standardVariables.TryGetValue(variable, out var config))
-            throw new ArgumentException($"No configuration found for variable {variable}");
-        return config;
-    }
+        { ClimateVariable.Temperature, ("degC", AggregationMethod.Mean) },
+        { ClimateVariable.Precipitation, ("mm", AggregationMethod.Sum) },
+        { ClimateVariable.SpecificHumidity, ("1", AggregationMethod.Mean) },
+        { ClimateVariable.SurfacePressure, ("Pa", AggregationMethod.Mean) },
+        { ClimateVariable.ShortwaveRadiation, ("W m-2", AggregationMethod.Mean) },
+        { ClimateVariable.WindSpeed, ("m s-1", AggregationMethod.Mean) }
+    };
+
+    private static readonly Dictionary<ClimateVariable, (string units, AggregationMethod aggregation)> trunkVariables = new()
+    {
+        { ClimateVariable.Temperature, ("K", AggregationMethod.Mean) },
+        { ClimateVariable.Precipitation, ("mm", AggregationMethod.Sum) },
+        { ClimateVariable.SpecificHumidity, ("1", AggregationMethod.Mean) },
+        { ClimateVariable.SurfacePressure, ("Pa", AggregationMethod.Mean) },
+        { ClimateVariable.ShortwaveRadiation, ("W m-2", AggregationMethod.Mean) },
+        { ClimateVariable.WindSpeed, ("m s-1", AggregationMethod.Mean) },
+        { ClimateVariable.MaxTemperature, ("K", AggregationMethod.Maximum) },
+        { ClimateVariable.MinTemperature, ("K", AggregationMethod.Minimum) },
+    };
 
     /// <summary>
     /// Creates a new script generator.
@@ -90,6 +102,19 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     public ScriptGenerator(ProcessingConfig config)
     {
         _config = config;
+    }
+
+    /// <summary>
+    /// Gets the standard configuration for the specified variable.
+    /// </summary>
+    /// <param name="variable">The variable.</param>
+    /// <returns>The standard configuration.</returns>
+    private (string outName, string outUnits) GetStandardConfig(ClimateVariable variable)
+    {
+        if (!outputNames.TryGetValue(variable, out string? outName))
+            throw new ArgumentException($"No configuration found for variable {variable}");
+        string outUnits = GetTargetUnits(variable);
+        return (outName, outUnits);
     }
 
     /// <summary>
@@ -153,7 +178,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         // Calculate the number of timesteps to aggregate
         int stepsToAggregate = _config.OutputTimeStep.Hours / _config.InputTimeStep.Hours;
 
-        var aggregationMethod = _config.GetAggregationMethod(variable);
+        var aggregationMethod = GetAggregationMethod(variable);
         var @operator = aggregationMethod.ToCdoOperator(_config.OutputTimeStep);
 
         return $"-{@operator},{stepsToAggregate}";
@@ -354,7 +379,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         }
 
         // Add storage directives if required
-        var storageDirectives = _config.GetRequiredStorageDirectives();
+        var storageDirectives = GetRequiredStorageDirectives();
         if (storageDirectives.Any())
             await writer.WriteLineAsync(PBSStorageHelper.FormatStorageDirectives(storageDirectives));
 
@@ -480,6 +505,48 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     }
 
     /// <summary>
+    /// Get the target units for the specified variable.
+    /// </summary>
+    /// <param name="variable">The variable.</param>
+    /// <returns>The target units.</returns>
+    /// <exception cref="ArgumentException">If no configuration is found for the specified variable.</exception>
+    public string GetTargetUnits(ClimateVariable variable)
+    {
+        var variables = GetVariables();
+        if (!variables.TryGetValue(variable, out (string units, AggregationMethod _) config))
+            throw new ArgumentException($"No configuration found for variable {variable}");
+        return config.units;
+    }
+
+    /// <summary>
+    /// Get the aggregation method required for the processing of the specified variable.
+    /// </summary>
+    /// <param name="variable">The variable.</param>
+    /// <returns>The aggregation method.</returns>
+    /// <exception cref="ArgumentException">If no configuration is found for the specified variable.</exception>
+    public AggregationMethod GetAggregationMethod(ClimateVariable variable)
+    {
+        var variables = GetVariables();
+        if (!variables.TryGetValue(variable, out var config))
+            throw new ArgumentException($"No configuration found for variable {variable}");
+        return config.aggregation;
+    }
+
+    /// <summary>
+    /// Get the PBS storage directives required for the processing.
+    /// </summary>
+    /// <returns>The required storage directives.</returns>
+    public IEnumerable<PBSStorageDirective> GetRequiredStorageDirectives()
+    {
+        List<string> paths = [_config.InputDirectory];
+        if (!string.IsNullOrEmpty(_config.OutputDirectory))
+            paths.Add(_config.OutputDirectory);
+        if (!string.IsNullOrEmpty(_config.GridFile))
+            paths.Add(_config.GridFile);
+        return PBSStorageHelper.GetStorageDirectives(paths);
+    }
+
+    /// <summary>
     /// Generate processing scripts, and return the path to the top-level script.
     /// </summary>
     /// <param name="dataset">The dataset.</param>
@@ -505,7 +572,8 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         // Process each variable.
         Dictionary<ClimateVariable, string> mergetimeScripts = new();
         Dictionary<ClimateVariable, string> rechunkScripts = new();
-        foreach (ClimateVariable variable in Enum.GetValues<ClimateVariable>())
+        ClimateVariable[] variables = GetVariables().Keys.ToArray();
+        foreach (ClimateVariable variable in variables)
         {
             string mergetime = await GenerateVariableMergeScript(dataset, variable);
             string rechunk = await GenerateVariableRechunkScript(dataset, variable);
@@ -521,16 +589,17 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         // Add job submission logic.
         await writer.WriteLineAsync("echo \"Submitting jobs...\"");
         await writer.WriteLineAsync();
+        bool requiresVpd = _config.Version == ModelVersion.Dave;
         bool vpdEmpty = true;
         bool allDepsEmpty = true;
 
-        foreach (ClimateVariable variable in Enum.GetValues<ClimateVariable>())
+        foreach (ClimateVariable variable in variables)
         {
             // Submit mergetime script.
             await writer.WriteLineAsync($"JOB_ID=\"$(qsub \"{mergetimeScripts[variable]}\")\"");
 
             // Append this job to the list of VPD dependencies if necessary.
-            if (IsVpdDependency(variable))
+            if (requiresVpd && IsVpdDependency(variable))
             {
                 if (vpdEmpty)
                     await writer.WriteLineAsync("VPD_DEPS=\"${JOB_ID}\"");
@@ -540,7 +609,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
             }
 
             bool variableRequired = true;
-            if (variable == ClimateVariable.SpecificHumidity /*&& _config.IsDAVE*/)
+            if (variable == ClimateVariable.SpecificHumidity && _config.Version == ModelVersion.Dave)
                 variableRequired = false;
 
             if (variableRequired)
@@ -566,10 +635,13 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         }
 
         // Submit VPD scripts.
-        await writer.WriteLineAsync($"JOB_ID=\"$(qsub -W depend=afterok:\"${{VPD_DEPS}}\" \"{vpdScript}\")\"");
-        await writer.WriteLineAsync($"JOB_ID=\"$(qsub -W depend=afterok:\"${{JOB_ID}}\" \"{vpdRechunkScript}\"");
-        await writer.WriteLineAsync($"ALL_JOBS=\"${{ALL_JOBS}}:${{JOB_ID}}\"");
-        await writer.WriteLineAsync();
+        if (requiresVpd)
+        {
+            await writer.WriteLineAsync($"JOB_ID=\"$(qsub -W depend=afterok:\"${{VPD_DEPS}}\" \"{vpdScript}\")\"");
+            await writer.WriteLineAsync($"JOB_ID=\"$(qsub -W depend=afterok:\"${{JOB_ID}}\" \"{vpdRechunkScript}\"");
+            await writer.WriteLineAsync($"ALL_JOBS=\"${{ALL_JOBS}}:${{JOB_ID}}\"");
+            await writer.WriteLineAsync();
+        }
 
         // Submit cleanup script.
         await writer.WriteLineAsync($"qsub -W depend=afterok:\"${{ALL_JOBS}}\" \"{cleanupScript}\"");
@@ -579,6 +651,21 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         await writer.WriteLineAsync();
 
         return scriptFile;
+    }
+
+    /// <summary>
+    /// Get the climate variables required by the version of the model specified
+    /// by the current configuration.
+    /// </summary>
+    /// <returns>The climate variables required by the model.</returns>
+    /// <exception cref="ArgumentException">Thrown when an invalid version is specified.</exception>
+    private IDictionary<ClimateVariable, (string units, AggregationMethod aggregation)> GetVariables()
+    {
+        if (_config.Version == ModelVersion.Dave)
+            return daveVariables;
+        if (_config.Version == ModelVersion.Trunk)
+            return trunkVariables;
+        throw new ArgumentException($"Invalid version: {_config.Version}");
     }
 
     /// <summary>

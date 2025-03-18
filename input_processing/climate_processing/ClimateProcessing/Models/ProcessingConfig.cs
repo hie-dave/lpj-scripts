@@ -54,8 +54,11 @@ public abstract class ProcessingConfig
     [Option("vpd-method", Default = VPDMethod.Magnus, HelpText = "Method to calculate VPD: Magnus (default), Buck1981, AlduchovEskridge1996, AllenFAO1998, or Sonntag1990")]
     public VPDMethod VPDMethod { get; set; } = VPDMethod.Magnus;
 
-    private TimeStep inputTimeStep = TimeStep.Hourly;
-    private TimeStep outputTimeStep = TimeStep.ThreeHourly;
+    [Option("version", Default = ModelVersion.Dave, HelpText = "The version of LPJ-Guess by which the data is going to be used.")]
+    public ModelVersion Version { get; set; } = ModelVersion.Dave;
+
+    private TimeStep inputTimeStep = new TimeStep(0);
+    private TimeStep outputTimeStep = new TimeStep(0);
 
     [Option("input-timestep", HelpText = "Input time step in hours")]
     public int InputTimeStepHours
@@ -76,44 +79,6 @@ public abstract class ProcessingConfig
 
     public TimeStep InputTimeStep => inputTimeStep;
     public TimeStep OutputTimeStep => outputTimeStep;
-
-    private static readonly Dictionary<ClimateVariable, (string units, AggregationMethod aggregation)> DefaultVariableConfig = new()
-    {
-        { ClimateVariable.Temperature, ("degC", AggregationMethod.Mean) },
-        { ClimateVariable.Precipitation, ("mm", AggregationMethod.Sum) },
-        { ClimateVariable.SpecificHumidity, ("1", AggregationMethod.Mean) },
-        { ClimateVariable.SurfacePressure, ("Pa", AggregationMethod.Mean) },
-        { ClimateVariable.ShortwaveRadiation, ("W m-2", AggregationMethod.Mean) },
-        { ClimateVariable.WindSpeed, ("m s-1", AggregationMethod.Mean) }
-    };
-
-    public string GetTargetUnits(ClimateVariable variable)
-    {
-        if (!DefaultVariableConfig.TryGetValue(variable, out var config))
-        {
-            throw new ArgumentException($"No configuration found for variable {variable}");
-        }
-        return config.units;
-    }
-
-    public AggregationMethod GetAggregationMethod(ClimateVariable variable)
-    {
-        if (!DefaultVariableConfig.TryGetValue(variable, out var config))
-        {
-            throw new ArgumentException($"No configuration found for variable {variable}");
-        }
-        return config.aggregation;
-    }
-
-    public IEnumerable<PBSStorageDirective> GetRequiredStorageDirectives()
-    {
-        List<string> paths = [InputDirectory];
-        if (!string.IsNullOrEmpty(OutputDirectory))
-            paths.Add(OutputDirectory);
-        if (!string.IsNullOrEmpty(GridFile))
-            paths.Add(GridFile);
-        return PBSStorageHelper.GetStorageDirectives(paths);
-    }
 
     public virtual void Validate()
     {
@@ -141,6 +106,25 @@ public abstract class ProcessingConfig
 
         if (!string.IsNullOrEmpty(GridFile) && !File.Exists(GridFile))
             throw new ArgumentException($"Grid file does not exist: {GridFile}");
+
+        if (Version == ModelVersion.Dave)
+        {
+            if (InputTimeStepHours == 0)
+                throw new ArgumentException("Input timestep must be specified when using dave version");
+            if (OutputTimeStepHours == 0)
+                throw new ArgumentException("Output timestep must be specified when using dave version");
+        }
+        else if (Version == ModelVersion.Trunk)
+        {
+            if (InputTimeStepHours != 0)
+                throw new ArgumentException("Input timestep must not be specified when using trunk version (it is ignored, as daily will always be used).");
+            if (OutputTimeStepHours != 0)
+                throw new ArgumentException("Output timestep must not be specified when using trunk version (it is ignored, as daily will always be used).");
+
+            // Always use a daily timestep.
+            inputTimeStep = TimeStep.Daily;
+            outputTimeStep = TimeStep.Daily;
+        }
 
         if (InputTimeStepHours > OutputTimeStepHours)
             throw new ArgumentException("Input timestep cannot be coarser than the output timestep.");
