@@ -386,6 +386,9 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         // Add blank line after header
         await writer.WriteLineAsync("");
 
+        await writer.WriteLineAsync("# This script was automatically generated. Do not modify.");
+        await writer.WriteLineAsync();
+
         // Error handling.
         await writer.WriteLineAsync("# Exit immediately if any command fails.");
         await writer.WriteLineAsync("set -euo pipefail");
@@ -638,7 +641,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         if (requiresVpd)
         {
             await writer.WriteLineAsync($"JOB_ID=\"$(qsub -W depend=afterok:\"${{VPD_DEPS}}\" \"{vpdScript}\")\"");
-            await writer.WriteLineAsync($"JOB_ID=\"$(qsub -W depend=afterok:\"${{JOB_ID}}\" \"{vpdRechunkScript}\"");
+            await writer.WriteLineAsync($"JOB_ID=\"$(qsub -W depend=afterok:\"${{JOB_ID}}\" \"{vpdRechunkScript}\")\"");
             await writer.WriteLineAsync($"ALL_JOBS=\"${{ALL_JOBS}}:${{JOB_ID}}\"");
             await writer.WriteLineAsync();
         }
