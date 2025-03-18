@@ -864,7 +864,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         await writer.WriteLineAsync("# File paths.");
         string workDir = GetWorkingPath(dataset);
         await writer.WriteLineAsync($"IN_DIR=\"{workDir}\"");
-        await writer.WriteLineAsync("rm -rf \"${{IN_DIR}}\"");
+        await writer.WriteLineAsync("rm -rf \"${IN_DIR}\"");
         return scriptFile;
     }
 
