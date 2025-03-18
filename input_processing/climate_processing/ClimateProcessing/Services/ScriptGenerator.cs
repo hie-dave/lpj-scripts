@@ -402,6 +402,25 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     }
 
     /// <summary>
+    /// Get the path to the working directory for a dataset.
+    /// </summary>
+    /// <param name="dataset">The dataset.</param>
+    /// <returns>The working directory path.</returns>
+    private string GetWorkingPath(IClimateDataset dataset)
+    {
+        return Path.Combine(_config.OutputDirectory, "tmp", dataset.GetOutputDirectory());
+    }
+
+    /// <summary>
+    /// Get the directory path into which output file tree will be generated.
+    /// </summary>
+    /// <returns>The output directory path.</returns>
+    private string GetOutputPath()
+    {
+        return _config.OutputDirectory;
+    }
+
+    /// <summary>
     /// Get the path to the directory in which the scripts will be stored, and
     /// create it if it doesn't exist.
     /// </summary>
@@ -497,11 +516,13 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
 
         string vpdScript = await GenerateVPDScript(dataset);
         string vpdRechunkScript = await GenerateVPDRechunkScript(dataset);
+        string cleanupScript = await GenerateCleanupScript(dataset);
 
         // Add job submission logic.
         await writer.WriteLineAsync("echo \"Submitting jobs...\"");
         await writer.WriteLineAsync();
         bool vpdEmpty = true;
+        bool allDepsEmpty = true;
 
         foreach (ClimateVariable variable in Enum.GetValues<ClimateVariable>())
         {
@@ -518,14 +539,40 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
                 vpdEmpty = false;
             }
 
-            // Submit rechunk script.
-            await writer.WriteLineAsync($"qsub -W depend=afterok:\"${{JOB_ID}}\" \"{rechunkScripts[variable]}\"");
+            bool variableRequired = true;
+            if (variable == ClimateVariable.SpecificHumidity /*&& _config.IsDAVE*/)
+                variableRequired = false;
+
+            if (variableRequired)
+            {
+                // DAVE version doesn't require specific humidity. We need to do
+                // the mergetime step, because that's used as an input for the
+                // VPD computation, but the quantity itself is not used by the
+                // model and we therefore don't need to rechunk it.
+
+                // Submit rechunk script.
+                await writer.WriteLineAsync($"JOB_ID=\"$(qsub -W depend=afterok:\"${{JOB_ID}}\" \"{rechunkScripts[variable]}\")\"");
+
+                // Append the ID of the rechunk job to the "all jobs" list.
+                if (allDepsEmpty)
+                {
+                    await writer.WriteLineAsync("ALL_JOBS=\"${{JOB_ID}}\"");
+                    allDepsEmpty = false;
+                }
+                else
+                    await writer.WriteLineAsync($"ALL_JOBS=\"${{ALL_JOBS}}:${{JOB_ID}}\"");
+            }
             await writer.WriteLineAsync();
         }
 
         // Submit VPD scripts.
         await writer.WriteLineAsync($"JOB_ID=\"$(qsub -W depend=afterok:\"${{VPD_DEPS}}\" \"{vpdScript}\")\"");
-        await writer.WriteLineAsync($"qsub -W depend=afterok:\"${{JOB_ID}}\" \"{vpdRechunkScript}\"");
+        await writer.WriteLineAsync($"JOB_ID=\"$(qsub -W depend=afterok:\"${{JOB_ID}}\" \"{vpdRechunkScript}\"");
+        await writer.WriteLineAsync($"ALL_JOBS=\"${{ALL_JOBS}}:${{JOB_ID}}\"");
+        await writer.WriteLineAsync();
+
+        // Submit cleanup script.
+        await writer.WriteLineAsync($"qsub -W depend=afterok:\"${{ALL_JOBS}}\" \"{cleanupScript}\"");
         await writer.WriteLineAsync();
 
         await writer.WriteLineAsync("echo \"Job submission complete.\"");
@@ -572,19 +619,10 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     /// <returns>The path to the output file.</returns>
     private string GetMergetimeOutputPath(IClimateDataset dataset, ClimateVariable variable)
     {
-        string directory = Path.Combine(_config.OutputDirectory, "tmp", dataset.GetOutputDirectory());
+        string directory = GetWorkingPath(dataset);
         Directory.CreateDirectory(directory);
         string outFileName = dataset.GenerateOutputFileName(variable);
         return Path.Combine(directory, outFileName);
-    }
-
-    /// <summary>
-    /// Get the directory path into which output file tree will be generated.
-    /// </summary>
-    /// <returns>The output directory path.</returns>
-    private string GetOutputPath()
-    {
-        return _config.OutputDirectory;
     }
 
     /// <summary>
@@ -718,6 +756,25 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         // Remapped files are in jobfs, and will be automatically deleted upon
         // job completion (or failure).
 
+        return scriptFile;
+    }
+
+    /// <summary>
+    /// Generate a cleanup script for this job.
+    /// </summary>
+    /// <param name="dataset">The dataset to process.</param>
+    /// <returns>The path to the script file.</returns>
+    private async Task<string> GenerateCleanupScript(IClimateDataset dataset)
+    {
+        string jobName = $"cleanup_{dataset.DatasetName}";
+        string scriptFile = CreateScript(jobName);
+        using TextWriter writer = new StreamWriter(scriptFile);
+        await WritePBSHeader(writer, jobName, lightweight: true);
+
+        await writer.WriteLineAsync("# File paths.");
+        string workDir = GetWorkingPath(dataset);
+        await writer.WriteLineAsync($"IN_DIR=\"{workDir}\"");
+        await writer.WriteLineAsync("rm -rf \"${{IN_DIR}}\"");
         return scriptFile;
     }
 
