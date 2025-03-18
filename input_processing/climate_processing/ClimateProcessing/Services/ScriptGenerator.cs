@@ -386,8 +386,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         // Add blank line after header
         await writer.WriteLineAsync("");
 
-        await writer.WriteLineAsync("# This script was automatically generated. Do not modify.");
-        await writer.WriteLineAsync();
+        await WriteAutoGenerateHeader(writer);
 
         // Error handling.
         await writer.WriteLineAsync("# Exit immediately if any command fails.");
@@ -564,6 +563,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         await writer.WriteLineAsync("#!/usr/bin/env bash");
         await writer.WriteLineAsync($"# Job submission script for: {dataset.DatasetName}");
         await writer.WriteLineAsync();
+        await WriteAutoGenerateHeader(writer);
         await writer.WriteLineAsync("# Exit immediately if any command fails.");
         await writer.WriteLineAsync("set -euo pipefail");
         await writer.WriteLineAsync();
@@ -938,6 +938,17 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     }
 
     /// <summary>
+    /// Write a comment to a script which indicates that it was automatically
+    /// generated.
+    /// </summary>
+    /// <param name="writer">The text writer to which the comment will be written.</param>
+    private static async Task WriteAutoGenerateHeader(TextWriter writer)
+    {
+        await writer.WriteLineAsync("# This script was automatically generated. Do not modify.");
+        await writer.WriteLineAsync();
+    }
+
+    /// <summary>
     /// Generate a wrapper script that executes the given scripts.
     /// </summary>
     /// <param name="scripts">The script files to execute.</param>
@@ -950,6 +961,8 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         await writer.WriteLineAsync("#!/usr/bin/env bash");
         await writer.WriteLineAsync("# Master-level script which executes all job submission scripts to submit all PBS jobs.");
         await writer.WriteLineAsync();
+
+        await WriteAutoGenerateHeader(writer);
 
         await writer.WriteLineAsync("set -euo pipefail");
         await writer.WriteLineAsync();
