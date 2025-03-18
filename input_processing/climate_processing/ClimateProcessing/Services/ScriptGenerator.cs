@@ -200,11 +200,11 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         };
 
         await writer.WriteLineAsync($@"# Saturation vapor pressure (Pa) (tas in degC)");
-        await writer.WriteLineAsync(esatEquation);
+        await writer.WriteLineAsync($"{esatEquation};");
         await writer.WriteLineAsync("# Actual vapor pressure (Pa)");
-        await writer.WriteLineAsync("_e=(huss*ps)/(0.622+0.378*huss)");
+        await writer.WriteLineAsync("_e=(huss*ps)/(0.622+0.378*huss);");
         await writer.WriteLineAsync("# VPD (kPa)");
-        await writer.WriteLineAsync("vpd=(_esat-_e)/1000");
+        await writer.WriteLineAsync("vpd=(_esat-_e)/1000;");
     }
 
     /// <summary>
@@ -580,6 +580,15 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     }
 
     /// <summary>
+    /// Get the directory path into which output file tree will be generated.
+    /// </summary>
+    /// <returns>The output directory path.</returns>
+    private string GetOutputPath()
+    {
+        return _config.OutputDirectory;
+    }
+
+    /// <summary>
     /// Generate a path that will be used as the output file for a particular
     /// variable in a dataset.
     /// </summary>
@@ -588,10 +597,19 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     /// <returns>The path to the output file.</returns>
     private string GetOutputFilePath(IClimateDataset dataset, ClimateVariable variable)
     {
-        string directory = Path.Combine(_config.OutputDirectory, dataset.GetOutputDirectory());
+        string directory = Path.Combine(GetOutputPath(), dataset.GetOutputDirectory());
         Directory.CreateDirectory(directory);
         string outFileName = dataset.GenerateOutputFileName(variable);
         return Path.Combine(directory, outFileName);
+    }
+
+    /// <summary>
+    /// Get the path to the checksum file.
+    /// </summary>
+    /// <returns>The path to the checksum file.</returns>
+    private string GetChecksumFilePath()
+    {
+        return Path.Combine(GetOutputPath(), "sha512sums.txt");
     }
 
     /// <summary>
@@ -750,6 +768,13 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         await writer.WriteLineAsync("log \"Rechunking files...\"");
         await writer.WriteLineAsync($"ncpdq -O {ordering} {chunking} {compression} \"${{IN_FILE}}\" \"${{OUT_FILE}}\"");
         await writer.WriteLineAsync("log \"All files rechunked successfully.\"");
+        await writer.WriteLineAsync();
+
+        // Calculate checksum.
+        await writer.WriteLineAsync("# Calculate checksum.");
+        await writer.WriteLineAsync($"log \"Calculating checksum...\"");
+        await writer.WriteLineAsync($"sha512sum \"${{OUT_FILE}}\" >>\"{GetChecksumFilePath()}\"");
+        await writer.WriteLineAsync("log \"Checksum calculation completed successfully.\"");
         await writer.WriteLineAsync();
 
         // We can now delete the temporary input file, but only if it's not also
