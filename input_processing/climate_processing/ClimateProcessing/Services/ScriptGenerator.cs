@@ -625,7 +625,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
                 // Append the ID of the rechunk job to the "all jobs" list.
                 if (allDepsEmpty)
                 {
-                    await writer.WriteLineAsync("ALL_JOBS=\"${{JOB_ID}}\"");
+                    await writer.WriteLineAsync("ALL_JOBS=\"${JOB_ID}\"");
                     allDepsEmpty = false;
                 }
                 else
