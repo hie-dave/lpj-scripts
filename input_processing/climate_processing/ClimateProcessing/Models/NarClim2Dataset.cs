@@ -85,13 +85,6 @@ public class NarClim2Dataset : IClimateDataset
         _frequency = frequency;
     }
 
-    public static NarClim2Dataset Create(ProcessingConfig config)
-    {
-        return new NarClim2Dataset(
-            inputPath: config.InputDirectory,
-            frequency: NarClim2Constants.ParseFrequency(config.InputTimeStep.Hours));
-    }
-
     public string DatasetName =>
         $"NARCliM2.0_{NarClim2Constants.DomainNames.ToString(_domain)}_{NarClim2Constants.GCMNames.ToString(_gcm)}_{NarClim2Constants.ExperimentNames.ToString(_experiment)}_{NarClim2Constants.RCMNames.ToString(_rcm)}";
 
@@ -115,7 +108,7 @@ public class NarClim2Dataset : IClimateDataset
 
     public IEnumerable<string> GetInputFiles(ClimateVariable variable)
     {
-        if (variable == ClimateVariable.MaxTemperature || variable == ClimateVariable.MinTemperature && _frequency != NarClim2Frequency.Day)
+        if ( (variable == ClimateVariable.MaxTemperature || variable == ClimateVariable.MinTemperature) && _frequency != NarClim2Frequency.Day)
             throw new ArgumentException($"Variable {variable} not supported with frequency {_frequency}");
 
         string dir = GetInputFilesDirectory(variable);
