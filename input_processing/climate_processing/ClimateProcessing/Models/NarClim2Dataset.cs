@@ -49,10 +49,18 @@ public class NarClim2Dataset : IClimateDataset
         { ClimateVariable.Temperature, ("tas", "K") },
 
         // Precipitation
-        { ClimateVariable.Precipitation, ("pr", "kg m-2 s-1") }
+        { ClimateVariable.Precipitation, ("pr", "kg m-2 s-1") },
+
+        // Daily maximum near-surface air temperature
+        { ClimateVariable.MaxTemperature, ("tasmax", "K") },
+
+        // Daily minimum near-surface air temperature
+        { ClimateVariable.MinTemperature, ("tasmin", "K") },
     };
 
     /// <summary>
+    /// Create a new instance of the NARCliM2 dataset.
+    /// </summary>
     /// Create a new instance of the NARCliM2 dataset.
     /// </summary>
     /// <param name="inputPath">Path to the NARCliM2 dataset.</param>
@@ -107,6 +115,9 @@ public class NarClim2Dataset : IClimateDataset
 
     public IEnumerable<string> GetInputFiles(ClimateVariable variable)
     {
+        if (variable == ClimateVariable.MaxTemperature || variable == ClimateVariable.MinTemperature && _frequency != NarClim2Frequency.Day)
+            throw new ArgumentException($"Variable {variable} not supported with frequency {_frequency}");
+
         string dir = GetInputFilesDirectory(variable);
         if (!Directory.Exists(dir))
             return Enumerable.Empty<string>();
