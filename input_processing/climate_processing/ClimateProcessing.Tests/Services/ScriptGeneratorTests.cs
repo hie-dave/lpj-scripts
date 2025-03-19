@@ -45,7 +45,7 @@ public class ScriptGeneratorTests
 
         if (expectsConversion)
         {
-            Assert.Contains(operators, op => op.StartsWith("-expr"));
+            Assert.Contains(operators, op => op.StartsWith("-subc"));
         }
         if (expectsRenaming)
         {

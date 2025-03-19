@@ -30,10 +30,10 @@ public class UnitConverterTests
     }
 
     [Theory]
-    [InlineData("K", "degC", 1, "subc,273.15")]
-    [InlineData("kg m-2 s-1", "mm", 24, "mulc,86400")] // Daily accumulation
-    [InlineData("kg m-2 s-1", "mm", 3, "mulc,10800")]  // 3-hourly accumulation
-    [InlineData("kg m-2 s-1", "mm", 1, "mulc,3600")]   // Hourly accumulation
+    [InlineData("K", "degC", 1, "-subc,273.15")]
+    [InlineData("kg m-2 s-1", "mm", 24, "-mulc,86400")] // Daily accumulation
+    [InlineData("kg m-2 s-1", "mm", 3, "-mulc,10800")]  // 3-hourly accumulation
+    [InlineData("kg m-2 s-1", "mm", 1, "-mulc,3600")]   // Hourly accumulation
     public void GenerateConversionExpression_GeneratesCorrectExpressions(
         string inputUnits,
         string targetUnits,
