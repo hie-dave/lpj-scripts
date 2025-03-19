@@ -922,9 +922,14 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         await writer.WriteLineAsync();
 
         // Calculate checksum.
+        // Note: we change directory and use a relative file path, to ensure
+        // that the checksum file remains portable.
+        string relativePath = Path.GetRelativePath(GetOutputPath(), outFile);
         await writer.WriteLineAsync("# Calculate checksum.");
         await writer.WriteLineAsync($"log \"Calculating checksum...\"");
-        await writer.WriteLineAsync($"sha512sum \"${{OUT_FILE}}\" >>\"{GetChecksumFilePath()}\"");
+        await writer.WriteLineAsync($"cd \"{GetOutputPath()}\"");
+        await writer.WriteLineAsync($"REL_PATH=\"{relativePath}\"");
+        await writer.WriteLineAsync($"sha512sum \"${{REL_PATH}}\" >>\"{GetChecksumFilePath()}\"");
         await writer.WriteLineAsync("log \"Checksum calculation completed successfully.\"");
         await writer.WriteLineAsync();
 
