@@ -32,6 +32,11 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     private const string streamDirectory = "streams";
 
     /// <summary>
+    /// Name of the directory into which all output files will be written.
+    /// </summary>
+    private const string outputDirectory = "output";
+
+    /// <summary>
     /// CDO's conservative remapping operator.
     /// </summary>
     private const string remapConservative = "-remapcon";
@@ -444,7 +449,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     /// <returns>The output directory path.</returns>
     private string GetOutputPath()
     {
-        return _config.OutputDirectory;
+        return Path.Combine(_config.OutputDirectory, outputDirectory);
     }
 
     /// <summary>
