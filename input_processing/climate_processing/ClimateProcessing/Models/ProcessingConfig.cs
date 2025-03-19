@@ -1,7 +1,4 @@
 using CommandLine;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using ClimateProcessing.Units;
 using ClimateProcessing.Services;
 
@@ -57,28 +54,17 @@ public abstract class ProcessingConfig
     [Option("version", Default = ModelVersion.Dave, HelpText = "The version of LPJ-Guess by which the data is going to be used.")]
     public ModelVersion Version { get; set; } = ModelVersion.Dave;
 
-    private TimeStep inputTimeStep = TimeStep.Hourly;
-    private TimeStep outputTimeStep = TimeStep.ThreeHourly;
-
     [Option("input-timestep", HelpText = "Input time step in hours")]
-    public int InputTimeStepHours
-    {
-        get => inputTimeStep.Hours;
-        set => inputTimeStep = new TimeStep(value);
-    }
+    public int InputTimeStepHours { get; set; }
 
     [Option("output-timestep", HelpText = "Output time step in hours")]
-    public int OutputTimeStepHours
-    {
-        get => outputTimeStep.Hours;
-        set => outputTimeStep = new TimeStep(value);
-    }
+    public int OutputTimeStepHours { get; set; }
 
     [Option("dry-run", Default = false, HelpText = "If set, scripts will be generated but not submitted to the PBS queue.")]
     public bool DryRun { get; set; } = false;
 
-    public TimeStep InputTimeStep => inputTimeStep;
-    public TimeStep OutputTimeStep => outputTimeStep;
+    public TimeStep InputTimeStep => new TimeStep(InputTimeStepHours);
+    public TimeStep OutputTimeStep => new TimeStep(OutputTimeStepHours);
 
     public virtual void Validate()
     {
@@ -109,9 +95,24 @@ public abstract class ProcessingConfig
 
         if (Version == ModelVersion.Trunk)
         {
+            if (InputTimeStepHours != 24 && InputTimeStepHours != 0)
+                throw new ArgumentException("Input timestep must be daily (24 hours) or not specified when processing for trunk.");
+            if (OutputTimeStepHours != 24 && OutputTimeStepHours != 0)
+                throw new ArgumentException("Output timestep must be daily (24 hours) or not specified when processing for trunk.");
+
             // Always use a daily timestep.
-            inputTimeStep = TimeStep.Daily;
-            outputTimeStep = TimeStep.Daily;
+            InputTimeStepHours = 24;
+            OutputTimeStepHours = 24;
+        }
+
+        if (Version == ModelVersion.Dave)
+        {
+            if (OutputTimeStepHours == 24)
+                throw new ArgumentException("Output timestep must be subdaily when processing for Dave.");
+            if (InputTimeStepHours == 0)
+                throw new ArgumentException("Input timestep must be specified when processing for Dave.");
+            if (OutputTimeStepHours == 0)
+                throw new ArgumentException("Output timestep must be specified when processing for Dave.");
         }
 
         if (InputTimeStepHours > OutputTimeStepHours)
