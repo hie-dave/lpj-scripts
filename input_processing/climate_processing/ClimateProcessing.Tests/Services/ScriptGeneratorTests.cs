@@ -8,9 +8,10 @@ using ClimateProcessing.Tests.Mocks;
 
 namespace ClimateProcessing.Tests.Services;
 
-public class ScriptGeneratorTests
+public class ScriptGeneratorTests : IDisposable
 {
     private const string outputDirectoryPrefix = "script_generator_tests_output";
+    private readonly string outputDirectory;
     private static readonly string[] cdoTemporalAggregationOperators = [
         "daymin",
         "daymax",
@@ -61,9 +62,26 @@ public class ScriptGeneratorTests
     public ScriptGeneratorTests()
     {
         _generator = new ScriptGenerator(_config);
+        outputDirectory = CreateOutputDirectory();
     }
 
-    private static string GetOutputDirectory()
+    /// <summary>
+    /// Teardown method - delete the temporary output directory.
+    /// </summary>
+    public void Dispose()
+    {
+        try
+        {
+            Directory.Delete(outputDirectory, true);
+        }
+        catch (IOException error)
+        {
+            // Log an error but don't throw an exception.
+            Console.Error.WriteLine($"Warning: could not delete temporary output directory used by {GetType().Name}: {error}");
+        }
+    }
+
+    private static string CreateOutputDirectory()
     {
         return Directory.CreateTempSubdirectory(outputDirectoryPrefix).FullName;
     }
@@ -213,7 +231,7 @@ public class ScriptGeneratorTests
             Memory = memory,
             JobFS = jobfs,
             Email = email ?? string.Empty,
-            OutputDirectory = GetOutputDirectory()
+            OutputDirectory = outputDirectory
         };
         ScriptGenerator generator = new(config);
 
@@ -329,7 +347,7 @@ public class ScriptGeneratorTests
             Walltime = "01:00:00",
             Ncpus = 1,
             Memory = 4,
-            OutputDirectory = GetOutputDirectory(),
+            OutputDirectory = outputDirectory,
             InputDirectory = inputDir,
             InputTimeStepHours = 3,
             OutputTimeStepHours = 24,
@@ -387,7 +405,7 @@ public class ScriptGeneratorTests
             Walltime = "01:00:00",
             Ncpus = 1,
             Memory = 4,
-            OutputDirectory = GetOutputDirectory(),
+            OutputDirectory = outputDirectory,
             InputDirectory = "/input",
             InputTimeStepHours = inputTimestepHours,
             OutputTimeStepHours = outputTimestepHours,
@@ -481,7 +499,7 @@ public class ScriptGeneratorTests
             Walltime = "01:00:00",
             Ncpus = 1,
             Memory = 4,
-            OutputDirectory = GetOutputDirectory(),
+            OutputDirectory = outputDirectory,
             InputDirectory = "/input",
             VPDMethod = method
         };
@@ -519,7 +537,7 @@ public class ScriptGeneratorTests
             Walltime = "01:00:00",
             Ncpus = 1,
             Memory = 4,
-            OutputDirectory = GetOutputDirectory(),
+            OutputDirectory = outputDirectory,
             InputDirectory = "/input",
             VPDMethod = method
         };
@@ -549,7 +567,7 @@ public class ScriptGeneratorTests
             Walltime = "01:00:00",
             Ncpus = 1,
             Memory = 4,
-            OutputDirectory = GetOutputDirectory(),
+            OutputDirectory = outputDirectory,
             InputDirectory = "/input",
             Version = requiresVPD ? ModelVersion.Dave : ModelVersion.Trunk,
             InputTimeStepHours = 1,
