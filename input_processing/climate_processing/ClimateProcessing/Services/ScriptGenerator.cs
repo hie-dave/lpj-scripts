@@ -804,7 +804,11 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
 
         // File paths.
         string inDir = dataset.GetInputFilesDirectory(variable);
+
         string outFile = GetMergetimeOutputPath(dataset, variable);
+
+        // Sanitise - e.g. /tmp/./x -> /tmp/x
+        outFile = Path.GetFullPath(outFile);
 
         await writer.WriteLineAsync("# File paths.");
         await writer.WriteLineAsync($"{inDirVariable}=\"{SanitiseString(inDir)}\"");

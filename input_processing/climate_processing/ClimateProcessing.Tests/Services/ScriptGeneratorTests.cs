@@ -5,6 +5,7 @@ using ClimateProcessing.Units;
 using System.Text.RegularExpressions;
 using Microsoft.VisualStudio.TestPlatform.ObjectModel.Engine.ClientProtocol;
 using ClimateProcessing.Tests.Mocks;
+using System.Reflection;
 
 namespace ClimateProcessing.Tests.Services;
 
@@ -45,24 +46,27 @@ public class ScriptGeneratorTests : IDisposable
         "expr",
     ];
 
-    private readonly NarClim2Config _config = new()
-    {
-        Project = "test",
-        Queue = "normal",
-        Walltime = "01:00:00",
-        Ncpus = 1,
-        Memory = 4,
-        OutputDirectory = "/output",
-        InputTimeStepHours = 1,
-        OutputTimeStepHours = 24
-    };
+    private readonly NarClim2Config _config;
 
     private readonly ScriptGenerator _generator;
 
     public ScriptGeneratorTests()
     {
-        _generator = new ScriptGenerator(_config);
         outputDirectory = CreateOutputDirectory();
+
+        _config = new NarClim2Config()
+        {
+            Project = "test",
+            Queue = "normal",
+            Walltime = "01:00:00",
+            Ncpus = 1,
+            Memory = 4,
+            OutputDirectory = outputDirectory,
+            InputTimeStepHours = 1,
+            OutputTimeStepHours = 24
+        };
+
+        _generator = new ScriptGenerator(_config);
     }
 
     /// <summary>
@@ -605,5 +609,113 @@ public class ScriptGeneratorTests : IDisposable
 
         // Should always have cleanup job
         Assert.Contains("cleanup_", scriptContent);
+    }
+
+    /// <summary>
+    /// Do a full integration test of the script generator under controlled
+    /// conditions and do a full string comparison against the expected output.
+    /// </summary>
+    /// <remarks>
+    /// This will be brittle, but thorough. If this fails, the other tests can
+    /// be used to figure out why. If no other tests fail, then we need more
+    /// tests!
+    /// </remarks>
+    [Fact]
+    public async Task GenerateScriptsAsync_IntegrationTest()
+    {
+        // Arrange.
+        const string inputDirectory = "/input";
+        DynamicMockDataset dataset = new(inputDirectory, outputDirectory);
+        NarClim2Config config = new()
+        {
+            Project = "test",
+            Queue = "megamem",
+            Walltime = "06:30:00",
+            Ncpus = 2,
+            Memory = 64,
+            InputDirectory = inputDirectory,
+            OutputDirectory = outputDirectory,
+            InputTimeStepHours = 1,
+            OutputTimeStepHours = 3,
+            Version = ModelVersion.Dave,
+            ChunkSizeTime = 8192,
+            ChunkSizeSpatial = 24,
+            GridFile = "/home/giraffe/grid.nc",
+            CompressionLevel = 8,
+            CompressOutput = true,
+            DryRun = true,
+            Email = "test@example.com",
+            JobFS = 128,
+            VPDMethod = VPDMethod.AlduchovEskridge1996
+        };
+        ScriptGenerator generator = new(config);
+
+        // Act.
+        await generator.GenerateScriptsAsync(dataset);
+
+        // Assert.
+        AssertEmptyDirectory(Path.Combine(outputDirectory, "logs"));
+        AssertEmptyDirectory(Path.Combine(outputDirectory, "streams"));
+        AssertEmptyDirectory(Path.Combine(outputDirectory, "output", dataset.GetOutputDirectory()));
+        AssertEmptyDirectory(Path.Combine(outputDirectory, "tmp", dataset.GetOutputDirectory()));
+
+        string scriptsDirectory = Path.Combine(outputDirectory, "scripts");
+        Assert.True(Directory.Exists(scriptsDirectory));
+        Assert.NotEmpty(Directory.EnumerateFileSystemEntries(scriptsDirectory));
+
+        string[] expectedScriptNames = [
+            "calc_vpd_DynamicMockDataset",
+            "cleanup_DynamicMockDataset",
+            "mergetime_huss_DynamicMockDataset",
+            "mergetime_pr_DynamicMockDataset",
+            "mergetime_ps_DynamicMockDataset",
+            "mergetime_rsds_DynamicMockDataset",
+            "mergetime_sfcWind_DynamicMockDataset",
+            "mergetime_tas_DynamicMockDataset",
+            "rechunk_huss_DynamicMockDataset",
+            "rechunk_pr_DynamicMockDataset",
+            "rechunk_ps_DynamicMockDataset",
+            "rechunk_rsds_DynamicMockDataset",
+            "rechunk_sfcWind_DynamicMockDataset",
+            "rechunk_tas_DynamicMockDataset",
+            "rechunk_vpd_DynamicMockDataset",
+            "submit_DynamicMockDataset"
+        ];
+
+        Assert.Equal(expectedScriptNames.Count(), Directory.EnumerateFileSystemEntries(scriptsDirectory).Count());
+
+        // Name of the directory containing this test's data files.
+        const string resourcePrefix = "GenerateScriptsAsync_IntegrationTest";
+
+        foreach (string scriptName in expectedScriptNames)
+        {
+            string actualScriptPath = Path.Combine(scriptsDirectory, scriptName);
+            Assert.True(File.Exists(actualScriptPath), $"Script {actualScriptPath} does not exist.");
+            string actualScript = await File.ReadAllTextAsync(actualScriptPath);
+
+            // Read expected script from resource in assembly.
+            string expectedScript = await ReadResource($"{resourcePrefix}.{scriptName}");
+            expectedScript = expectedScript.Replace("@#OUTPUT_DIRECTORY#@", outputDirectory);
+
+            Assert.Equal(expectedScript, actualScript);
+        }
+    }
+
+    private async Task<string> ReadResource(string resourceName)
+    {
+        Assembly assembly = typeof(ScriptGeneratorTests).Assembly;
+        string resource = $"ClimateProcessing.Tests.Data.{resourceName}";
+        using Stream? stream = assembly.GetManifestResourceStream(resource);
+        if (stream is null)
+            throw new ArgumentException($"Resource {resource} not found.");
+
+        using StreamReader reader = new StreamReader(stream);
+        return await reader.ReadToEndAsync();
+    }
+
+    private static void AssertEmptyDirectory(string directory)
+    {
+        Assert.True(Directory.Exists(directory));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(directory));
     }
 }

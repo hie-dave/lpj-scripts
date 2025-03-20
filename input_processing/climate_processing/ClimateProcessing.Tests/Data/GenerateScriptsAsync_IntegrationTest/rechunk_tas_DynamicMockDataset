@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+#PBS -N rechunk_tas_DynamicMockDataset
+#PBS -o @#OUTPUT_DIRECTORY#@/logs/rechunk_tas_DynamicMockDataset.log
+#PBS -P test
+#PBS -q megamem
+#PBS -l walltime=06:30:00
+#PBS -l ncpus=2
+#PBS -l mem=64GB
+#PBS -l jobfs=128GB
+#PBS -j oe
+#PBS -M test@example.com
+#PBS -m abe
+
+# This script was automatically generated. Do not modify.
+
+# Exit immediately if any command fails.
+set -euo pipefail
+
+# Load required modules.
+module purge
+module load pbs netcdf cdo nco python3/3.12.1
+
+# Create temporary directory and cd into it.
+WORK_DIR="$(mktemp -d -p "${PBS_JOBFS}")"
+cd "${WORK_DIR}"
+
+# Delete the temporary directory on exit.
+trap 'cd "${PBS_JOBFS}"; rm -rf "${WORK_DIR}"' EXIT
+
+# Stream all output to a log file without buffering.
+STREAM_FILE="@#OUTPUT_DIRECTORY#@/streams/rechunk_tas_DynamicMockDataset.log"
+rm -f "${STREAM_FILE}"
+exec 1> >(tee -a "${STREAM_FILE}") 2>&1
+
+# Print a log message.
+log() {
+    echo "[$(date)] $*"
+}
+
+IN_FILE="@#OUTPUT_DIRECTORY#@/tmp/dynamic_mock/tas_output.nc"
+OUT_FILE="@#OUTPUT_DIRECTORY#@/output/dynamic_mock/tas_output.nc"
+log "Rechunking files..."
+ncpdq -O -a lat,lon,time --cnk_dmn lat,24 --cnk_dmn lon,24 --cnk_dmn time,8192 -L8 "${IN_FILE}" "${OUT_FILE}"
+log "All files rechunked successfully."
+
+# Calculate checksum.
+log "Calculating checksum..."
+cd "@#OUTPUT_DIRECTORY#@/output"
+REL_PATH="dynamic_mock/tas_output.nc"
+sha512sum "${REL_PATH}" >>"@#OUTPUT_DIRECTORY#@/output/sha512sums.txt"
+log "Checksum calculation completed successfully."
+
+# Input file cannot (necessarily) be deleted yet, since it is required for VPD estimation.

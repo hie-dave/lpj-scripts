@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+#PBS -N calc_vpd_DynamicMockDataset
+#PBS -o @#OUTPUT_DIRECTORY#@/logs/calc_vpd_DynamicMockDataset.log
+#PBS -P test
+#PBS -q normal
+#PBS -l walltime=06:30:00
+#PBS -l ncpus=1
+#PBS -l mem=4GB
+#PBS -l jobfs=128GB
+#PBS -j oe
+#PBS -M test@example.com
+#PBS -m abe
+
+# This script was automatically generated. Do not modify.
+
+# Exit immediately if any command fails.
+set -euo pipefail
+
+# Load required modules.
+module purge
+module load pbs netcdf cdo nco python3/3.12.1
+
+# Create temporary directory and cd into it.
+WORK_DIR="$(mktemp -d -p "${PBS_JOBFS}")"
+cd "${WORK_DIR}"
+
+# Delete the temporary directory on exit.
+trap 'cd "${PBS_JOBFS}"; rm -rf "${WORK_DIR}"' EXIT
+
+# Stream all output to a log file without buffering.
+STREAM_FILE="@#OUTPUT_DIRECTORY#@/streams/calc_vpd_DynamicMockDataset.log"
+rm -f "${STREAM_FILE}"
+exec 1> >(tee -a "${STREAM_FILE}") 2>&1
+
+# Print a log message.
+log() {
+    echo "[$(date)] $*"
+}
+
+# File paths.
+HUSS_FILE="@#OUTPUT_DIRECTORY#@/tmp/dynamic_mock/huss_output.nc"
+PS_FILE="@#OUTPUT_DIRECTORY#@/tmp/dynamic_mock/ps_output.nc"
+TAS_FILE="@#OUTPUT_DIRECTORY#@/tmp/dynamic_mock/tas_output.nc"
+OUT_FILE="@#OUTPUT_DIRECTORY#@/tmp/dynamic_mock/vpd_output.nc"
+EQN_FILE="${WORK_DIR}/vpd_equations.txt"
+
+# Generate equation file.
+log "Generating VPD equation file..."
+cat >"${EQN_FILE}" <<EOF
+# Saturation vapor pressure (Pa) (tas in degC)
+_esat=0.61094*exp((17.625*tas)/(tas+243.04))*1000;
+# Actual vapor pressure (Pa)
+_e=(huss*ps)/(0.622+0.378*huss);
+# VPD (kPa)
+vpd=(_esat-_e)/1000;
+EOF
+
+# Calculate VPD.
+log "Calculating VPD..."
+cdo -L -O -v -z zip1 exprf,"${EQN_FILE}" -merge "${HUSS_FILE}" "${PS_FILE}" "${TAS_FILE}" "${OUT_FILE}"
+log "VPD calculation completed successfully."

@@ -58,5 +58,5 @@ internal class DynamicMockDataset : IClimateDataset
     public string GenerateOutputFileName(ClimateVariable variable) =>
         $"{_variableInfo[variable].Name}_output.nc";
 
-    public string GetOutputDirectory() => Path.Combine(outputPath, "output");
+    public string GetOutputDirectory() => "dynamic_mock";
 }

@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#PBS -N cleanup_DynamicMockDataset
+#PBS -o @#OUTPUT_DIRECTORY#@/logs/cleanup_DynamicMockDataset.log
+#PBS -P test
+#PBS -q normal
+#PBS -l walltime=06:30:00
+#PBS -l ncpus=1
+#PBS -l mem=4GB
+#PBS -l jobfs=128GB
+#PBS -j oe
+#PBS -M test@example.com
+#PBS -m abe
+
+# This script was automatically generated. Do not modify.
+
+# Exit immediately if any command fails.
+set -euo pipefail
+
+# Load required modules.
+module purge
+module load pbs netcdf cdo nco python3/3.12.1
+
+# Create temporary directory and cd into it.
+WORK_DIR="$(mktemp -d -p "${PBS_JOBFS}")"
+cd "${WORK_DIR}"
+
+# Delete the temporary directory on exit.
+trap 'cd "${PBS_JOBFS}"; rm -rf "${WORK_DIR}"' EXIT
+
+# Stream all output to a log file without buffering.
+STREAM_FILE="@#OUTPUT_DIRECTORY#@/streams/cleanup_DynamicMockDataset.log"
+rm -f "${STREAM_FILE}"
+exec 1> >(tee -a "${STREAM_FILE}") 2>&1
+
+# Print a log message.
+log() {
+    echo "[$(date)] $*"
+}
+
+# File paths.
+IN_DIR="@#OUTPUT_DIRECTORY#@/tmp/dynamic_mock"
+rm -rf "${IN_DIR}"

@@ -22,6 +22,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ClimateProcessing\ClimateProcessing.csproj" />
+
+    <!-- Store everything in Data directory as embedded resources. -->
+    <EmbeddedResource Include="Data\**" />
   </ItemGroup>
 
 </Project>

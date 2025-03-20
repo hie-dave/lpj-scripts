@@ -30,7 +30,7 @@ internal class StaticMockDataset : IClimateDataset
     public IEnumerable<string> GetInputFiles(ClimateVariable variable)
         => new[] { Path.Combine(basePath, "input.nc") };
 
-    public string GetOutputDirectory() => "mock";
+    public string GetOutputDirectory() => "static_mock";
 
     public VariableInfo GetVariableInfo(ClimateVariable variable)
         => new(varName, varUnits);
