@@ -228,6 +228,7 @@ public class NarClim2Dataset : IClimateDataset
         return $"{prefix}_{startDate:yyyyMM}-{endDate:yyyyMM}.nc";
     }
 
+    /// <inheritdoc /> 
     public string GetOutputDirectory()
     {
         string gcm = NarClim2Constants.GCMNames.ToString(_gcm);

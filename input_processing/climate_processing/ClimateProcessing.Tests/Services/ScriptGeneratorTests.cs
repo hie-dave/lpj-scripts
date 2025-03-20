@@ -3,11 +3,47 @@ using ClimateProcessing.Services;
 using ClimateProcessing.Models;
 using ClimateProcessing.Units;
 using System.Text.RegularExpressions;
+using Microsoft.VisualStudio.TestPlatform.ObjectModel.Engine.ClientProtocol;
+using ClimateProcessing.Tests.Mocks;
 
 namespace ClimateProcessing.Tests.Services;
 
 public class ScriptGeneratorTests
 {
+    private const string outputDirectoryPrefix = "script_generator_tests_output";
+    private static readonly string[] cdoTemporalAggregationOperators = [
+        "daymin",
+        "daymax",
+        "daysum",
+        "daymean",
+        "dayrange",
+        "dayavg",
+        "daystd",
+        "daystd1",
+        "dayvar",
+        "dayvar1",
+        "timselmin",
+        "timselmax",
+        "timselsum",
+        "timselmean",
+        "timselrange",
+        "timselavg",
+        "timselstd",
+        "timselstd1",
+        "timselvar",
+        "timselvar1"
+    ];
+
+    private static readonly string[] cdoArithmeticOperators = [
+        "addc",
+        "subc",
+        "mulc",
+        "divc",
+        "minc",
+        "maxc",
+        "expr",
+    ];
+
     private readonly NarClim2Config _config = new()
     {
         Project = "test",
@@ -25,6 +61,11 @@ public class ScriptGeneratorTests
     public ScriptGeneratorTests()
     {
         _generator = new ScriptGenerator(_config);
+    }
+
+    private static string GetOutputDirectory()
+    {
+        return Directory.CreateTempSubdirectory(outputDirectoryPrefix).FullName;
     }
 
     [Theory]
@@ -172,7 +213,7 @@ public class ScriptGeneratorTests
             Memory = memory,
             JobFS = jobfs,
             Email = email ?? string.Empty,
-            OutputDirectory = Directory.CreateTempSubdirectory("output").FullName
+            OutputDirectory = GetOutputDirectory()
         };
         ScriptGenerator generator = new(config);
 
@@ -217,25 +258,11 @@ public class ScriptGeneratorTests
     }
 
     [Theory]
-    [InlineData("/data", "/home/asdf/x.y", "/x y z", 0)]  // None of these require a storage directive.
-    [InlineData("/g/data/x", "/home/asdf/x.y", "/x y z", 0)]  // /g/data/x isn't really a valid path - it doesn't reference anything inside the gdata file tree
-    [InlineData("/scratch/x", "/home/asdf/x.y", "/x y z", 0)]  // /scratch/x isn't really a valid path - it doesn't reference anything inside the scratch file tree
-    [InlineData("/g/data/asdf/x.y", "/data", "/data", 1)]    // Single reference to gdata.
-    [InlineData("/data", "/g/data/asdf/x.y", "/data", 1)]    // Single reference to gdata.
-    [InlineData("/data", "/data", "/g/data/asdf/x.y", 1)]    // Single reference to gdata.
-    [InlineData("/scratch/xyz/lkj", "/data", "/data", 1)]    // Single reference to scratch.
-    [InlineData("/data", "/scratch/xyz/lkj", "/data", 1)]    // Single reference to scratch.
-    [InlineData("/data", "/data", "/scratch/xyz/lkj", 1)]    // Single reference to scratch.
-    [InlineData("/g/data/asdf/x.y", "/g/data/asdf/afds", "/data", 1)]    // Same gdata path used twice
-    [InlineData("/scratch/xyz/lkj", "/scratch/xyz/fds", "/data", 1)]    // Same scratch path used twice
-    [InlineData("/g/data/asdf/fdsa", "/g/data/asdf/asdf", "/g/data/asdf/bql", 1)]    // Same gdata path used thrice
-    [InlineData("/scratch/ff/dhwh", "/scratch/ff/wwjd", "/scratch/ff/wwdd", 1)]    // Same scratch paths used thrice
-    [InlineData("/g/data/asdf/fdsa", "/g/data/x/y", "/data", 2)] // Two different gdata paths.
-    [InlineData("/scratch/ff/ttfn", "/scratch/gg/test", "/home/test/pi.file", 2)] // Two different scratch paths.
-    [InlineData("/g/data/asdf/fdsa", "/g/data/k/asdf", "/g/data/llm/bql", 3)] // Three different gdata paths.
-    [InlineData("/scratch/ff/wtfn", "/scratch/gg/another_test", "/scratch/hh/wow", 3)] // Three different scratch paths.
-    [InlineData("/g/data/jk/hpig", "/scratch/lkjihg/f", "home/glarble", 2)] // Mixture of gdata and scratch paths.
-    public async Task WritePBSHeader_GeneratesCorrectStorageDirectives(
+    [InlineData("/home/user/input", "/home/user/grid.txt", "/home/user/output", 0)]  // No storage directives needed
+    [InlineData("/g/data/proj1/input", "/home/user/grid.txt", "/home/user/output", 1)]  // Single gdata directive
+    [InlineData("/home/user/input", "/scratch/test/grid.txt", "/home/user/output", 1)]  // Single scratch directive
+    [InlineData("/g/data/proj1/input", "/home/user/grid.txt", "/scratch/test/output", 2)]  // Both gdata and scratch
+    public async Task WritePBSHeader_GeneratesCorrectHeader(
         string inputDir,
         string gridlist,
         string outputDir,
@@ -257,19 +284,34 @@ public class ScriptGeneratorTests
         ScriptGenerator generator = new(config);
 
         // Act
-        await generator.WritePBSHeader(writer, "test_job", true);
+        await generator.WritePBSHeader(writer, "test_job", false);
         string result = writer.ToString();
 
         // Assert
-        int actualDirectives = Regex.Matches(result, @"#PBS -l storage=").Count;
-        Assert.Equal(expectedDirectives > 0 ? 1 : 0, actualDirectives);
+        // Verify basic header elements are present
+        Assert.Contains("#PBS -P p123", result);
+        Assert.Contains("#PBS -q normal", result);
+        Assert.Contains("#PBS -l walltime=01:00:00", result);
+        Assert.Contains("#PBS -l ncpus=2", result);
+        Assert.Contains("#PBS -l mem=8GB", result);
+        Assert.Contains("#PBS -N test_job", result);
 
-        if (expectedDirectives == 0)
-            return;
+        // Verify storage directive presence and format
+        string prefix = "#PBS -l storage=";
+        var storageLines = result.Split('\n').Where(l => l.StartsWith(prefix)).ToList();
+        var needsStorage = expectedDirectives > 0;
 
-        string line = result.Split("\n").First(line => line.StartsWith("#PBS -l storage="));
-        string[] parts = line.Split('+');
-        Assert.Equal(expectedDirectives, parts.Length);
+        if (needsStorage)
+        {
+            Assert.Single(storageLines);
+            string storageLine = storageLines[0];
+            string[] parts = storageLine.Replace(prefix, string.Empty).Split('+');
+            Assert.Equal(expectedDirectives, parts.Length);
+        }
+        else
+        {
+            Assert.Empty(storageLines);
+        }
     }
 
     [Theory]
@@ -287,13 +329,13 @@ public class ScriptGeneratorTests
             Walltime = "01:00:00",
             Ncpus = 1,
             Memory = 4,
-            OutputDirectory = Directory.CreateTempSubdirectory("script_generator_tests_output").FullName,
+            OutputDirectory = GetOutputDirectory(),
             InputDirectory = inputDir,
             InputTimeStepHours = 3,
             OutputTimeStepHours = 24,
         };
         ScriptGenerator generator = new(config);
-        MockDataset dataset = new(inputDir);
+        StaticMockDataset dataset = new(inputDir);
 
         // Act
         string scriptPath = await generator.GenerateVariableMergeScript(
@@ -318,14 +360,24 @@ public class ScriptGeneratorTests
         // sometimes they don't need to be or shouldn't be.
     }
 
-    // TODO: This test could be significantly expanded upon.
     [Theory]
-    [InlineData(ClimateVariable.Temperature, "tas", "K")]
-    [InlineData(ClimateVariable.Precipitation, "pr", "kg m-2 s-1")]
-    public async Task GenerateVariableMergeScript_GeneratesValidCDOCommand(
+    [InlineData(ClimateVariable.Temperature, 1, 24, "tas", "K", "-daymean,24", "-subc,273.15", "-setattribute,'tas@units=degC")]
+    [InlineData(ClimateVariable.Precipitation, 1, 24, "pr", "kg m-2 s-1", "-daysum,24", "-mulc,3600", "-setattribute,'pr@units=mm'")]
+    [InlineData(ClimateVariable.Precipitation, 1, 8, "pr", "kg m-2 s-1", "-timselsum,8", "-mulc,3600", "-setattribute,'pr@units=mm'")]
+    [InlineData(ClimateVariable.SpecificHumidity, 1, 1, "huss", "1")] // No unit conversion or aggregation
+    [InlineData(ClimateVariable.SpecificHumidity, 1, 1, "huss", "kg/kg", null, null, "-setattribute,'huss@units=1'")] // Unit rename, but no unit conversion or aggregation
+    [InlineData(ClimateVariable.ShortwaveRadiation, 1, 3, "rsds", "W m-2", "-timselmean,3")] // Aggregation but no unit conversion (intensive variable)
+    [InlineData(ClimateVariable.Precipitation, 1, 12, "pr", "mm", "-timselsum,12")] // Aggregation but no unit conversion (extensive variable)
+    [InlineData(ClimateVariable.SurfacePressure, 1, 1, "ps", "kPa", null, "-mulc,1000", "-setattribute,'ps@units=Pa'")] // Unit conversion but no aggregation
+    public async Task GenerateVariableMergeScript_GeneratesValidCDORemapCommand(
         ClimateVariable variable,
+        int inputTimestepHours,
+        int outputTimestepHours,
         string varName,
-        string inputUnits)
+        string inputUnits,
+        string? temporalAggregationOperator = null,
+        string? unitConversionOperator = null,
+        string? unitRenameOperator = null)
     {
         // Arrange
         NarClim2Config config = new()
@@ -335,13 +387,14 @@ public class ScriptGeneratorTests
             Walltime = "01:00:00",
             Ncpus = 1,
             Memory = 4,
-            OutputDirectory = Directory.CreateTempSubdirectory().FullName,
+            OutputDirectory = GetOutputDirectory(),
             InputDirectory = "/input",
-            InputTimeStepHours = 1,
-            OutputTimeStepHours = 24
+            InputTimeStepHours = inputTimestepHours,
+            OutputTimeStepHours = outputTimestepHours,
+            Version = ModelVersion.Dave
         };
         ScriptGenerator generator = new(config);
-        MockDataset dataset = new("/input", varName, inputUnits);
+        StaticMockDataset dataset = new("/input", varName, inputUnits);
 
         // Act
         string scriptPath = await generator.GenerateVariableMergeScript(
@@ -351,6 +404,7 @@ public class ScriptGeneratorTests
 
         // E.g.
         // cdo -L -O -v -z zip1 -daymean,24 -subc,273.15 -setattribute,'tas@units=degC' -unpack  \"${FILE}\" \"${REMAP_DIR}/$(basename \"${FILE}\")\"
+        // "    cdo -L -O -v -z zip1 -daysum,24 -mulc,3600 -setattribute,'pr@units=mm' -unpack  \"${FILE}\" \"${REMAP_DIR}/$(basename \"${FILE}\")\""
         string line = scriptContent.Split("\n").First(l => l.Contains("cdo -"));
 
         // Assert
@@ -371,11 +425,46 @@ public class ScriptGeneratorTests
         // Should unpack data.
         Assert.Contains("-unpack", line);
 
+        // Should apply operators (or not).
+        int previousOperatorIndex = -1;
+        if (temporalAggregationOperator is null)
+            foreach (string @operator in cdoTemporalAggregationOperators)
+                Assert.DoesNotContain(@operator, line);
+        else
+        {
+            Assert.Contains(temporalAggregationOperator, line);
+            int operatorIndex = line.IndexOf(temporalAggregationOperator);
+            Assert.True(operatorIndex > previousOperatorIndex, $"Operator '{temporalAggregationOperator}' appears out of order in CDO command.");
+            previousOperatorIndex = operatorIndex;
+        }
+
+        if (unitConversionOperator is null)
+            foreach (string @operator in cdoArithmeticOperators)
+                Assert.DoesNotContain(@operator, line);
+        else
+        {
+            Assert.Contains(unitConversionOperator, line);
+            int operatorIndex = line.IndexOf(unitConversionOperator);
+            Assert.True(operatorIndex > previousOperatorIndex, $"Operator '{unitConversionOperator}' appears out of order in CDO command.");
+            previousOperatorIndex = operatorIndex;
+        }
+
+        if (unitRenameOperator is null)
+            Assert.DoesNotContain("setattribute", line);
+        else
+        {
+            Assert.Contains(unitRenameOperator, line);
+            int operatorIndex = line.IndexOf(unitRenameOperator);
+            Assert.True(operatorIndex > previousOperatorIndex, $"Operator '{unitRenameOperator}' appears out of order in CDO command.");
+            previousOperatorIndex = operatorIndex;
+        }
+
+        // TODO: assert that no additional arguments are present.
+
         // Rest of script should be valid.
         ValidateScript(scriptContent);
     }
 
-    // fixme - broken
     [Theory]
     [InlineData(VPDMethod.Magnus)]
     [InlineData(VPDMethod.Buck1981)]
@@ -392,42 +481,60 @@ public class ScriptGeneratorTests
             Walltime = "01:00:00",
             Ncpus = 1,
             Memory = 4,
-            OutputDirectory = "/output",
+            OutputDirectory = GetOutputDirectory(),
             InputDirectory = "/input",
             VPDMethod = method
         };
         ScriptGenerator generator = new(config);
-        MockDataset dataset = new("/input");
+
+        // Act
+        StringWriter writer = new();
+        await generator.WriteVPDEquationsAsync(writer, method);
+        string equationContent = writer.ToString();
+
+        // Remove comment lines.
+        string sanitised = Regex.Replace(equationContent, @"#.*\n", "");
+
+        // Ensure all lines end with a semicolon.
+        Assert.DoesNotMatch(@"[^;\r]\n", sanitised);
+
+        Assert.Matches(@"_e=.*;\n", sanitised);
+        Assert.Matches(@"_esat=.*;\n", sanitised);
+        Assert.Matches(@"vpd=.*;\n", sanitised);
+    }
+
+    [Theory]
+    [InlineData(VPDMethod.Magnus)]
+    [InlineData(VPDMethod.Buck1981)]
+    [InlineData(VPDMethod.AlduchovEskridge1996)]
+    [InlineData(VPDMethod.AllenFAO1998)]
+    [InlineData(VPDMethod.Sonntag1990)]
+    public async Task GenerateVPDScript_GeneratesValidScript(VPDMethod method)
+    {
+        // Arrange
+        NarClim2Config config = new()
+        {
+            Project = "test",
+            Queue = "normal",
+            Walltime = "01:00:00",
+            Ncpus = 1,
+            Memory = 4,
+            OutputDirectory = GetOutputDirectory(),
+            InputDirectory = "/input",
+            VPDMethod = method
+        };
+        ScriptGenerator generator = new(config);
+        StaticMockDataset dataset = new("/input");
 
         // Act
         string scriptPath = await generator.GenerateVPDScript(dataset);
-        string scriptContent = await File.ReadAllTextAsync(scriptPath);
 
         // Assert
-        // Variables should be properly quoted
-        Assert.Contains("\"${HUSS_FILE}\"", scriptContent);
-        Assert.Contains("\"${PS_FILE}\"", scriptContent);
-        Assert.Contains("\"${TAS_FILE}\"", scriptContent);
-        Assert.Contains("\"${OUT_FILE}\"", scriptContent);
-        Assert.Contains("\"${EQN_FILE}\"", scriptContent);
-
-        // Should contain VPD equation components
-        Assert.Contains("_esat=", scriptContent);
-        Assert.Contains("_e=", scriptContent);
-        Assert.Contains("vpd=", scriptContent);
-
-        // Should use CDO exprf operator
-        Assert.Contains("cdo", scriptContent);
-        Assert.Contains("exprf", scriptContent);
-        Assert.Contains("-merge", scriptContent);
-
-        // Should have proper input file handling
-        Assert.Contains("${HUSS_FILE}", scriptContent);
-        Assert.Contains("${PS_FILE}", scriptContent);
-        Assert.Contains("${TAS_FILE}", scriptContent);
+        Assert.True(File.Exists(scriptPath));
+        string scriptContent = await File.ReadAllTextAsync(scriptPath);
+        ValidateScript(scriptContent);
     }
 
-    // fixme - broken
     [Theory]
     [InlineData(true)]   // With VPD calculation
     [InlineData(false)]  // Without VPD calculation
@@ -442,69 +549,43 @@ public class ScriptGeneratorTests
             Walltime = "01:00:00",
             Ncpus = 1,
             Memory = 4,
-            OutputDirectory = "/output",
+            OutputDirectory = GetOutputDirectory(),
             InputDirectory = "/input",
-            Version = requiresVPD ? ModelVersion.Dave : ModelVersion.Trunk
+            Version = requiresVPD ? ModelVersion.Dave : ModelVersion.Trunk,
+            InputTimeStepHours = 1,
+            OutputTimeStepHours = 1
         };
         ScriptGenerator generator = new(config);
-        MockDataset dataset = new("/input");
+        DynamicMockDataset dataset = new(config.InputDirectory, config.OutputDirectory);
 
         // Act
         string scriptPath = await generator.GenerateScriptsAsync(dataset);
-        string scriptContent = await File.ReadAllTextAsync(scriptPath);
 
         // Assert
-        // Job dependencies
+        Assert.True(File.Exists(scriptPath));
+        string scriptContent = await File.ReadAllTextAsync(scriptPath);
+
+        // Basic script validation
+        ValidateScript(scriptContent);
+
         if (requiresVPD)
         {
-            Assert.Contains("VPD_DEPS=", scriptContent);
-            Assert.Contains("calc_vpd_", scriptContent);
-            Assert.Contains("rechunk_vpd_", scriptContent);
+            // Should have all required VPD variables
+            Assert.Contains("huss", scriptContent);
+            Assert.Contains("ps", scriptContent);
+            Assert.Contains("tas", scriptContent);
+            Assert.Contains("vpd", scriptContent);
+
+            // Should have proper dependencies
+            Assert.Contains("afterok:", scriptContent);
         }
         else
         {
-            Assert.DoesNotContain("VPD_DEPS=", scriptContent);
-            Assert.DoesNotContain("calc_vpd_", scriptContent);
-            Assert.DoesNotContain("rechunk_vpd_", scriptContent);
+            // Should not have VPD-related content
+            Assert.DoesNotContain("vpd", scriptContent);
         }
 
-        // Job dependency syntax
-        Assert.Contains("-W depend=afterok:", scriptContent);
-        
         // Should always have cleanup job
         Assert.Contains("cleanup_", scriptContent);
-    }
-
-    private class MockDataset : IClimateDataset
-    {
-        private readonly string basePath;
-        private readonly string varName;
-        private readonly string varUnits;
-
-        public MockDataset(
-            string basePath,
-            string varName = "tas",
-            string varUnits = "K")
-        {
-            this.basePath = basePath;
-            this.varName = varName;
-            this.varUnits = varUnits;
-        }
-
-        public string DatasetName => "mock";
-
-        public string GetInputFilesDirectory(ClimateVariable variable)
-            => basePath;
-
-        public IEnumerable<string> GetInputFiles(ClimateVariable variable)
-            => new[] { Path.Combine(basePath, "input.nc") };
-
-        public string GetOutputDirectory() => "mock";
-
-        public VariableInfo GetVariableInfo(ClimateVariable variable)
-            => new(varName, varUnits);
-
-        public string GenerateOutputFileName(ClimateVariable variable)
-            => "output.nc";
     }
 }

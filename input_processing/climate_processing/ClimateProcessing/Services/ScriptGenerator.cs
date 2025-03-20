@@ -195,7 +195,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     /// <param name="writer">The writer to write to.</param>
     /// <param name="method">The VPD estimation method to use.</param>
     /// <exception cref="ArgumentException">If the specified VPD method is not supported.</exception>
-    private async Task WriteVPDEquations(TextWriter writer, VPDMethod method)
+    internal async Task WriteVPDEquationsAsync(TextWriter writer, VPDMethod method)
     {
         // All methods follow the same general pattern:
         // 1. Calculate saturation vapor pressure (_esat)
@@ -322,7 +322,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
 
         // Create equation file with selected method.
         await writer.WriteLineAsync($"cat >\"${{EQN_FILE}}\" <<EOF");
-        await WriteVPDEquations(writer, _config.VPDMethod);
+        await WriteVPDEquationsAsync(writer, _config.VPDMethod);
         await writer.WriteLineAsync("EOF");
         await writer.WriteLineAsync();
 

@@ -21,7 +21,8 @@ public static class UnitConverter
     private static readonly Dictionary<(string From, string To), ConversionDefinition> ConversionExpressions = new()
     {
         [("K", "degC")] = new("-subc,273.15", false),
-        [("kg m-2 s-1", "mm")] = new("-mulc,{timestep}", true)  // Multiply by seconds in period to get accumulation
+        [("kg m-2 s-1", "mm")] = new("-mulc,{timestep}", true),  // Multiply by seconds in period to get accumulation
+        [("kPa", "Pa")] = new("-mulc,1000", false)
     };
 
     public record ConversionResult(
