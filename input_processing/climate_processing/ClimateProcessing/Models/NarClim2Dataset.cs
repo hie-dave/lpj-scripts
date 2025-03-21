@@ -228,8 +228,13 @@ public class NarClim2Dataset : IClimateDataset
         return $"{prefix}_{startDate:yyyyMM}-{endDate:yyyyMM}.nc";
     }
 
-    /// <inheritdoc /> 
-    public string GetOutputDirectory()
+    /// <summary>
+    /// Get a non-rooted (ie relative) path to the output directory. This will
+    /// be appended to the base output path for all output files generated from
+    /// this dataset.
+    /// </summary>
+    /// <returns>The output directory.</returns>
+    private string GetOutputDirectory()
     {
         string gcm = NarClim2Constants.GCMNames.ToString(_gcm);
         string experiment = NarClim2Constants.ExperimentNames.ToString(_experiment);

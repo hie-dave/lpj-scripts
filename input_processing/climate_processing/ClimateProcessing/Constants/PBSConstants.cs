@@ -1,4 +1,4 @@
-namespace ClimateProcessing.Models;
+namespace ClimateProcessing.Constants;
 
 public static class PBSConstants
 {

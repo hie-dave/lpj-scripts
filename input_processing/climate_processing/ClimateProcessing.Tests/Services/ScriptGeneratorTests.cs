@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Microsoft.VisualStudio.TestPlatform.ObjectModel.Engine.ClientProtocol;
 using ClimateProcessing.Tests.Mocks;
 using System.Reflection;
+using ClimateProcessing.Configuration;
 
 namespace ClimateProcessing.Tests.Services;
 
@@ -217,123 +218,6 @@ public class ScriptGeneratorTests : IDisposable
         var areaInfo = new VariableInfo(Enum.GetName(variable)!, "W m-2");
         var areaResult = _generator.GetInterpolationAlgorithm(areaInfo, variable);
         Assert.Equal(InterpolationAlgorithm.Bilinear, areaResult);
-    }
-
-    [Theory]
-    [InlineData(1, 8, 100, "normal", "01:00:00", "test_job", "p123", "test@example.com")]
-    [InlineData(2, 192, 1024, "hugemem", "48:00:00", "asdf_name", "x987", null)]
-    public async Task WritesPBSHeader(int ncpu, int memory, int jobfs, string queue, string walltime, string jobName, string project, string? email)
-    {
-        // Arrange
-        StringWriter writer = new();
-        NarClim2Config config = new()
-        {
-            Project = project,
-            Queue = queue,
-            Walltime = walltime,
-            Ncpus = ncpu,
-            Memory = memory,
-            JobFS = jobfs,
-            Email = email ?? string.Empty,
-            OutputDirectory = outputDirectory
-        };
-        ScriptGenerator generator = new(config);
-
-        // Act
-        // Don't generate a lightweight script header for this test.
-        await generator.WritePBSHeader(writer, jobName, false);
-        string result = writer.ToString();
-
-        // Assert
-        Assert.Contains($"#PBS -N {jobName}", result);
-        Assert.Contains($"#PBS -P {project}", result);
-        Assert.Contains($"#PBS -q {queue}", result);
-        Assert.Contains($"#PBS -l walltime={walltime}", result);
-        Assert.Contains($"#PBS -l ncpus={ncpu}", result);
-        Assert.Contains($"#PBS -l mem={memory}GB", result);
-        Assert.Contains($"#PBS -l jobfs={jobfs}GB", result);
-        Assert.Contains("#PBS -j oe", result);
-
-        if (email != null)
-        {
-            Assert.Contains($"#PBS -M {email}", result);
-            Assert.Contains("#PBS -m abe", result);
-        }
-        else
-        {
-            Assert.DoesNotContain("#PBS -M", result);
-            Assert.DoesNotContain("#PBS -m", result);
-        }
-
-        // Verify proper line endings.
-        Assert.DoesNotContain(result, "\r");
-
-        // Verify proper line endings and no empty lines with whitespace.
-        string[] lines = result.Split("\n");
-
-        // Get index of last line starting with #PBS.
-        string lastPBSLine = lines.Last(line => line.StartsWith("#PBS "));
-        int lastPBSLineIndex = Array.LastIndexOf(lines, lastPBSLine);
-
-        // Assert that all lines before the last #PBS line are not empty.
-        Assert.All(lines[0..lastPBSLineIndex], Assert.NotEmpty);
-    }
-
-    [Theory]
-    [InlineData("/home/user/input", "/home/user/grid.txt", "/home/user/output", 0)]  // No storage directives needed
-    [InlineData("/g/data/proj1/input", "/home/user/grid.txt", "/home/user/output", 1)]  // Single gdata directive
-    [InlineData("/home/user/input", "/scratch/test/grid.txt", "/home/user/output", 1)]  // Single scratch directive
-    [InlineData("/g/data/proj1/input", "/home/user/grid.txt", "/scratch/test/output", 2)]  // Both gdata and scratch
-    public async Task WritePBSHeader_GeneratesCorrectHeader(
-        string inputDir,
-        string gridlist,
-        string outputDir,
-        int expectedDirectives)
-    {
-        // Arrange
-        StringWriter writer = new();
-        NarClim2Config config = new()
-        {
-            Project = "p123",
-            Queue = "normal",
-            Walltime = "01:00:00",
-            Ncpus = 2,
-            Memory = 8,
-            InputDirectory = inputDir,
-            OutputDirectory = outputDir,
-            GridFile = gridlist
-        };
-        ScriptGenerator generator = new(config);
-
-        // Act
-        await generator.WritePBSHeader(writer, "test_job", false);
-        string result = writer.ToString();
-
-        // Assert
-        // Verify basic header elements are present
-        Assert.Contains("#PBS -P p123", result);
-        Assert.Contains("#PBS -q normal", result);
-        Assert.Contains("#PBS -l walltime=01:00:00", result);
-        Assert.Contains("#PBS -l ncpus=2", result);
-        Assert.Contains("#PBS -l mem=8GB", result);
-        Assert.Contains("#PBS -N test_job", result);
-
-        // Verify storage directive presence and format
-        string prefix = "#PBS -l storage=";
-        var storageLines = result.Split('\n').Where(l => l.StartsWith(prefix)).ToList();
-        var needsStorage = expectedDirectives > 0;
-
-        if (needsStorage)
-        {
-            Assert.Single(storageLines);
-            string storageLine = storageLines[0];
-            string[] parts = storageLine.Replace(prefix, string.Empty).Split('+');
-            Assert.Equal(expectedDirectives, parts.Length);
-        }
-        else
-        {
-            Assert.Empty(storageLines);
-        }
     }
 
     [Theory]

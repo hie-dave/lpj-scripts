@@ -1,5 +1,5 @@
 using ClimateProcessing.Models;
-using System.Linq;
+using ClimateProcessing.Services;
 using Xunit;
 
 namespace ClimateProcessing.Tests.Models;
