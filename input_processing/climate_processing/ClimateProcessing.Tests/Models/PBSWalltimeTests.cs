@@ -60,6 +60,9 @@ public class PBSWalltimeTests
     [InlineData("abc")]
     [InlineData("01:00")]
     [InlineData("01:00:00:00")]
+    [InlineData("0g:00:00")]
+    [InlineData("00:xz:00")]
+    [InlineData("00:00:z2")]
     public void Parse_InvalidFormat_ThrowsFormatException(string input)
     {
         Assert.Throws<FormatException>(() => PBSWalltime.Parse(input));
@@ -137,11 +140,15 @@ public class PBSWalltimeTests
         Assert.False(walltime1 != walltime2);
     }
 
-    [Fact]
-    public void Equals_DifferentValues_ReturnsFalse()
+    [Theory]
+    [InlineData(0, 0, 1, 0, 0, 2)] // Same hours, same minutes, different seconds
+    [InlineData(0, 0, 1, 0, 1, 1)] // Same hours, different minutes, same seconds
+    [InlineData(0, 0, 1, 6, 0, 1)] // Different hours, same minutes, same seconds
+    [InlineData(1, 2, 3, 1, 2, 4)]
+    public void Equals_DifferentValues_ReturnsFalse(int h0, int m0, int s0, int h1, int m1, int s1)
     {
-        var walltime1 = new PBSWalltime(1, 2, 3);
-        var walltime2 = new PBSWalltime(1, 2, 4);
+        var walltime1 = new PBSWalltime(h0, m0, s0);
+        var walltime2 = new PBSWalltime(h1, m1, s1);
 
         Assert.False(walltime1.Equals(walltime2));
         Assert.False(walltime1.Equals((object)walltime2));

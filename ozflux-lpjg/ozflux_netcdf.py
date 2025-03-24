@@ -1148,6 +1148,7 @@ def get_dim_with_attr(nc: Dataset, attr_name: str, attr_value: str
 	@param err_txt: Text of the error message.s
 	"""
 	return find_dimension(nc, lambda dim: \
+		dim.name in nc.variables and
 		hasattr(nc.variables[dim.name], attr_name) and
 		getattr(nc.variables[dim.name], attr_name) == attr_value, err_txt)
 

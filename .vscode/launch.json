@@ -5,8 +5,204 @@
 	"version": "0.2.0",
 	"configurations": [
 		{
+			"name": "calc_thome",
+			"type": "debugpy",
+			"request": "launch",
+			"program": "${workspaceRoot}/ozflux-lpjg/calc_thome.py",
+			"args": [
+				"--show-progress",
+				"--verbosity", "5",
+				"--in-file", "${workspaceRoot}/ozflux-lpjg/data/flux/processed/1hour/CumberlandPlain.nc",
+				"--out-file", "${workspaceRoot}/ozflux-lpjg/data/thome/CumberlandPlain.nc"
+			],
+			"console": "integratedTerminal",
+			"justMyCode": true
+		},
+		{
+			"name": "set_bounds",
+			"type": "debugpy",
+			"request": "launch",
+			"program": "${workspaceRoot}/set_bounds.py",
+			"args": [
+				"${workspaceRoot}/narclim/in.nc"
+			],
+			"console": "integratedTerminal",
+			"justMyCode": true
+		},
+		{
+			"name": "bpl_processing",
+			"type": "debugpy",
+			"request": "launch",
+			"program": "${workspaceRoot}/ozflux-lpjg/bpl_processing.py",
+			"args": [
+				"--show-progress",
+				"--verbosity",
+				"3",
+				"--site-file",
+				"${workspaceRoot}/ozflux-lpjg/data/bpl/bpl_site_summary.csv",
+				"--pft-file",
+				"${workspaceRoot}/ozflux-lpjg/data/bpl/bpl_tree_summary_pft.csv",
+				"--out-dir",
+				"${workspaceRoot}/ozflux-lpjg/data/bpl/processed",
+			],
+			"console": "integratedTerminal",
+			"justMyCode": true
+		},
+		{
+			"name": "obs_processing",
+			"type": "debugpy",
+			"request": "launch",
+			"program": "${workspaceRoot}/ozflux-lpjg/obs_processing.py",
+			"args": [
+				// ./obs_processing.py -pv5 -o data/ -t 24 -f netcdf -l data/lai/OzFlux-sites-LAI-MYD15A2H-006-results.csv -g data/yarramundi/YarCon_250m_16_days_NDVI.csv -s data/smips/sw --smips-index-path data/smips/swindex --compression-level 1 --inventory-path data/biomass/inventory/ data/flux/raw/subdaily/*.nc
+				"-pv3",
+				"-o",
+				"${workspaceRoot}/ozflux-lpjg/data/",
+				"-t",
+				"24",
+				"-f",
+				"netcdf",
+				"-l",
+				"${workspaceRoot}/ozflux-lpjg/data/lai/OzFlux-sites-LAI-MYD15A2H-006-results.csv",
+				"-g",
+				"${workspaceRoot}/ozflux-lpjg/data/yarramundi/YarCon_250m_16_days_NDVI.csv",
+				"-s",
+				"${workspaceRoot}/ozflux-lpjg/data/smips/sw",
+				"--smips-index-path",
+				"${workspaceRoot}/ozflux-lpjg/data/smips/swindex",
+				"--compression-level",
+				"1",
+				"--inventory-path",
+				"${workspaceRoot}/ozflux-lpjg/data/biomass/inventory/",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/RobsonCreek_L6_20130801_20211218.nc"
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/GreatWesternWoodlands_L6_20130101_20230101.nc"
+				"${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/CumberlandPlain_L6_20140101_20231230.nc"
+			],
+			"console": "integratedTerminal",
+			"justMyCode": true
+		},
+		{
+			"name": "biom_processing",
+			"type": "debugpy",
+			"request": "launch",
+			"program": "${workspaceRoot}/biom_processing.py",
+			"args": [
+				"/home/drew/code/lpj-guess/output-analysis/inst/data/ozflux-obs.nc",
+				"${workspaceRoot}/ozflux-lpjg/data/biomass/biomass.nc",
+				"${workspaceRoot}/ozflux-lpjg/data/ozflux-obs.nc",
+			],
+			"console": "integratedTerminal",
+			"justMyCode": true
+		},
+		{
+			"name": "merge_netcdf_points",
+			"type": "debugpy",
+			"request": "launch",
+			"program": "${workspaceRoot}/merge_netcdf_points.py",
+			"args": [
+				"/home/drew/code/lpj-guess/output-analysis/inst/data/ozflux-obs.nc",
+				"${workspaceRoot}/ozflux-lpjg/data/biomass/biomass.nc",
+				"${workspaceRoot}/ozflux-lpjg/data/ozflux-obs.nc",
+			],
+			"console": "integratedTerminal",
+			"justMyCode": true
+		},
+		{
+			"name": "test_netcdf_processing",
+			"type": "debugpy",
+			"request": "launch",
+			"program": "${workspaceRoot}/test_netcdf_processing.py",
+			"args": [
+			],
+			"console": "integratedTerminal",
+			"justMyCode": true
+		},
+		{
+			"name": "merge_biomass_to_netcdf",
+			"type": "debugpy",
+			"request": "launch",
+			"program": "${workspaceRoot}/merge_biomass_to_netcdf.py",
+			"args": [
+				"--input-dir",
+				"${workspaceRoot}/ozflux-lpjg/data/biomass/new/",
+				"--output-file",
+				"${workspaceRoot}/ozflux-lpjg/data/biomass/biomass2.nc",
+				"--biomass-var-name",
+				"cmass",
+				"--grid-file",
+				"${workspaceRoot}/ozflux.grid"
+			],
+			"console": "integratedTerminal",
+			"justMyCode": true
+		},
+		{
+			"name": "obs-processing",
+			"type": "debugpy",
+			"request": "launch",
+			"program": "${workspaceRoot}/ozflux-lpjg/obs-processing",
+			"args": [
+				"--verbosity",
+				"3",
+				// "--parallel",
+				"--out-dir",
+				"${workspaceRoot}/ozflux-lpjg/obs",
+
+				"--timestep",
+				"24",
+				"--biomass-searchpath",
+				"${workspaceRoot}/ozflux-lpjg/data/biomass",
+				"--lai-file",
+				"${workspaceRoot}/ozflux-lpjg/data/lai/OzFlux-sites-LAI-MYD15A2H-006-results.csv",
+				"--greenness-file",
+				"${workspaceRoot}/ozflux-lpjg/data/yarramundi/YarCon_250m_16_days_NDVI.csv",
+				"--smips-index-path",
+				"${workspaceRoot}/ozflux-lpjg/data/smips/swindex/",
+				"--smips-path",
+				"${workspaceRoot}/ozflux-lpjg/data/smips/sw",
+
+				"--",
+
+				// ${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/*.nc
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/AdelaideRiver_L6_20071017_20090524.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/AliceSpringsMulga_L6_20100903_20230308.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/Boyagin_L6_20171020_20230310.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/CapeTribulation_L6_20100101_20181102.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/Collie_L6_20170804_20191111.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/CowBay_L6_20090101_20230101.nc",
+				"${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/CumberlandPlain_L6_20140101_20221231.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/DalyPasture_L6_20080101_20130908.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/DalyUncleared_L6_20080101_20230219.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/DryRiver_L6_20091025_20230309.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/Emerald_L6_20110610_20131231.nc",
+				// // "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/Fletcherview_L6_20220122_20230316.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/FoggDam_L6_20060207_20081031.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/Gingin_L6_20111013_20230101.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/GreatWesternWoodlands_L6_20130101_20230101.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/HowardSprings_L6_20020101_20230310.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/Litchfield_L6_20150623_20221214.nc",
+				// // "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/Loxton_L6_20080819_20090609.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/Otway_L6_20070811_20110101.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/RedDirtMelonFarm_L6_20110923_20130721.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/Ridgefield_L6_20160101_20230310.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/RiggsCreek_L6_20110101_20170712.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/RobsonCreek_L6_20130801_20211218.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/SilverPlains_L6_20200101_20230329.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/SturtPlains_L6_20080828_20221231.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/TiTreeEast_L6_20120718_20220117.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/Tumbarumba_L6_20020107_20220530.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/WallabyCreek_L6_20050825_20130409.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/Warra_L6_20130305_20210921.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/Whroo_L6_20111201_20220902.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/WombatStateForest_L6_20100120_20210529.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/Yanco_L6_20130101_20221230.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/YarCon_L6_all.nc"
+			],
+			"console": "integratedTerminal",
+			"justMyCode": true
+		},
+		{
 			"name": "create-benchmarks",
-			"type": "python",
+			"type": "debugpy",
 			"request": "launch",
 			"program": "${workspaceRoot}/ozflux-lpjg/create-benchmarks",
 			"args": [
@@ -70,18 +266,301 @@
 		},
 		{
 			"name": "download-ozflux",
-			"type": "python",
+			"type": "debugpy",
 			"request": "launch",
 			"program": "${workspaceRoot}/ozflux-lpjg/download-ozflux",
 			"args": [
-				"${workspaceRoot}/ozflux-lpjg/inputs/met/raw"
+				"-o",
+				"${workspaceRoot}/ozflux-lpjg/data/flux/raw_new",
+				"--show-progress",
+				"--verbosity",
+				"3",
+				"--daily"
 			],
 			"console": "integratedTerminal",
 			"justMyCode": true
 		},
 		{
+			"name": "download-ozflux-thredds",
+			"type": "debugpy",
+			"request": "launch",
+			"program": "${workspaceRoot}/ozflux-lpjg/download-ozflux-thredds",
+			"args": [
+				"-o",
+				"${workspaceRoot}/ozflux-lpjg/data/flux/raw_new",
+				"--show-progress",
+				"--verbosity",
+				"3",
+				"--daily"
+			],
+			"console": "integratedTerminal",
+			"justMyCode": true
+		},
+		{
+			"name": "ameriflux",
+			"type": "debugpy",
+			"request": "launch",
+			"program": "${workspaceRoot}/ozflux-lpjg/met-processing",
+			"args": [
+				"--show-progress",
+				"--verbosity",
+				"4",
+
+				"--ameriflux",
+				"--timestep",
+				"60",
+
+				"--out-dir",
+				"${workspaceRoot}/ozflux-lpjg/data/flux/processed/1hour/",
+
+				// Input files
+				"${workspaceRoot}/ozflux-lpjg/data/juergen-sites/AMF_US-Mo2_FLUXNET_SUBSET_HH_2018-2021_3-5.csv.nc",
+			],
+		},
+		{
+			"name": "ncreshape",
+			"type": "debugpy",
+			"request": "launch",
+			"program": "${workspaceRoot}/ozflux-lpjg/ncreshape",
+			"args": [
+				"--show-progress",
+				"--verbosity",
+				"4",
+
+				// "--parallel",
+				// "--mpi",
+
+				"--chunk-size",
+				"lat/1,lon/1,time/336",
+				"--dimension-order",
+				"lat,lon,time",
+				"--compression-level",
+				"5",
+				"--min-chunk-size",
+				"128",
+
+				"--out-dir",
+				"${workspaceRoot}/ozflux-lpjg/data/barra2/reshaped",
+
+				"--work-dir",
+				"${workspaceRoot}/ozflux-lpjg/data/barra2/working",
+
+				// Input files
+				"${workspaceRoot}/ozflux-lpjg/data/barra2/tas_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_1hr_197901-197901.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/barra2/tas_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_1hr_197902-197902.nc",
+				// "${workspaceRoot}/ozflux-lpjg/data/barra2/rsds_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_1hr_197901-197901.nc",
+			],
+		},
+		{
+			"name": "tif2netcdf",
+			"type": "debugpy",
+			"request": "launch",
+			"program": "${workspaceRoot}/ozflux-lpjg/tif2netcdf.py",
+			"args": [
+				"--verbosity",
+				"5",
+				"--show-progress",
+
+				"--variable-name",
+				"height",
+
+				"--timestamp",
+				"1988-12-31",
+
+				"--in-file",
+				"/home/drew/code/lpj-guess/output-analysis/.data/height/data/LS_1988_100m_Oz_3577_TreeHeight_RFM_v3DEA_Mskd.tif",
+
+				"--out-file",
+				"/home/drew/code/lpj-guess/output-analysis/.data/height/LS_1988_100m_Oz_3577_TreeHeight_RFM_v3DEA_Mskd.nc"
+			],
+		},
+		{
+			"name": "prashant_processing",
+			"type": "debugpy",
+			"request": "launch",
+			"program": "${workspaceRoot}/ozflux-lpjg/prashant_regrid.py",
+			"args": [
+				"--verbosity",
+				"5",
+				"--show-progress",
+
+				"--out-dir",
+				"${workspaceRoot}/ozflux-lpjg/data/prashant/out",
+
+				"${workspaceRoot}/ozflux-lpjg/data/prashant/in/WRFOut_TP9km_Daily_Total_P_1981.nc"
+			],
+		},
+		{
+			"name": "collapse_dim",
+			"type": "debugpy",
+			"request": "launch",
+			"program": "${workspaceRoot}/ozflux-lpjg/collapse_dim.py",
+			"args": [
+				"--verbosity",
+				"5",
+				"--show-progress",
+
+				"--dimension",
+				"pressure",
+				"--aggregator",
+				"mean",
+
+				"--in-file",
+				"${workspaceRoot}/ozflux-lpjg/data/prashant/in/WRFOut_TP9km_Daily_U_1980_01.nc",
+
+				"--out-file",
+				"${workspaceRoot}/ozflux-lpjg/data/prashant/out/WRFOut_TP9km_Daily_U_1980_01.nc",
+			],
+		},
+		{
+			"name": "csv2netcdf",
+			"type": "debugpy",
+			"request": "launch",
+			"program": "${workspaceRoot}/ozflux-lpjg/csv2netcdf.py",
+			"args": [
+				"--verbosity",
+				"4",
+				"--show-progress",
+
+				"--longitude",
+				"-109.39",
+				"--latitude",
+				"38.09",
+				"--time-column",
+				"TIMESTAMP_START",
+				"--time-format",
+				// https://docs.python.org/3/library/datetime.html#strftime-strptime-behavior
+				// E.g. %d/%m/%y %H:%M:%S
+				"%Y%m%d%H%M",
+				"--missing-value",
+				"-9999",
+
+				"--compression-level",
+				"5",
+				"--chunk-sizes",
+				"lon/1,lat/1,time/17520",
+
+				"--keep-only-metadata",
+
+				"--metadata",
+				"TA_F,air_temperature,Air Temperature,degC",
+
+				"--metadata",
+				"SW_IN_F,surface_downwelling_shortwave_flux_in_air,Down-welling shortwave radiation,W/m^2",
+
+				"--metadata",
+				"P_F,thickness_of_rainfall_amount,Rainfall,mm",
+
+				"--metadata",
+				"CO2_F_MDS,mole_fraction_of_carbon_dioxide_in_air,CO2 concentration,umol/mol",
+
+				"--metadata",
+				"VPD_F,water_vapor_saturation_deficit_in_air,Vapour pressure deficit,hPa",
+
+				"--metadata",
+				"PA_F,surface_air_pressure,Surface air pressure,kPa",
+
+				"--metadata",
+				"WS_F,wind_speed,Wind speed,m/s",
+
+				"--in-file",
+				"${workspaceRoot}/ozflux-lpjg/data/fluxnet/raw/FLX_US-Cop_FLUXNET2015_SUBSET_2001-2007_1-4/FLX_US-Cop_FLUXNET2015_SUBSET_HH_2001-2007_1-4.csv",
+				"--out-file",
+				"${workspaceRoot}/ozflux-lpjg/data/fluxnet/raw/FLX_US-Cop_FLUXNET2015_SUBSET_2001-2007_1-4/CorralPocket.nc",
+			],
+		},
+		{
+			"name": "csv2netcdf_awap",
+			"type": "debugpy",
+			"request": "launch",
+			"program": "${workspaceRoot}/ozflux-lpjg/csv2netcdf.py",
+			"args": [
+				"-i",
+				"${workspaceRoot}/ozflux-lpjg/data/awap/climate_data_awap_3h_disagg/3hourly_AWAP_data_SWdown.csv",
+				"-o",
+				"${workspaceRoot}/ozflux-lpjg/data/awap/processed/rs_Xby7vo.nc",
+				"--time-column",
+				"Time",
+				"--time-format",
+				"%Y-%m-%d %H:%M:%S",
+				"--metadata",
+				"MtDuval,surface_downwelling_shortwave_flux_in_air,Down-welling shortwave radiation,W m-2,insol",
+				"--keep-only-metadata",
+				"--latitude",
+				"-30.417",
+				"--longitude",
+				"151.620",
+				"--compression-level",
+				"1",
+			],
+		},
+		{
+			"name": "nccalcvpd",
+			"type": "debugpy",
+			"request": "launch",
+			"program": "${workspaceRoot}/ozflux-lpjg/nccalcvpd",
+			"args": [
+				"--verbosity",
+				"4",
+				"--show-progress",
+
+				"--in-dir",
+				"${workspaceRoot}/ozflux-lpjg/data/barra2",
+				"--out-dir",
+				"${workspaceRoot}/ozflux-lpjg/data/barra2",
+
+				"--max-year",
+				"1979",
+				"--max-month",
+				"1",
+
+				"--min-chunk-size",
+				"12",
+
+				"--timestep",
+				"1hr",
+
+				"--var-humidity",
+				"huss",
+
+				"--var-temperature",
+				"tas",
+			],
+		},
+		{
+			"name": "ncmergetime",
+			"type": "debugpy",
+			"request": "launch",
+			"program": "${workspaceRoot}/ozflux-lpjg/ncmergetime",
+			"args": [
+				"--verbosity",
+				"4",
+				"--show-progress",
+				// "--units",
+				// "degC",
+				"--out-file",
+				"${workspaceRoot}/ozflux-lpjg/data/barra2/out.nc",
+				"--min-chunk-size",
+				"4",
+
+				"--chunk-sizes",
+				"lat/1,lon/1,time/512",
+
+				"--compression-level",
+				"0",
+
+				// "--restart-file",
+				// "${workspaceRoot}/ozflux-lpjg/data/barra2/restart.dat",
+				// "--walltime-limit",
+				// "00:01:00",
+
+				"${workspaceRoot}/ozflux-lpjg/data/barra2/vpd_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_1hr_197901-197901.nc",
+				"${workspaceRoot}/ozflux-lpjg/data/barra2/vpd_AUS-11_ERA5_historical_hres_BOM_BARRA-R2_v1_1hr_197902-197902.nc",
+			],
+		},
+		{
 			"name": "met-processing",
-			"type": "python",
+			"type": "debugpy",
 			"request": "launch",
 			"program": "${workspaceRoot}/ozflux-lpjg/met-processing",
 			"args": [
@@ -89,15 +568,15 @@
 				"3",
 				"--show-progress",
 				"--out-dir",
-				"${workspaceRoot}/ozflux-lpjg/inputs/met/processed-3h",
+				"${workspaceRoot}/ozflux-lpjg/data/flux/processed/1hour",
 				"--timestep",
-				"180",
-				"${workspaceRoot}/ozflux-lpjg/inputs/met/raw/Litchfield_L6_20150623_20211128.nc",
+				"60",
+				"${workspaceRoot}/ozflux-lpjg/data/flux/raw/subdaily/YarCon_L6_all.nc",
 			],
 		},
 		{
 			"name": "met-processing (create co2 files)",
-			"type": "python",
+			"type": "debugpy",
 			"request": "launch",
 			"program": "${workspaceRoot}/ozflux-lpjg/met-processing",
 			"args": [
@@ -145,7 +624,7 @@
 		},
 		{
 			"name": "config-soil",
-			"type": "python",
+			"type": "debugpy",
 			"request": "launch",
 			"program": "${workspaceRoot}/ozflux-lpjg/config-soil",
 			"args": [
@@ -166,7 +645,7 @@
 		},
 		{
 			"name": "weather-gen",
-			"type": "python",
+			"type": "debugpy",
 			"request": "launch",
 			"program": "${workspaceRoot}/ozflux-lpjg/weather-gen",
 			"args": [

@@ -16,6 +16,7 @@ from operator import attrgetter
 from argparse import ArgumentParser
 from ozflux_logging import *
 from ozflux_netcdf import *
+from ozflux_observations import *
 from sys import argv
 from netCDF4 import Dataset, date2index, num2date, date2num
 from typing import Callable
@@ -196,29 +197,6 @@ _inventory_site_names = {
 	"Whroo_Dry_Eucalypt_diameter_height_biomass_data_15iHyyj.csv": "Whroo",
 	"Wombat_Stringybark_Eucalypt_diameter_height_biomass_EYriIKJ.csv": "WombatStateForest",
 }
-
-class Observation:
-	"""
-	An observation made on a particular date.
-	"""
-	def __init__(self, date: datetime.datetime, value: float):
-		self.date = date
-		self.value = value
-
-class Observations:
-	"""
-	A collection of observations for a particular variable.
-
-	@param name: Name of the data variable (no spaces).
-	@param long_name: Long name of the data variable (human readable).
-	@param units: Units of the data.
-	@param observations: List of time/value pairs.
-	"""
-	def __init__(self, name: str, long_name: str, units: str, observations: list[Observation]):
-		self.name = name
-		self.long_name = long_name
-		self.units = units
-		self.data = sorted(observations, key = lambda b: b.date)
 
 class Options:
 	"""

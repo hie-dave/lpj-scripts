@@ -150,12 +150,12 @@ def run_tests():
     print(f"Mean annual precipitation: {precip_sum_mean.mean().values:.2f} mm/year")
     
     # Clean up
-    for f in [temp_file, precip_file, shape_file, 
-              'temp_mean.tif', 'temp_annual_mean.tif',
-              'precip_mean.tif', 'precip_annual_mean.tif', 'precip_annual_sum_mean.tif',
-              'test_region.dbf', 'test_region.prj', 'test_region.shx']:
-        if os.path.exists(f):
-            os.remove(f)
+    # for f in [temp_file, precip_file, shape_file, 
+    #           'temp_mean.tif', 'temp_annual_mean.tif',
+    #           'precip_mean.tif', 'precip_annual_mean.tif', 'precip_annual_sum_mean.tif',
+    #           'test_region.dbf', 'test_region.prj', 'test_region.shx']:
+    #     if os.path.exists(f):
+    #         os.remove(f)
 
 if __name__ == "__main__":
     run_tests()
