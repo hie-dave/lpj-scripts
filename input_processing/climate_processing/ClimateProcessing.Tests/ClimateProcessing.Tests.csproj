@@ -27,4 +27,10 @@
     <EmbeddedResource Include="Data\**" />
   </ItemGroup>
 
+  <Target Name="ForceRecompileOnResourceChange" BeforeTargets="BeforeCompile">
+      <ItemGroup>
+          <CustomAdditionalCompileInputs Include="@(EmbeddedResource)" />
+      </ItemGroup>
+  </Target>
+
 </Project>
