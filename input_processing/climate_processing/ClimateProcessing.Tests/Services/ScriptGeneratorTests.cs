@@ -585,6 +585,7 @@ public class ScriptGeneratorTests : IDisposable
         }
     }
 
+
     private async Task<string> ReadResource(string resourceName)
     {
         Assembly assembly = typeof(ScriptGeneratorTests).Assembly;

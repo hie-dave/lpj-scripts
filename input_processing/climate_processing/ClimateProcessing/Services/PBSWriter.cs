@@ -45,12 +45,12 @@ public class PBSWriter
         await writer.WriteLineAsync($"#PBS -l ncpus={config.Ncpus}");
         await writer.WriteLineAsync($"#PBS -l mem={config.Memory}GB");
         await writer.WriteLineAsync($"#PBS -l jobfs={config.JobFS}GB");
-        await writer.WriteLineAsync($"#PBS -j oe");
+        await writer.WriteLineAsync("#PBS -j oe");
 
         if (!string.IsNullOrEmpty(config.Email))
         {
             await writer.WriteLineAsync($"#PBS -M {config.Email}");
-            await writer.WriteLineAsync($"#PBS -m abe");
+            await writer.WriteLineAsync("#PBS -m abe");
         }
 
         // Add storage directives if required

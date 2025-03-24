@@ -1,4 +1,5 @@
 using ClimateProcessing.Constants;
+using ClimateProcessing.Models;
 
 namespace ClimateProcessing.Configuration;
 
@@ -35,7 +36,7 @@ public class PBSConfig
     /// <summary>
     /// The walltime to use for the job.
     /// </summary>
-    public TimeSpan Walltime { get; init; }
+    public PBSWalltime Walltime { get; init; }
 
     /// <summary>
     /// The email address to use for the job.
@@ -58,7 +59,7 @@ public class PBSConfig
         int memory,
         int jobFS,
         string project,
-        TimeSpan walltime,
+        PBSWalltime walltime,
         string? email = null)
     {
         Queue = queue;
@@ -70,13 +71,20 @@ public class PBSConfig
         Email = email;
     }
 
+    /// <summary>
+    /// Creates a lightweight PBS configuration with default values.
+    /// </summary>
+    /// <param name="jobfs">The amount of JobFS space to allocate to the job, in GiB.</param>
+    /// <param name="project">The project to which the job will be debited.</param>
+    /// <param name="email">The optional email address to which job notifications will be sent.</param>
+    /// <returns>A new PBS configuration instance.</returns>
     public static PBSConfig LightWeight(int jobfs, string project, string? email) => new(
         PBSConstants.QueueNormal,
         PBSConstants.LightweightNcpus,
         PBSConstants.LightweightMemory,
         jobfs,
         project,
-        TimeSpan.FromHours(48),
+        PBSWalltime.MaxValue,
         email
     );
 }

@@ -110,7 +110,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
             config.Memory,
             config.JobFS,
             config.Project,
-            TimeSpan.ParseExact(config.Walltime, "hh:mm:ss", null),
+            PBSWalltime.Parse(config.Walltime),
             config.Email
         );
         pbsHeavyweight = new PBSWriter(pbsConfig, pathManager);

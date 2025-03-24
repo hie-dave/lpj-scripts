@@ -56,7 +56,7 @@ public class PBSWriterTests : IDisposable
             memory,
             jobfs,
             project,
-            TimeSpan.ParseExact(walltime, @"hh\:mm\:ss", null),
+            PBSWalltime.Parse(walltime),
             email);
         PathManager pathManager = new PathManager(outputDirectory);
         PBSWriter generator = new(config, pathManager);
@@ -117,7 +117,7 @@ public class PBSWriterTests : IDisposable
             8,
             100,
             "p123",
-            TimeSpan.FromHours(1)
+            new PBSWalltime(1, 0, 0)
         );
         PathManager pathManager = new PathManager(outputDirectory);
         PBSWriter generator = new(config, pathManager);
