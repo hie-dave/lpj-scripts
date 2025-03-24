@@ -163,7 +163,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         string targetUnits,
         TimeStep timeStep)
     {
-        var result = UnitConverter.AnalyzeConversion(inputUnits, targetUnits);
+        var result = UnitConverter.AnalyseConversion(inputUnits, targetUnits);
 
         List<string> operators = [];
 

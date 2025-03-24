@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 
 namespace ClimateProcessing.Units;
 
@@ -32,62 +31,54 @@ public static class UnitConverter
         string? ConversionExpression = null
     );
 
-    public static ConversionResult AnalyzeConversion(string inputUnits, string targetUnits)
+    public static ConversionResult AnalyseConversion(string inputUnits, string targetUnits)
     {
-        // Normalize both units to their canonical form
-        var normalizedInput = NormalizeUnits(inputUnits);
-        var normalizedTarget = NormalizeUnits(targetUnits);
-
-        // Check if units are exactly the same (including notation)
+        // Check if units are exactly the same (including notation).
         if (inputUnits == targetUnits)
-        {
             return new ConversionResult(false, false, false);
-        }
 
-        // Check if units are equivalent (different notation but same meaning)
-        if (AreUnitsEquivalent(normalizedInput, normalizedTarget))
-        {
+        // Normalise both units to their canonical form
+        string normalisedInput = NormaliseUnits(inputUnits);
+        string normalisedTarget = NormaliseUnits(targetUnits);
+
+        // Check if units are equivalent (different notation but same meaning).
+        if (AreUnitsEquivalent(normalisedInput, normalisedTarget))
             return new ConversionResult(false, true, false);
-        }
 
-        // Check if we have a conversion expression
-        var conversionKey = (normalizedInput, normalizedTarget);
+        // Check if we have a conversion expression.
+        var conversionKey = (normalisedInput, normalisedTarget);
         if (ConversionExpressions.TryGetValue(conversionKey, out var conversion))
-        {
             return new ConversionResult(true, true, conversion.RequiresTimeStep, conversion.Expression);
-        }
 
         throw new ArgumentException($"Unsupported unit conversion from {inputUnits} to {targetUnits}");
     }
 
-    private static string NormalizeUnits(string units)
+    /// <summary>
+    /// Normalise a unit string to a canonical form.
+    /// </summary>
+    /// <param name="units">The unit string to normalise.</param>
+    /// <returns>The normalised unit string.</returns>
+    internal static string NormaliseUnits(string units)
     {
-        // First try to find an exact match in our synonyms
-        foreach (var (canonical, synonyms) in UnitSynonyms)
-        {
-            if (synonyms.Contains(units))
-            {
-                return canonical;
-            }
-        }
+        // TODO: support spaces:  umol / m2 == umol/m2
+        // TODO: support periods: kg.m-2 == kg m-2
+        // TODO: support carets:  m2/m2 == m^2/m^2
+        // TODO: support slashes: W/m2 == W m-2
 
-        // If no exact match, return as is
+        // If no exact match, return as is.
         return units;
     }
 
-    private static bool AreUnitsEquivalent(string units1, string units2)
+    internal static bool AreUnitsEquivalent(string units1, string units2)
     {
-        // First check if they're the same after normalization
-        if (units1 == units2) return true;
+        // First check if they're the same after normalisation.
+        if (units1 == units2)
+            return true;
 
-        // Then check if they belong to the same synonym group
+        // Then check if they belong to the same synonym group.
         foreach (var synonyms in UnitSynonyms.Values)
-        {
             if (synonyms.Contains(units1) && synonyms.Contains(units2))
-            {
                 return true;
-            }
-        }
 
         return false;
     }
@@ -97,17 +88,17 @@ public static class UnitConverter
         string targetUnits,
         TimeStep timeStep)
     {
-        ConversionResult result = AnalyzeConversion(inputUnits, targetUnits);
+        ConversionResult result = AnalyseConversion(inputUnits, targetUnits);
 
         // Should never happen - this function is only called if a conversion is
         // required.
         if (!result.RequiresConversion)
             return string.Empty;
 
-        if (result.ConversionExpression == null)
-            throw new InvalidOperationException($"No conversion expression available for {inputUnits} to {targetUnits}");
-
-        string expression = result.ConversionExpression;
+        // Conversion expression cannot be null here. AnalyseConversion can only
+        // return RequiresConversion=true when the conversion expression is
+        // non-null.
+        string expression = result.ConversionExpression!;
         if (result.RequiresTimeStep)
             expression = expression.Replace("{timestep}", timeStep.GetSecondsInPeriod().ToString());
 

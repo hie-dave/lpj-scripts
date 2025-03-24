@@ -17,7 +17,7 @@ public class UnitConverterTests
         bool expectedRequiresRenaming,
         bool expectedRequiresTimeStep)
     {
-        var result = UnitConverter.AnalyzeConversion(inputUnits, targetUnits);
+        var result = UnitConverter.AnalyseConversion(inputUnits, targetUnits);
 
         Assert.Equal(expectedRequiresConversion, result.RequiresConversion);
         Assert.Equal(expectedRequiresRenaming, result.RequiresRenaming);
@@ -30,10 +30,37 @@ public class UnitConverterTests
     }
 
     [Theory]
+    [InlineData("kg / m2", "kg / m2"/*, "kg/m2"*/)] // TODO: support whitespace
+    [InlineData("kg.m-2", "kg.m-2"/*, "kg/m2"*/)] // TODO: support periods
+    [InlineData("kgm^-2", "kgm^-2"/*, "kg m-2"*/)]    // TODO: support carets
+    [InlineData("W/m2", "W/m2"/*, "W m-2"*/)]           // TODO: support slashes
+    public void TestNormalise(string input, string expected)
+    {
+        string actual = UnitConverter.NormaliseUnits(input);
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData("asdf", "asdf", true)]  // Identical
+    [InlineData("Kelvin", "K", true)]  // First unit known, second unit known (equivalent)
+    [InlineData("K", "degC", false)]    // First unit known, second unit known (not equivalent)
+    [InlineData("degC", "asdf", false)] // First unit known, second unit unknown
+    [InlineData("fdsa", "mm", false)]   // First unit unknown, second unit known
+    [InlineData("jkl", "asdf", false)]  // First unit unknown, second unit unknown
+    [InlineData("kg m-2", "mm", true)]  // Synonymous
+    public void TestAreUnitsEquivalent(string units0, string units1, bool equivalent)
+    {
+        // Check commutativity as well.
+        Assert.Equal(equivalent, UnitConverter.AreUnitsEquivalent(units0, units1));
+        Assert.Equal(equivalent, UnitConverter.AreUnitsEquivalent(units1, units0));
+    }
+
+    [Theory]
     [InlineData("K", "degC", 1, "-subc,273.15")]
     [InlineData("kg m-2 s-1", "mm", 24, "-mulc,86400")] // Daily accumulation
     [InlineData("kg m-2 s-1", "mm", 3, "-mulc,10800")]  // 3-hourly accumulation
     [InlineData("kg m-2 s-1", "mm", 1, "-mulc,3600")]   // Hourly accumulation
+    [InlineData("mm", "mm", 6, "")] // No conversion required
     public void GenerateConversionExpression_GeneratesCorrectExpressions(
         string inputUnits,
         string targetUnits,
@@ -54,7 +81,7 @@ public class UnitConverterTests
     )
     {
         Assert.Throws<ArgumentException>(() =>
-            UnitConverter.AnalyzeConversion(inputUnits, targetUnits));
+            UnitConverter.AnalyseConversion(inputUnits, targetUnits));
     }
 
     [Theory]
