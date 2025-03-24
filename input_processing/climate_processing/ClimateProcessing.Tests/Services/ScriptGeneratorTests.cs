@@ -370,6 +370,25 @@ public class ScriptGeneratorTests : IDisposable
     }
 
     [Theory]
+    [InlineData(ClimateVariable.Precipitation, "precip", "pr", "mm")]
+    public async Task GenerateVariableMergeScript_GeneratesValidRenameCommand(
+        ClimateVariable variable,
+        string inputName,
+        string expectedOutputName,
+        string inputUnits)
+    {
+        ScriptGenerator generator = new(_config);
+        StaticMockDataset dataset = new("/input", inputName, inputUnits);
+
+        string scriptPath = await generator.GenerateVariableMergeScript(
+            dataset,
+            variable);
+        string scriptContent = await File.ReadAllTextAsync(scriptPath);
+
+        Assert.Contains($"-chname,'{inputName}','{expectedOutputName}'", scriptContent);
+    }
+
+    [Theory]
     [InlineData(VPDMethod.Magnus)]
     [InlineData(VPDMethod.Buck1981)]
     [InlineData(VPDMethod.AlduchovEskridge1996)]
@@ -483,6 +502,108 @@ public class ScriptGeneratorTests : IDisposable
 
         // Should always have cleanup job
         Assert.Contains("cleanup_", scriptContent);
+    }
+
+    [Theory]
+    [InlineData(ClimateVariable.Temperature, "K", ModelVersion.Trunk)]
+    [InlineData(ClimateVariable.Temperature, "degC", ModelVersion.Dave)]
+    [InlineData(ClimateVariable.MaxTemperature, "K", ModelVersion.Trunk)]
+    [InlineData(ClimateVariable.MinTemperature, "K", ModelVersion.Trunk)]
+    [InlineData(ClimateVariable.Precipitation, "mm", ModelVersion.Trunk)]
+    [InlineData(ClimateVariable.Precipitation, "mm", ModelVersion.Dave)]
+    [InlineData(ClimateVariable.ShortwaveRadiation, "W m-2", ModelVersion.Trunk)]
+    [InlineData(ClimateVariable.ShortwaveRadiation, "W m-2", ModelVersion.Dave)]
+    [InlineData(ClimateVariable.SpecificHumidity, "1", ModelVersion.Trunk)]
+    [InlineData(ClimateVariable.SpecificHumidity, "1", ModelVersion.Dave)]
+    [InlineData(ClimateVariable.SurfacePressure, "Pa", ModelVersion.Trunk)]
+    [InlineData(ClimateVariable.SurfacePressure, "Pa", ModelVersion.Dave)]
+    [InlineData(ClimateVariable.WindSpeed, "m s-1", ModelVersion.Trunk)]
+    [InlineData(ClimateVariable.WindSpeed, "m s-1", ModelVersion.Dave)]
+    public void TestGetTargetUnits_ValidVariable(
+        ClimateVariable variable,
+        string expectedUnits,
+        ModelVersion version)
+    {
+        _config.Version = version;
+        ScriptGenerator generator = new ScriptGenerator(_config);
+        string actualUnits = generator.GetTargetUnits(variable);
+        Assert.Equal(expectedUnits, actualUnits);
+    }
+
+    [Theory]
+    [InlineData(ClimateVariable.Temperature, AggregationMethod.Mean)]
+    [InlineData(ClimateVariable.MaxTemperature, AggregationMethod.Maximum)]
+    [InlineData(ClimateVariable.MinTemperature, AggregationMethod.Minimum)]
+    [InlineData(ClimateVariable.Precipitation, AggregationMethod.Sum)]
+    [InlineData(ClimateVariable.ShortwaveRadiation, AggregationMethod.Mean)]
+    [InlineData(ClimateVariable.SpecificHumidity, AggregationMethod.Mean)]
+    [InlineData(ClimateVariable.SurfacePressure, AggregationMethod.Mean)]
+    [InlineData(ClimateVariable.WindSpeed, AggregationMethod.Mean)]
+    public void TestGetTargetAggregationMethod_ValidVariable(
+        ClimateVariable variable,
+        AggregationMethod expectedMethod)
+    {
+        _config.Version = ModelVersion.Trunk;
+        ScriptGenerator generator = new ScriptGenerator(_config);
+        AggregationMethod actualMethod = generator.GetAggregationMethod(variable);
+        Assert.Equal(expectedMethod, actualMethod);
+
+        // Test DAVE version too.
+        if (variable != ClimateVariable.MinTemperature && variable != ClimateVariable.MaxTemperature)
+        {
+            _config.Version = ModelVersion.Dave;
+            generator = new ScriptGenerator(_config);
+            actualMethod = generator.GetAggregationMethod(variable);
+            Assert.Equal(expectedMethod, actualMethod);
+        }
+    }
+
+    [Theory]
+    [InlineData(ClimateVariable.MaxTemperature, ModelVersion.Dave)]
+    [InlineData(ClimateVariable.MinTemperature, ModelVersion.Dave)]
+    public void GetTargetConfig_ThrowsForInvalidVariable(
+        ClimateVariable variable,
+        ModelVersion version)
+    {
+        _config.Version = version;
+        ScriptGenerator generator = new ScriptGenerator(_config);
+        Assert.ThrowsAny<ArgumentException>(() => generator.GetTargetConfig(variable));
+    }
+
+    [Theory]
+    [InlineData(true, 0)]
+    [InlineData(false, 0)]
+    [InlineData(true, 9)]
+    [InlineData(false, 9)]
+    public async Task GenerateVariableRechunkScript_ConditionallyDisablesCompression(
+        bool compressionEnabled,
+        int compressionLevel
+    )
+    {
+        StaticMockDataset dataset = new("/input");
+        _config.CompressOutput = compressionEnabled;
+        _config.CompressionLevel = compressionLevel;
+        ScriptGenerator generator = new ScriptGenerator(_config);
+        string script = await generator.GenerateVariableRechunkScript(dataset, ClimateVariable.Temperature);
+        string[] scriptLines = await File.ReadAllLinesAsync(script);
+        IEnumerable<string> ncpdqLines = scriptLines.Where(l => l.Contains("ncpdq"));
+
+        if (compressionEnabled)
+            Assert.All(ncpdqLines, l => Assert.Contains($"-L{compressionLevel}", l));
+        else
+            Assert.All(ncpdqLines, l => Assert.DoesNotContain("-L", l));
+    }
+
+    [Fact]
+    public async Task TestGenerateWrapperScript()
+    {
+        string script = Path.GetTempFileName();
+        await File.WriteAllLinesAsync(script, ["#!/usr/bin/bash", "echo x"]);
+        string wrapper = await ScriptGenerator.GenerateWrapperScript(outputDirectory, [script]);
+        string output = await File.ReadAllTextAsync(wrapper);
+
+        // The wrapper script should call each subscript passed into it.
+        Assert.Contains($"\n{script}\n", output);
     }
 
     /// <summary>

@@ -395,6 +395,14 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
             || variable == ClimateVariable.Temperature;
     }
 
+    internal (string, AggregationMethod) GetTargetConfig(ClimateVariable variable)
+    {
+        var variables = GetVariables();
+        if (!variables.TryGetValue(variable, out (string units, AggregationMethod _) config))
+            throw new ArgumentException($"No configuration found for variable {variable}");
+        return config;
+    }
+
     /// <summary>
     /// Get the target units for the specified variable.
     /// </summary>
@@ -403,10 +411,8 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     /// <exception cref="ArgumentException">If no configuration is found for the specified variable.</exception>
     public string GetTargetUnits(ClimateVariable variable)
     {
-        var variables = GetVariables();
-        if (!variables.TryGetValue(variable, out (string units, AggregationMethod _) config))
-            throw new ArgumentException($"No configuration found for variable {variable}");
-        return config.units;
+        (string units, _) = GetTargetConfig(variable);
+        return units;
     }
 
     /// <summary>
@@ -417,24 +423,8 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     /// <exception cref="ArgumentException">If no configuration is found for the specified variable.</exception>
     public AggregationMethod GetAggregationMethod(ClimateVariable variable)
     {
-        var variables = GetVariables();
-        if (!variables.TryGetValue(variable, out var config))
-            throw new ArgumentException($"No configuration found for variable {variable}");
-        return config.aggregation;
-    }
-
-    /// <summary>
-    /// Get the PBS storage directives required for the processing.
-    /// </summary>
-    /// <returns>The required storage directives.</returns>
-    public IEnumerable<PBSStorageDirective> GetRequiredStorageDirectives()
-    {
-        List<string> paths = [_config.InputDirectory];
-        if (!string.IsNullOrEmpty(_config.OutputDirectory))
-            paths.Add(_config.OutputDirectory);
-        if (!string.IsNullOrEmpty(_config.GridFile))
-            paths.Add(_config.GridFile);
-        return PBSStorageHelper.GetStorageDirectives(paths);
+        (string _, AggregationMethod aggregation) = GetTargetConfig(variable);
+        return aggregation;
     }
 
     /// <summary>
@@ -764,7 +754,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     /// run on a low-memory node, but the rechunking script needs a high-memory
     /// node.</remarks>
     /// <returns>Path to the generated script file.</returns>
-    private async Task<string> GenerateVariableRechunkScript(IClimateDataset dataset, ClimateVariable variable)
+    internal async Task<string> GenerateVariableRechunkScript(IClimateDataset dataset, ClimateVariable variable)
     {
         VariableInfo varInfo = dataset.GetVariableInfo(variable);
 
