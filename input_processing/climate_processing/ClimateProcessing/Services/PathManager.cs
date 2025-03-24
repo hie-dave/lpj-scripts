@@ -1,8 +1,14 @@
+using ClimateProcessing.Models;
+
 namespace ClimateProcessing.Services;
 
 /// <summary>
 /// Handles management of paths used in PBS scripts.
 /// </summary>
+/// <remarks>
+/// There may be some redundant directory creation going on here. It's useful
+/// for some of the unit tests though, so it can stay for now.
+/// </remarks
 public class PathManager : IPathManager
 {
     /// <summary>
@@ -47,111 +53,69 @@ public class PathManager : IPathManager
     /// <param name="outputPath">The output base directory.</param>
     public PathManager(string outputPath)
     {
-        this.outputDirectory = outputPath;
-    }
-
-    /// <summary>
-    /// Get the name of the log file for a given job name.
-    /// </summary>
-    /// <param name="jobName">The name of the job.</param>
-    /// <returns>The name of the log file.</returns>
-    private string GetLogFileName(string jobName) => $"{jobName}.log";
-
-    /// <inheritdoc />
-    public string GetLogFilePath(string jobName)
-    {
-        string logFileName = GetLogFileName(jobName);
-        string logFile = Path.Combine(GetLogPath(), logFileName);
-        return logFile;
-    }
-
-    /// <inheritdoc />
-    public string GetStreamFilePath(string jobName)
-    {
-        string logFileName = GetLogFileName(jobName);
-        string streamFile = Path.Combine(GetStreamPath(), logFileName);
-        return streamFile;
-    }
-
-    /// <inheritdoc /> 
-    public string GetScriptFilePath(string jobName)
-    {
-        string scriptName = jobName;
-        string scriptFile = Path.Combine(GetScriptPath(), scriptName);
-        return scriptFile;
-    }
-
-    /// <inheritdoc />
-    public string GetOutputFilePath(string outputFileName)
-    {
-        string outputPath = GetOutputPath();
-        string outputFile = Path.Combine(outputPath, outputFileName);
-        return outputFile;
-    }
-
-    /// <inheritdoc />
-    public string GetTempFilePath(string outputFileName)
-    {
-        string outputPath = GetWorkingPath();
-        string outputFile = Path.Combine(outputPath, outputFileName);
-        return outputFile;
+        outputDirectory = outputPath;
     }
 
     /// <inheritdoc />
     public string GetChecksumFilePath()
     {
-        return Path.Combine(GetOutputPath(), checksumFilename);
+        return Path.Combine(GetBasePath(PathType.Output), checksumFilename);
     }
 
     /// <inheritdoc />
-    public void CreateDirectoryTree()
+    public void CreateDirectoryTree(IClimateDataset dataset)
     {
-        Directory.CreateDirectory(GetLogPath());
-        Directory.CreateDirectory(GetScriptPath());
-        Directory.CreateDirectory(GetStreamPath());
-        Directory.CreateDirectory(GetWorkingPath());
-        Directory.CreateDirectory(GetOutputPath());
+        // Create top-level directories.
+        Directory.CreateDirectory(GetBasePath(PathType.Log));
+        Directory.CreateDirectory(GetBasePath(PathType.Script));
+        Directory.CreateDirectory(GetBasePath(PathType.Stream));
+        Directory.CreateDirectory(GetBasePath(PathType.Working));
+        Directory.CreateDirectory(GetBasePath(PathType.Output));
+
+        // Create dataset-level directories.
+        Directory.CreateDirectory(GetDatasetPath(dataset, PathType.Output));
+        Directory.CreateDirectory(GetDatasetPath(dataset, PathType.Working));
     }
 
     /// <inheritdoc />
-    public string GetWorkingPath()
+    public string GetDatasetPath(IClimateDataset dataset, PathType pathType)
     {
-        return Path.Combine(outputDirectory, workDirectoryName);
+        if (pathType == PathType.Log || pathType == PathType.Script || pathType == PathType.Stream)
+            throw new ArgumentException($"Path type {pathType} is not valid at the dataset-level. Only output/working paths make sense here.", nameof(pathType));
+
+        string basePath = GetBasePath(pathType);
+        string relativePath = dataset.GetOutputDirectory();
+        string fullPath = Path.Combine(basePath, relativePath);
+
+        // Create directory if needed
+        Directory.CreateDirectory(fullPath);
+
+        return fullPath;
     }
 
     /// <inheritdoc />
-    public string GetOutputPath()
+    public string GetDatasetFileName(IClimateDataset dataset, ClimateVariable variable, PathType pathType)
     {
-        return Path.Combine(outputDirectory, outputDirectoryName);
+        string directory = GetDatasetPath(dataset, pathType);
+        Directory.CreateDirectory(directory);
+        string fileName = dataset.GenerateOutputFileName(variable);
+        return Path.Combine(directory, fileName);
     }
 
-    /// <summary>
-    /// Get the path to the directory in which the scripts will be stored, and
-    /// create it if it doesn't exist.
-    /// </summary>
-    /// <returns>The path to the script directory.</returns>
-    private string GetScriptPath()
+    /// <inheritdoc /> 
+    public string GetBasePath(PathType pathType)
     {
-        return Path.Combine(outputDirectory, scriptDirectoryName);
-    }
-
-    /// <summary>
-    /// Get the path to the directory in which stdout/stderr will be streamed,
-    /// and create it if it doesn't exist.
-    /// </summary>
-    /// <returns>The path to the stream directory.</returns>
-    private string GetStreamPath()
-    {
-        return Path.Combine(outputDirectory, streamDirectoryName);
-    }
-
-    /// <summary>
-    /// Get the path to the directory in which log files will be stored, and
-    /// create it if it doesn't exist.
-    /// </summary>
-    /// <returns>The path to the log directory.</returns>
-    private string GetLogPath()
-    {
-        return Path.Combine(outputDirectory, logDirectoryName);
+        string directoryName = pathType switch
+        {
+            PathType.Output => outputDirectoryName,
+            PathType.Working => workDirectoryName,
+            PathType.Script => scriptDirectoryName,
+            PathType.Log => logDirectoryName,
+            PathType.Stream => streamDirectoryName,
+            _ => throw new ArgumentException($"Unsupported path type: {pathType}", nameof(pathType))
+        };
+        string directory = Path.Combine(outputDirectory, directoryName);
+        Directory.CreateDirectory(directory);
+        return directory;
     }
 }

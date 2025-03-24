@@ -7,12 +7,14 @@ using Microsoft.VisualStudio.TestPlatform.ObjectModel.Engine.ClientProtocol;
 using ClimateProcessing.Tests.Mocks;
 using System.Reflection;
 using ClimateProcessing.Configuration;
+using Xunit.Abstractions;
 
 namespace ClimateProcessing.Tests.Services;
 
 public class ScriptGeneratorTests : IDisposable
 {
     private const string outputDirectoryPrefix = "script_generator_tests_output";
+    private readonly ITestOutputHelper outputHelper;
     private readonly string outputDirectory;
     private static readonly string[] cdoTemporalAggregationOperators = [
         "daymin",
@@ -51,8 +53,9 @@ public class ScriptGeneratorTests : IDisposable
 
     private readonly ScriptGenerator _generator;
 
-    public ScriptGeneratorTests()
+    public ScriptGeneratorTests(ITestOutputHelper outputHelper)
     {
+        this.outputHelper = outputHelper;
         outputDirectory = CreateOutputDirectory();
 
         _config = new NarClim2Config()
@@ -200,7 +203,7 @@ public class ScriptGeneratorTests : IDisposable
     {
         var info = new VariableInfo(Enum.GetName(variable)!, "any_units");
         var result = _generator.GetInterpolationAlgorithm(info, variable);
-        
+
         Assert.Equal(InterpolationAlgorithm.Bilinear, result);
     }
 
@@ -227,7 +230,6 @@ public class ScriptGeneratorTests : IDisposable
     public async Task GenerateVariableMergeScript_QuotesVariablesSafely(
         string inputDir)
     {
-        // Arrange
         NarClim2Config config = new()
         {
             Project = "test",
@@ -243,7 +245,6 @@ public class ScriptGeneratorTests : IDisposable
         ScriptGenerator generator = new(config);
         StaticMockDataset dataset = new(inputDir);
 
-        // Act
         string scriptPath = await generator.GenerateVariableMergeScript(
             dataset,
             ClimateVariable.Temperature);
@@ -285,7 +286,6 @@ public class ScriptGeneratorTests : IDisposable
         string? unitConversionOperator = null,
         string? unitRenameOperator = null)
     {
-        // Arrange
         NarClim2Config config = new()
         {
             Project = "test",
@@ -302,7 +302,6 @@ public class ScriptGeneratorTests : IDisposable
         ScriptGenerator generator = new(config);
         StaticMockDataset dataset = new("/input", varName, inputUnits);
 
-        // Act
         string scriptPath = await generator.GenerateVariableMergeScript(
             dataset,
             variable);
@@ -313,7 +312,6 @@ public class ScriptGeneratorTests : IDisposable
         // "    cdo -L -O -v -z zip1 -daysum,24 -mulc,3600 -setattribute,'pr@units=mm' -unpack  \"${FILE}\" \"${REMAP_DIR}/$(basename \"${FILE}\")\""
         string line = scriptContent.Split("\n").First(l => l.Contains("cdo -"));
 
-        // Assert
         // CDO command should have proper structure
 
         // Should use -L for thread-safety.
@@ -379,7 +377,6 @@ public class ScriptGeneratorTests : IDisposable
     [InlineData(VPDMethod.Sonntag1990)]
     public async Task GenerateVPDScript_GeneratesCorrectEquations(VPDMethod method)
     {
-        // Arrange
         NarClim2Config config = new()
         {
             Project = "test",
@@ -393,7 +390,6 @@ public class ScriptGeneratorTests : IDisposable
         };
         ScriptGenerator generator = new(config);
 
-        // Act
         StringWriter writer = new();
         await generator.WriteVPDEquationsAsync(writer, method);
         string equationContent = writer.ToString();
@@ -417,7 +413,6 @@ public class ScriptGeneratorTests : IDisposable
     [InlineData(VPDMethod.Sonntag1990)]
     public async Task GenerateVPDScript_GeneratesValidScript(VPDMethod method)
     {
-        // Arrange
         NarClim2Config config = new()
         {
             Project = "test",
@@ -432,10 +427,8 @@ public class ScriptGeneratorTests : IDisposable
         ScriptGenerator generator = new(config);
         StaticMockDataset dataset = new("/input");
 
-        // Act
         string scriptPath = await generator.GenerateVPDScript(dataset);
 
-        // Assert
         Assert.True(File.Exists(scriptPath));
         string scriptContent = await File.ReadAllTextAsync(scriptPath);
         ValidateScript(scriptContent);
@@ -447,7 +440,6 @@ public class ScriptGeneratorTests : IDisposable
     public async Task GenerateScriptsAsync_HandlesVPDDependenciesCorrectly(
         bool requiresVPD)
     {
-        // Arrange
         NarClim2Config config = new()
         {
             Project = "test",
@@ -464,10 +456,8 @@ public class ScriptGeneratorTests : IDisposable
         ScriptGenerator generator = new(config);
         DynamicMockDataset dataset = new(config.InputDirectory, config.OutputDirectory);
 
-        // Act
         string scriptPath = await generator.GenerateScriptsAsync(dataset);
 
-        // Assert
         Assert.True(File.Exists(scriptPath));
         string scriptContent = await File.ReadAllTextAsync(scriptPath);
 
@@ -507,7 +497,6 @@ public class ScriptGeneratorTests : IDisposable
     [Fact]
     public async Task GenerateScriptsAsync_IntegrationTest()
     {
-        // Arrange.
         const string inputDirectory = "/input";
         DynamicMockDataset dataset = new(inputDirectory, outputDirectory);
         NarClim2Config config = new()
@@ -581,10 +570,13 @@ public class ScriptGeneratorTests : IDisposable
             string expectedScript = await ReadResource($"{resourcePrefix}.{scriptName}");
             expectedScript = expectedScript.Replace("@#OUTPUT_DIRECTORY#@", outputDirectory);
 
+            // No custom error messages in xunit, apparently.
+            if (expectedScript != actualScript)
+                outputHelper.WriteLine($"Script {scriptName} is invalid");
+
             Assert.Equal(expectedScript, actualScript);
         }
     }
-
 
     private async Task<string> ReadResource(string resourceName)
     {

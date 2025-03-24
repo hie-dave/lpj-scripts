@@ -33,8 +33,9 @@ public class PBSWriter
         string jobName,
         IEnumerable<PBSStorageDirective> storageDirectives)
     {
-        string logFile = pathManager.GetLogFilePath(jobName);
-        string streamFile = pathManager.GetStreamFilePath(jobName);
+        string logFileName = $"{jobName}.log";
+        string logFile = Path.Combine(pathManager.GetBasePath(PathType.Log), logFileName);
+        string streamFile = Path.Combine(pathManager.GetBasePath(PathType.Stream), logFileName);
 
         await writer.WriteLineAsync("#!/usr/bin/env bash");
         await writer.WriteLineAsync($"#PBS -N {jobName}");

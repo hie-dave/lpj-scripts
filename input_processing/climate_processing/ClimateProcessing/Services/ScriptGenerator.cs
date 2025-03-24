@@ -267,7 +267,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     /// <returns>The output file path.</returns>
     private string GetUnoptimisedVpdOutputFilePath(IClimateDataset dataset)
     {
-        string temperatureFile = GetMergetimeOutputPath(dataset, ClimateVariable.Temperature);
+        string temperatureFile = pathManager.GetDatasetFileName(dataset, ClimateVariable.Temperature, PathType.Working);
         return GetVpdFilePath(dataset, temperatureFile);
     }
 
@@ -278,7 +278,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     /// <returns>The output file path.</returns>
     private string GetOptimisedVpdOutputFilePath(IClimateDataset dataset)
     {
-        string temperatureFile = GetOutputFilePath(dataset, ClimateVariable.Temperature);
+        string temperatureFile = pathManager.GetDatasetFileName(dataset, ClimateVariable.Temperature, PathType.Output);
         return GetVpdFilePath(dataset, temperatureFile);
     }
 
@@ -291,6 +291,11 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     /// <returns>The equivalent VPD file path.</returns>
     private string GetVpdFilePath(IClimateDataset dataset, string temperatureFile)
     {
+        // TODO: this could be simplified if VPD were a ClimateVariable.
+        // Currently, these are the input variables though - so adding it would
+        // require some refactoring, and would probably break the encapsulation
+        // offered by this enum type, as most datasets *don't* have VPD as an
+        // input variable.
         string fileName = Path.GetFileName(temperatureFile);
         string tempName = dataset.GetVariableInfo(ClimateVariable.Temperature).Name;
         string baseName = fileName.ReplaceFirst($"{tempName}_", "vpd_");
@@ -306,11 +311,11 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     internal async Task<string> GenerateVPDScript(IClimateDataset dataset)
     {
         string jobName = $"calc_vpd_{dataset.DatasetName}";
-        string script = CreateScript(jobName);
+        string script = await CreateScript(jobName);
 
-        string humidityFile = GetMergetimeOutputPath(dataset, ClimateVariable.SpecificHumidity);
-        string pressureFile = GetMergetimeOutputPath(dataset, ClimateVariable.SurfacePressure);
-        string temperatureFile = GetMergetimeOutputPath(dataset, ClimateVariable.Temperature);
+        string humidityFile = pathManager.GetDatasetFileName(dataset, ClimateVariable.SpecificHumidity, PathType.Working);
+        string pressureFile = pathManager.GetDatasetFileName(dataset, ClimateVariable.SurfacePressure, PathType.Working);
+        string temperatureFile = pathManager.GetDatasetFileName(dataset, ClimateVariable.Temperature, PathType.Working);
 
         // Generate an output file name.
         string outFile = GetUnoptimisedVpdOutputFilePath(dataset);
@@ -439,9 +444,11 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     /// <returns>The path to the top-level script.</returns>
     public async Task<string> GenerateScriptsAsync(IClimateDataset dataset)
     {
-        string jobName = $"submit_{dataset.DatasetName}";
-        string scriptFile = CreateScript(jobName);
-        using TextWriter writer = new StreamWriter(scriptFile);
+        pathManager.CreateDirectoryTree(dataset);
+
+        string submitJobName = $"submit_{dataset.DatasetName}";
+        string submitScript = await CreateScript(submitJobName);
+        using TextWriter writer = new StreamWriter(submitScript);
 
         // Add PBS header.
         await writer.WriteLineAsync("#!/usr/bin/env bash");
@@ -455,8 +462,6 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         // Ensure output directory exists.
         await writer.WriteLineAsync($"mkdir -p \"{_config.OutputDirectory}\"");
         await writer.WriteLineAsync();
-
-        pathManager.CreateDirectoryTree();
 
         // Process each variable.
         Dictionary<ClimateVariable, string> mergetimeScripts = new();
@@ -539,7 +544,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         await writer.WriteLineAsync("echo \"Job submission complete.\"");
         await writer.WriteLineAsync();
 
-        return scriptFile;
+        return submitScript;
     }
 
     /// <summary>
@@ -558,21 +563,18 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     }
 
     /// <summary>
-    /// Create an empty script file and set execute permissions.
+    /// Create the specified script file, and give it the required permissions.
     /// </summary>
-    /// <param name="scriptPath">The path to the directory in which the script will be created.</param>
-    /// <param name="scriptName">The name of the script file to create.</param>
-    /// <returns>The path to the script file.</returns>
-    private static string CreateScript(string scriptPath, string scriptName)
+    /// <param name="script">Path to a script file.</param>
+    /// <exception cref="PlatformNotSupportedException">Thrown when the current operating system is not supported.</exception>
+    private static async Task InitialiseScript(string script)
     {
-        string script = Path.Combine(scriptPath, scriptName);
-        File.WriteAllText(script, string.Empty);
+        await File.WriteAllTextAsync(script, string.Empty);
         if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
             File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         else
             // Windows not supported.
             throw new PlatformNotSupportedException();
-        return script;
     }
 
     /// <summary>
@@ -580,50 +582,18 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     /// </summary>
     /// <param name="jobName">The name of the job.</param>
     /// <returns>The path to the script file.</returns>
-    private string CreateScript(string jobName)
+    private async Task<string> CreateScript(string jobName)
     {
-        string scriptPath = pathManager.GetScriptFilePath(jobName);
-        return CreateScript(scriptPath, jobName);
-    }
+        string directory = pathManager.GetBasePath(PathType.Script);
 
-    /// <summary>
-    /// Generate a path that will be used as the output file for the mergetime
-    /// operation.
-    /// </summary>
-    /// <param name="dataset">The climate dataset.</param>
-    /// <param name="variable">The variable being processed.</param>
-    /// <returns>The path to the output file.</returns>
-    private string GetMergetimeOutputPath(IClimateDataset dataset, ClimateVariable variable)
-    {
-        string fileName = dataset.GenerateOutputFileName(variable);
-        string outputFile = pathManager.GetTempFilePath(fileName);
+        // Use job name as script file name. This avoids the problems associated
+        // with naming a file with a ".sh" (or similar) extension.
+        string script = Path.Combine(directory, jobName);
 
-        // Create the directory for this output file if it doesn't already exist.
-        string? directory = Path.GetDirectoryName(outputFile);
-        if (!string.IsNullOrEmpty(directory))
-            Directory.CreateDirectory(directory);
+        // Create empty script file, set execute permissions.
+        await InitialiseScript(script);
 
-        return outputFile;
-    }
-
-    /// <summary>
-    /// Generate a path that will be used as the output file for a particular
-    /// variable in a dataset.
-    /// </summary>
-    /// <param name="dataset">The dataset.</param>
-    /// <param name="variable">The variable.</param>
-    /// <returns>The path to the output file.</returns>
-    private string GetOutputFilePath(IClimateDataset dataset, ClimateVariable variable)
-    {
-        string fileName = dataset.GenerateOutputFileName(variable);
-        string outputFile = pathManager.GetOutputFilePath(fileName);
-
-        // Create the directory for this output file if it doesn't already exist.
-        string? directory = Path.GetDirectoryName(outputFile);
-        if (!string.IsNullOrEmpty(directory))
-            Directory.CreateDirectory(directory);
-
-        return outputFile;
+        return script;
     }
 
     /// <summary>
@@ -675,7 +645,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         // File paths.
         string inDir = dataset.GetInputFilesDirectory(variable);
 
-        string outFile = GetMergetimeOutputPath(dataset, variable);
+        string outFile = pathManager.GetDatasetFileName(dataset, variable, PathType.Working);
 
         // Sanitise - e.g. /tmp/./x -> /tmp/x
         outFile = Path.GetFullPath(outFile);
@@ -692,7 +662,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         // Create script directory if it doesn't already exist.
         // This should be unnecessary at this point.
         string jobName = GetJobName("mergetime", varInfo, dataset);
-        string scriptFile = CreateScript(jobName);
+        string scriptFile = await CreateScript(jobName);
         using TextWriter writer = new StreamWriter(scriptFile);
         await pbsLightweight.WritePBSHeader(writer, jobName, storageDirectives);
 
@@ -767,8 +737,8 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     private async Task<string> GenerateCleanupScript(IClimateDataset dataset)
     {
         string jobName = $"cleanup_{dataset.DatasetName}";
-        string scriptFile = CreateScript(jobName);
-        string workDir = pathManager.GetWorkingPath();
+        string scriptFile = await CreateScript(jobName);
+        string workDir = pathManager.GetDatasetPath(dataset, PathType.Working);
         IEnumerable<PBSStorageDirective> storageDirectives =
             PBSStorageHelper.GetStorageDirectives([workDir]);
 
@@ -799,8 +769,8 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         VariableInfo varInfo = dataset.GetVariableInfo(variable);
 
         string jobName = GetJobName("rechunk", varInfo, dataset);
-        string inFile = GetMergetimeOutputPath(dataset, variable);
-        string outFile = GetOutputFilePath(dataset, variable);
+        string inFile = pathManager.GetDatasetFileName(dataset, variable, PathType.Working);
+        string outFile = pathManager.GetDatasetFileName(dataset, variable, PathType.Output);
         bool cleanup = !IsVpdDependency(variable);
 
         return await GenerateRechunkScript(jobName, inFile, outFile, cleanup);
@@ -808,7 +778,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
 
     private async Task<string> GenerateRechunkScript(string jobName, string inFile, string outFile, bool cleanup)
     {
-        string scriptFile = CreateScript(jobName);
+        string scriptFile = await CreateScript(jobName);
         IEnumerable<PBSStorageDirective> storageDirectives =
             PBSStorageHelper.GetStorageDirectives([inFile, outFile]);
 
@@ -836,13 +806,16 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         // Calculate checksum.
         // Note: we change directory and use a relative file path, to ensure
         // that the checksum file remains portable.
-        string outputPath = pathManager.GetOutputPath();
+
+        string outputPath = pathManager.GetBasePath(PathType.Output);
+        string checksumFile = pathManager.GetChecksumFilePath();
         string relativePath = Path.GetRelativePath(outputPath, outFile);
+
         await writer.WriteLineAsync("# Calculate checksum.");
         await writer.WriteLineAsync($"log \"Calculating checksum...\"");
         await writer.WriteLineAsync($"cd \"{outputPath}\"");
         await writer.WriteLineAsync($"REL_PATH=\"{relativePath}\"");
-        await writer.WriteLineAsync($"sha512sum \"${{REL_PATH}}\" >>\"{pathManager.GetChecksumFilePath()}\"");
+        await writer.WriteLineAsync($"sha512sum \"${{REL_PATH}}\" >>\"{checksumFile}\"");
         await writer.WriteLineAsync("log \"Checksum calculation completed successfully.\"");
         await writer.WriteLineAsync();
 
@@ -880,8 +853,10 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         PathManager pathManager = new(outputDirectory);
 
         string jobName = "wrapper";
-        string scriptPath = pathManager.GetScriptFilePath(jobName);
-        string scriptFile = CreateScript(scriptPath, jobName);
+        string scriptPath = pathManager.GetBasePath(PathType.Script);
+        string scriptFile = Path.Combine(scriptPath, jobName);
+
+        await InitialiseScript(scriptFile);
         using TextWriter writer = new StreamWriter(scriptFile);
 
         await writer.WriteLineAsync("#!/usr/bin/env bash");
