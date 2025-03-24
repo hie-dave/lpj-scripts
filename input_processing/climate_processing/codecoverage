@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+dotnet test --collect:"XPlat Code Coverage"
+
+# dotnet tool install -g dotnet-reportgenerator-globaltool
+reportgenerator -reports:"**/coverage.cobertura.xml" -targetdir:"coveragereport" -reporttypes:Html
+
+xdg-open coveragereport/index.html
