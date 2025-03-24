@@ -38,4 +38,13 @@ public class NarClim2ConstantsTests
         var result = NarClim2Constants.FrequencyNames.ToString(input);
         Assert.Equal(expected, result);
     }
+
+    [Theory]
+    [InlineData(NarClim2Domain.AUS18, NarClim2Constants.Files.RlonValuesFileAUS18)]
+    [InlineData(NarClim2Domain.SEAus04, NarClim2Constants.Files.RlonValuesFileSEAus04)]
+    public void GetRlonValueFile_ReturnsCorrectFile(NarClim2Domain domain, string expected)
+    {
+        string actual = NarClim2Constants.Files.GetRlonValuesFile(domain);
+        Assert.Equal(expected, actual);
+    }
 }

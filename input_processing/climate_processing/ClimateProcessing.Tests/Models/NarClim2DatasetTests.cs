@@ -187,4 +187,102 @@ public class NarClim2DatasetTests : IDisposable
     {
         Assert.ThrowsAny<FormatException>(() => NarClim2Dataset.GetDateFromFilename(filename, true));
     }
+
+    [Theory]
+    [InlineData("invalid.filename.nc")]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_day_f-19511231.nc")]
+    [InlineData("tas_AUS-18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_day_19510132-g.nc")]
+    public void GetDateFromFileName_ThrowsForInvalidFileNames(string filename)
+    {
+        Assert.ThrowsAny<ArgumentException>(() => NarClim2Dataset.GetDateFromFilename(filename, true));
+    }
+
+    [Theory]
+    [InlineData(NarClim2Domain.AUS18, NarClim2GCM.AccessEsm15, NarClim2Experiment.Historical, NarClim2RCM.WRF412R3, NarClim2Frequency.Hour1, "NARCliM2.0_AUS-18_ACCESS-ESM1-5_historical_NARCliM2-0-WRF412R3")]
+    [InlineData(NarClim2Domain.SEAus04, NarClim2GCM.Ukesm10Ll, NarClim2Experiment.SSP370, NarClim2RCM.WRF412R5, NarClim2Frequency.Day, "NARCliM2.0_NARCliM2-0-SEAus-04_UKESM1-0-LL_ssp370_NARCliM2-0-WRF412R5")]
+    public void TestNarClim2DatasetName(
+        NarClim2Domain domain,
+        NarClim2GCM gcm,
+        NarClim2Experiment experiment,
+        NarClim2RCM rcm,
+        NarClim2Frequency frequency,
+        string expected)
+    {
+        NarClim2Dataset dataset = new NarClim2Dataset(
+            "/input",
+            domain,
+            gcm,
+            experiment,
+            rcm,
+            frequency);
+        Assert.Equal(expected, dataset.DatasetName);
+    }
+
+    [Theory]
+    [InlineData(ClimateVariable.MaxTemperature, NarClim2Frequency.Hour1)]
+    [InlineData(ClimateVariable.MinTemperature, NarClim2Frequency.Hour1)]
+    [InlineData(ClimateVariable.MaxTemperature, NarClim2Frequency.Hour3)]
+    [InlineData(ClimateVariable.MinTemperature, NarClim2Frequency.Hour3)]
+    public void GetInputFiles_InvalidFrequency(ClimateVariable variable, NarClim2Frequency frequency)
+    {
+        NarClim2Dataset dataset = new NarClim2Dataset(
+            "/input",
+            NarClim2Domain.AUS18,
+            NarClim2GCM.AccessEsm15,
+            NarClim2Experiment.Historical,
+            NarClim2RCM.WRF412R3,
+            frequency);
+        Assert.ThrowsAny<ArgumentException>(() => dataset.GetInputFiles(variable));
+    }
+
+    [Theory]
+    [InlineData(NarClim2Domain.AUS18, NarClim2GCM.EcEarth3Veg, NarClim2Experiment.SSP126, NarClim2RCM.WRF412R5, NarClim2Frequency.Hour3, "EC-Earth3-Veg/ssp126/NARCliM2-0-WRF412R5")]
+    [InlineData(NarClim2Domain.SEAus04, NarClim2GCM.NorEsm2Mm, NarClim2Experiment.Historical, NarClim2RCM.WRF412R3, NarClim2Frequency.Hour1, "NorESM2-MM/historical/NARCliM2-0-WRF412R3")]
+    public void TestGetOuptutDirectory(
+        NarClim2Domain domain,
+        NarClim2GCM gcm,
+        NarClim2Experiment experiment,
+        NarClim2RCM rcm,
+        NarClim2Frequency frequency,
+        string expected)
+    {
+        NarClim2Dataset dataset = new NarClim2Dataset(
+            "/input",
+            domain,
+            gcm,
+            experiment,
+            rcm,
+            frequency);
+        Assert.Equal(expected, dataset.GetOutputDirectory());
+    }
+
+    [Theory]
+    [InlineData(NarClim2Domain.AUS18)]
+    [InlineData(NarClim2Domain.SEAus04)]
+    public void TestGetDomain(NarClim2Domain domain)
+    {
+        NarClim2Dataset dataset = new NarClim2Dataset(
+            "/input",
+            domain,
+            NarClim2GCM.AccessEsm15,
+            NarClim2Experiment.Historical,
+            NarClim2RCM.WRF412R3,
+            NarClim2Frequency.Hour1);
+        Assert.Equal(domain, dataset.Domain);
+    }
+
+    [Theory]
+    [InlineData("/input")]
+    [InlineData("a/b/c/d.txt")]
+    public void TestGetInputPath(string inputPath)
+    {
+        NarClim2Dataset dataset = new NarClim2Dataset(
+            inputPath,
+            NarClim2Domain.AUS18,
+            NarClim2GCM.AccessEsm15,
+            NarClim2Experiment.Historical,
+            NarClim2RCM.WRF412R3,
+            NarClim2Frequency.Hour1);
+        Assert.Equal(inputPath, dataset.BasePath);
+    }
 }
