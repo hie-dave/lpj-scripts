@@ -1,11 +1,6 @@
 using Xunit;
 using ClimateProcessing.Services;
 using ClimateProcessing.Models;
-using ClimateProcessing.Units;
-using System.Text.RegularExpressions;
-using Microsoft.VisualStudio.TestPlatform.ObjectModel.Engine.ClientProtocol;
-using ClimateProcessing.Tests.Mocks;
-using System.Reflection;
 using ClimateProcessing.Configuration;
 
 namespace ClimateProcessing.Tests.Services;
