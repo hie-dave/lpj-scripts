@@ -67,7 +67,7 @@ public class NarClim2ScriptGenerator : ScriptGenerator, IScriptGenerator<NarClim
     /// </summary>
     /// <param name="narclim2">The dataset.</param>
     /// <returns>The absolute path to the file.</returns>
-    private string GetRlonValuesFile(NarClim2Dataset narclim2)
+    protected string GetRlonValuesFile(NarClim2Dataset narclim2)
     {
         string directory = narclim2.BasePath;
         string fileName = NarClim2Constants.Files.GetRlonValuesFile(narclim2.Domain);
