@@ -61,13 +61,14 @@ public class UnitConverterTests
     [InlineData("kg m-2 s-1", "mm", 3, "-mulc,10800")]  // 3-hourly accumulation
     [InlineData("kg m-2 s-1", "mm", 1, "-mulc,3600")]   // Hourly accumulation
     [InlineData("mm", "mm", 6, "")] // No conversion required
+    [InlineData("kPa", "Pa", 1, "-mulc,1000")]
     public void GenerateConversionExpression_GeneratesCorrectExpressions(
         string inputUnits,
         string targetUnits,
-        int hours,
+        int timestep,
         string expectedExpression)
     {
-        TimeStep timeStep = new TimeStep(hours);
+        TimeStep timeStep = new TimeStep(timestep);
         string expression = UnitConverter.GenerateConversionExpression(inputUnits, targetUnits, timeStep);
         Assert.Equal(expectedExpression, expression);
     }

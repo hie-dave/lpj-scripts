@@ -39,7 +39,7 @@ JOB_ID="$(qsub -W depend=afterok:"${VPD_DEPS}" "@#OUTPUT_DIRECTORY#@/scripts/cal
 JOB_ID="$(qsub -W depend=afterok:"${JOB_ID}" "@#OUTPUT_DIRECTORY#@/scripts/rechunk_vpd_DynamicMockDataset")"
 ALL_JOBS="${ALL_JOBS}:${JOB_ID}"
 
-qsub -W depend=afterok:"${ALL_JOBS}" "@#OUTPUT_DIRECTORY#@/scripts/cleanup_DynamicMockDataset"
+JOB_ID="$(qsub -W depend=afterok:"${ALL_JOBS}" "@#OUTPUT_DIRECTORY#@/scripts/cleanup_DynamicMockDataset")"
 
-echo "Job submission complete."
+echo "Job submission complete for dataset DynamicMockDataset. Job ID: ${JOB_ID}"
 

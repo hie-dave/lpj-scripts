@@ -146,6 +146,34 @@ public class NarClim2Dataset : IClimateDataset
     }
 
     /// <summary>
+    /// Get the regular expression and managed DateTime format string which
+    /// can be used to parse NARCliM2 filenames for files on the specified
+    /// frequency.
+    /// </summary>
+    /// <param name="frequency">The frequency of the filename.</param>
+    /// <returns>Tuple of regular expression and DateTime format string.</returns>
+    /// <exception cref="ArgumentException">Thrown when an invalid frequency is specified. Should never happen in practice unless narclim add more timestep frequencies in the future (e.g. 6hr).</exception>
+    internal static (string regex, string format) GetDateRegexFormat(NarClim2Frequency frequency)
+    {
+        const string regexMonth = @"_(\d{6})-(\d{6})\.nc$";
+        const string regexDay = @"_(\d{8})-(\d{8})\.nc$";
+        const string regexHour = @"_(\d{10})-(\d{10})\.nc$";
+
+        const string formatHour = "yyyyMMddHH";
+        const string formatDay = "yyyyMMdd";
+        const string formatMonth = "yyyyMM";
+
+        return frequency switch
+        {
+            NarClim2Frequency.Hour1 => (regexHour, formatHour),
+            NarClim2Frequency.Hour3 => (regexHour, formatHour),
+            NarClim2Frequency.Day => (regexDay, formatDay),
+            NarClim2Frequency.Month => (regexMonth, formatMonth),
+            _ => throw new ArgumentException($"Unknown frequency: {frequency}")
+        };
+    }
+
+    /// <summary>
     /// Gets the start or end date from a NARCliM2 filename.
     /// </summary>
     /// <param name="filename">The filename to parse.</param>
@@ -155,10 +183,6 @@ public class NarClim2Dataset : IClimateDataset
     internal static DateTime GetDateFromFilename(string filename, bool start)
     {
         // Example filename: tas_AUS18_ACCESS-ESM1-5_historical_r6i1p1f1_NSW-Government_NARCliM2-0-WRF412R3_v1-r1_mon_195101-195112.nc
-        const string regexmm = @"_(\d{6})-(\d{6})\.nc$";
-        const string regexmmdd = @"_(\d{8})-(\d{8})\.nc$";
-        const string regexmmddhh = @"_(\d{10})-(\d{10})\.nc$";
-
         // Remove the directory component, if one is present.
         filename = Path.GetFileName(filename);
 
@@ -166,31 +190,16 @@ public class NarClim2Dataset : IClimateDataset
         // Note: 1hr and 3hr files contain yyyyMMddHH, but day, mon, ..., etc
         //       use yyyyMMdd format (ie not time component).
         NarClim2Frequency frequency = GetFrequencyFromFilename(filename);
-        string pattern = frequency switch
-        {
-            NarClim2Frequency.Hour1 => regexmmddhh,
-            NarClim2Frequency.Hour3 => regexmmddhh,
-            NarClim2Frequency.Day => regexmmdd,
-            NarClim2Frequency.Month => regexmm,
-            _ => throw new ArgumentException($"Unknown frequency: {frequency}")
-        };
+        (string regex, string fmt) = GetDateRegexFormat(frequency);
 
         // Parse the filename.
-        Match match = Regex.Match(filename, pattern);
+        Match match = Regex.Match(filename, regex);
         if (!match.Success)
             throw new ArgumentException($"Unable to get date from filename. Invalid filename format: {filename}");
 
         // Choose the correct group and format, depending on whether we are
         // looking for the start or end date.
         string dateStr = match.Groups[start ? 1 : 2].Value;
-        string fmt = frequency switch
-        {
-            NarClim2Frequency.Hour1 => "yyyyMMddHH",
-            NarClim2Frequency.Hour3 => "yyyyMMddHH",
-            NarClim2Frequency.Day => "yyyyMMdd",
-            NarClim2Frequency.Month => "yyyyMM",
-            _ => throw new ArgumentException($"Unknown frequency: {frequency}")
-        };
 
         // Parse the date.
         return DateTime.ParseExact(dateStr, fmt, CultureInfo.InvariantCulture);

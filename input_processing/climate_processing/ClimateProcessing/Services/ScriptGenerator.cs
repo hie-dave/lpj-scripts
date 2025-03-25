@@ -530,10 +530,10 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         }
 
         // Submit cleanup script.
-        await writer.WriteLineAsync($"qsub -W depend=afterok:\"${{ALL_JOBS}}\" \"{cleanupScript}\"");
+        await writer.WriteLineAsync($"JOB_ID=\"$(qsub -W depend=afterok:\"${{ALL_JOBS}}\" \"{cleanupScript}\")\"");
         await writer.WriteLineAsync();
 
-        await writer.WriteLineAsync("echo \"Job submission complete.\"");
+        await writer.WriteLineAsync($"echo \"Job submission complete for dataset {dataset.DatasetName}. Job ID: ${{JOB_ID}}\"");
         await writer.WriteLineAsync();
 
         return submitScript;

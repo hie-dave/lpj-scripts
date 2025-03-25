@@ -1,4 +1,6 @@
 
+using System.Diagnostics.CodeAnalysis;
+
 namespace ClimateProcessing.Units;
 
 public static class UnitConverter

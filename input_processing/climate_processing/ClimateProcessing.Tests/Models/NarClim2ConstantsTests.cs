@@ -129,4 +129,67 @@ public class NarClim2ConstantsTests
         string actual = NarClim2Constants.VariantLabels.GetVariantLabel(gcm);
         Assert.Equal(expected, actual);
     }
+
+    [Fact]
+    public void GetRlonValuesFile_ThrowsForInvalidInput()
+    {
+        NarClim2Domain domain = (NarClim2Domain)999;
+        var ex = Assert.Throws<ArgumentException>(() =>
+            NarClim2Constants.Files.GetRlonValuesFile(domain));
+        Assert.Contains("Unknown domain", ex.Message);
+    }
+
+    [Fact]
+    public void Domain_ToString_ThrowsForInvalidInput()
+    {
+        NarClim2Domain domain = (NarClim2Domain)999;
+        var ex = Assert.Throws<ArgumentException>(() =>
+            NarClim2Constants.DomainNames.ToString(domain));
+        Assert.Contains("Unknown domain", ex.Message);
+    }
+
+    [Fact]
+    public void GCM_ToString_ThrowsForInvalidInput()
+    {
+        NarClim2GCM gcm = (NarClim2GCM)999;
+        var ex = Assert.Throws<ArgumentException>(() =>
+            NarClim2Constants.GCMNames.ToString(gcm));
+        Assert.Contains("Unknown GCM", ex.Message);
+    }
+
+    [Fact]
+    public void Experiment_ToString_ThrowsForInvalidInput()
+    {
+        NarClim2Experiment experiment = (NarClim2Experiment)999;
+        var ex = Assert.Throws<ArgumentException>(() =>
+            NarClim2Constants.ExperimentNames.ToString(experiment));
+        Assert.Contains("Unknown experiment", ex.Message);
+    }
+
+    [Fact]
+    public void RCM_ToString_ThrowsForInvalidInput()
+    {
+        NarClim2RCM rcm = (NarClim2RCM)999;
+        var ex = Assert.Throws<ArgumentException>(() =>
+            NarClim2Constants.RCMNames.ToString(rcm));
+        Assert.Contains("Unknown RCM", ex.Message);
+    }
+
+    [Fact]
+    public void FrequencyNames_ToString_ThrowsForInvalidInput()
+    {
+        NarClim2Frequency frequency = (NarClim2Frequency)999;
+        var ex = Assert.Throws<ArgumentException>(() =>
+            NarClim2Constants.FrequencyNames.ToString(frequency));
+        Assert.Contains("Unknown frequency", ex.Message);
+    }
+
+    [Fact]
+    public void GetVariantLabel_ThrowsForInvalidInput()
+    {
+        NarClim2GCM gcm = (NarClim2GCM)999;
+        var ex = Assert.Throws<ArgumentException>(() =>
+            NarClim2Constants.VariantLabels.GetVariantLabel(gcm));
+        Assert.Contains("Unknown GCM", ex.Message);
+    }
 }

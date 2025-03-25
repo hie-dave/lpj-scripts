@@ -197,6 +197,14 @@ public class NarClim2DatasetTests : IDisposable
         Assert.ThrowsAny<ArgumentException>(() => NarClim2Dataset.GetDateFromFilename(filename, true));
     }
 
+    [Fact]
+    public void GetDateRegexFormat_ThrowsForUnknownFrequency()
+    {
+        NarClim2Frequency frequency = (NarClim2Frequency)99999;
+        ArgumentException ex = Assert.ThrowsAny<ArgumentException>(() => NarClim2Dataset.GetDateRegexFormat(frequency));
+        Assert.Contains("Unknown frequency", ex.Message);
+    }
+
     [Theory]
     [InlineData(NarClim2Domain.AUS18, NarClim2GCM.AccessEsm15, NarClim2Experiment.Historical, NarClim2RCM.WRF412R3, NarClim2Frequency.Hour1, "NARCliM2.0_AUS-18_ACCESS-ESM1-5_historical_NARCliM2-0-WRF412R3")]
     [InlineData(NarClim2Domain.SEAus04, NarClim2GCM.Ukesm10Ll, NarClim2Experiment.SSP370, NarClim2RCM.WRF412R5, NarClim2Frequency.Day, "NARCliM2.0_NARCliM2-0-SEAus-04_UKESM1-0-LL_ssp370_NARCliM2-0-WRF412R5")]
