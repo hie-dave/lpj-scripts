@@ -3,7 +3,7 @@
 #PBS -o @#OUTPUT_DIRECTORY#@/logs/calc_vpd_DynamicMockDataset.log
 #PBS -P test
 #PBS -q normal
-#PBS -l walltime=48:00:00
+#PBS -l walltime=06:30:00
 #PBS -l ncpus=1
 #PBS -l mem=4GB
 #PBS -l jobfs=128GB

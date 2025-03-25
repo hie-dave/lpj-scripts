@@ -104,13 +104,14 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
     {
         _config = config;
         pathManager = new PathManager(config.OutputDirectory);
+        PBSWalltime walltime = PBSWalltime.Parse(config.Walltime);
         PBSConfig pbsConfig = new(
             config.Queue,
             config.Ncpus,
             config.Memory,
             config.JobFS,
             config.Project,
-            PBSWalltime.Parse(config.Walltime),
+            walltime,
             config.Email
         );
         pbsHeavyweight = new PBSWriter(pbsConfig, pathManager);
@@ -118,7 +119,8 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         PBSConfig lightweightConfig = PBSConfig.LightWeight(
             config.JobFS,
             config.Project,
-            config.Email
+            config.Email,
+            walltime
         );
         pbsLightweight = new PBSWriter(lightweightConfig, pathManager);
     }

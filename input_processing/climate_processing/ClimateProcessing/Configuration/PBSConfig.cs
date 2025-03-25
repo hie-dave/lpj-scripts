@@ -77,14 +77,19 @@ public class PBSConfig
     /// <param name="jobfs">The amount of JobFS space to allocate to the job, in GiB.</param>
     /// <param name="project">The project to which the job will be debited.</param>
     /// <param name="email">The optional email address to which job notifications will be sent.</param>
+    /// <param name="walltime">The maximum walltime the job is allowed to use.</param>
     /// <returns>A new PBS configuration instance.</returns>
-    public static PBSConfig LightWeight(int jobfs, string project, string? email) => new(
+    public static PBSConfig LightWeight(
+        int jobfs,
+        string project,
+        string? email,
+        PBSWalltime walltime) => new(
         PBSConstants.QueueNormal,
         PBSConstants.LightweightNcpus,
         PBSConstants.LightweightMemory,
         jobfs,
         project,
-        PBSWalltime.MaxValue,
+        walltime,
         email
     );
 }
