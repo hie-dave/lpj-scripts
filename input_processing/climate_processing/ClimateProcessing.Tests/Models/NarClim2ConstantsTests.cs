@@ -117,4 +117,16 @@ public class NarClim2ConstantsTests
     {
         Assert.ThrowsAny<ArgumentException>(() => NarClim2Constants.ParseFrequency(frequency));
     }
+
+    [Theory]
+    [InlineData(NarClim2GCM.AccessEsm15, NarClim2Constants.VariantLabels.AccessEsm15)]
+    [InlineData(NarClim2GCM.EcEarth3Veg, NarClim2Constants.VariantLabels.EcEarth3Veg)]
+    [InlineData(NarClim2GCM.MpiEsm12Hr, NarClim2Constants.VariantLabels.MpiEsm12Hr)]
+    [InlineData(NarClim2GCM.NorEsm2Mm, NarClim2Constants.VariantLabels.NorEsm2Mm)]
+    [InlineData(NarClim2GCM.Ukesm10Ll, NarClim2Constants.VariantLabels.Ukesm10Ll)]
+    public void TestGetVariantLabel(NarClim2GCM gcm, string expected)
+    {
+        string actual = NarClim2Constants.VariantLabels.GetVariantLabel(gcm);
+        Assert.Equal(expected, actual);
+    }
 }
