@@ -68,13 +68,22 @@ public abstract class ProcessingConfig
 
     public virtual void Validate()
     {
+        ValidateDirectories();
+        ValidateBasicParameters();
+        ValidateTimeStepSettings();
+    }
+
+    internal virtual void ValidateDirectories()
+    {
         if (!Directory.Exists(InputDirectory))
             throw new ArgumentException($"Input directory does not exist: '{InputDirectory}'");
 
-        // Create output directory if it doesn't already exist.
-        if (!string.IsNullOrEmpty(OutputDirectory))
-            Directory.CreateDirectory(OutputDirectory);
+        if (!string.IsNullOrEmpty(GridFile) && !File.Exists(GridFile))
+            throw new ArgumentException($"Grid file does not exist: '{GridFile}'");
+    }
 
+    internal virtual void ValidateBasicParameters()
+    {
         if (string.IsNullOrEmpty(Project))
             throw new ArgumentException("Project must be specified");
 
@@ -89,34 +98,41 @@ public abstract class ProcessingConfig
 
         if (ChunkSizeSpatial < 1)
             throw new ArgumentException("Chunk size for spatial variables must be greater than 0");
+    }
 
-        if (!string.IsNullOrEmpty(GridFile) && !File.Exists(GridFile))
-            throw new ArgumentException($"Grid file does not exist: {GridFile}");
-
-        if (Version == ModelVersion.Trunk)
-        {
-            if (InputTimeStepHours != 24 && InputTimeStepHours != 0)
-                throw new ArgumentException("Input timestep must be daily (24 hours) or not specified when processing for trunk.");
-            if (OutputTimeStepHours != 24 && OutputTimeStepHours != 0)
-                throw new ArgumentException("Output timestep must be daily (24 hours) or not specified when processing for trunk.");
-
-            // Always use a daily timestep.
-            InputTimeStepHours = 24;
-            OutputTimeStepHours = 24;
-        }
-
+    internal virtual void ValidateTimeStepSettings()
+    {
         if (Version == ModelVersion.Dave)
-        {
-            if (OutputTimeStepHours == 24)
-                throw new ArgumentException("Output timestep must be subdaily when processing for Dave.");
-            if (InputTimeStepHours == 0)
-                throw new ArgumentException("Input timestep must be specified when processing for Dave.");
-            if (OutputTimeStepHours == 0)
-                throw new ArgumentException("Output timestep must be specified when processing for Dave.");
-        }
+            ValidateDaveTimeStepSettings();
+        else if (Version == ModelVersion.Trunk)
+            ValidateTrunkTimeStepSettings();
+        else
+            throw new ArgumentException($"Invalid version: {Version}");
 
         if (InputTimeStepHours > OutputTimeStepHours)
             throw new ArgumentException("Input timestep cannot be coarser than the output timestep.");
+    }
+
+    internal virtual void ValidateTrunkTimeStepSettings()
+    {
+        if (InputTimeStepHours != 24 && InputTimeStepHours != 0)
+            throw new ArgumentException("Input timestep must be daily (24 hours) or not specified when processing for trunk.");
+        if (OutputTimeStepHours != 24 && OutputTimeStepHours != 0)
+            throw new ArgumentException("Output timestep must be daily (24 hours) or not specified when processing for trunk.");
+
+        // Always use a daily timestep.
+        InputTimeStepHours = 24;
+        OutputTimeStepHours = 24;
+    }
+
+    internal virtual void ValidateDaveTimeStepSettings()
+    {
+        if (OutputTimeStepHours == 24)
+            throw new ArgumentException("Output timestep must be subdaily when processing for Dave.");
+        if (InputTimeStepHours == 0)
+            throw new ArgumentException("Input timestep must be specified when processing for Dave.");
+        if (OutputTimeStepHours == 0)
+            throw new ArgumentException("Output timestep must be specified when processing for Dave.");
     }
 
     /// <summary>
