@@ -1,7 +1,8 @@
 using Xunit;
 using ClimateProcessing.Models;
-using ClimateProcessing.Tests.Mocks;
 using Moq;
+using ClimateProcessing.Services;
+using ClimateProcessing.Tests.Mocks;
 
 namespace ClimateProcessing.Tests.Services;
 
@@ -10,7 +11,7 @@ public class NarClim2ScriptGeneratorTests : IDisposable
     private const string outputDirectoryPrefix = "narclim2_script_generator_tests_output";
     private readonly string outputDirectory;
     private readonly NarClim2Config config;
-    private readonly TestNarClim2ScriptGenerator generator;
+    private readonly NarClim2ScriptGenerator generator;
 
     public NarClim2ScriptGeneratorTests()
     {
@@ -23,10 +24,13 @@ public class NarClim2ScriptGeneratorTests : IDisposable
             ChunkSizeSpatial = 10,
             ChunkSizeTime = 5,
             CompressOutput = true,
-            CompressionLevel = 4
+            CompressionLevel = 4,
+            InputTimeStepHours = 3,
+            OutputTimeStepHours = 3,
+            Version = ModelVersion.Dave
         };
 
-        generator = new TestNarClim2ScriptGenerator(config);
+        generator = new NarClim2ScriptGenerator(config);
     }
 
     public void Dispose()
@@ -35,29 +39,63 @@ public class NarClim2ScriptGeneratorTests : IDisposable
             Directory.Delete(outputDirectory, true);
     }
 
-    [Fact]
-    public async Task WritePreMerge_WithValidNarClim2Dataset_GeneratesCorrectRlonCorrectionScript()
+    /// <summary>
+    /// Create a NarClim2Dataset which doesn't require the existence of a full
+    /// dataset on the filesystem.
+    /// </summary>
+    /// <param name="basePath">The base path of the dataset.</param>
+    /// <param name="domain">The domain of the dataset.</param>
+    /// <param name="gcm">The GCM of the dataset.</param>
+    /// <param name="experiment">The experiment of the dataset.</param>
+    /// <param name="rcm">The RCM of the dataset.</param>
+    /// <param name="frequency">The frequency of the dataset.</param>
+    /// <param name="outputFileName">The name of the output file returned by GenerateOutputFileName() for any climate variable.</param>
+    /// <returns>A mocked narclim2 dataset.</returns>
+    private Mock<NarClim2Dataset> CreateMockDataset(
+        string basePath = "/mock/path",
+        NarClim2Domain domain = NarClim2Domain.AUS18,
+        NarClim2GCM gcm = NarClim2GCM.AccessEsm15,
+        NarClim2Experiment experiment = NarClim2Experiment.Historical,
+        NarClim2RCM rcm = NarClim2RCM.WRF412R3,
+        NarClim2Frequency frequency = NarClim2Frequency.Month,
+        string outputFileName = "/mock/output/file.nc"
+    )
     {
-        NarClim2Dataset dataset = new NarClim2Dataset("/path/to/narclim2");
-        using StringWriter writer = new();
+        var mockDataset = new Mock<NarClim2Dataset>(
+            basePath,
+            domain,
+            gcm,
+            experiment,
+            rcm,
+            frequency);
+        mockDataset.CallBase = true;
+        mockDataset.Setup(x => x.GenerateOutputFileName(It.IsAny<ClimateVariable>()))
+            .Returns(outputFileName);
+        return mockDataset;
+    }
 
-        await generator.PreMergeAsync(writer, dataset, ClimateVariable.MaxTemperature);
-        string script = writer.ToString();
+    [Theory]
+    [InlineData(NarClim2Domain.AUS18, NarClim2Constants.Files.RlonValuesFileAUS18)]
+    [InlineData(NarClim2Domain.SEAus04, NarClim2Constants.Files.RlonValuesFileSEAus04)]
+    public async Task GenerateVariableMergeScript_UsesCorrectPath(NarClim2Domain domain, string expectedFileName)
+    {
+        Mock<NarClim2Dataset> mockDataset = CreateMockDataset(domain: domain);
+        string file = await generator.GenerateVariableMergeScript(mockDataset.Object, ClimateVariable.Temperature);
+        string script = await File.ReadAllTextAsync(file);
 
+        // The script should use the correct rlon values file for this domain.
         Assert.Contains("setvar.py", script);
         Assert.Contains("--var rlon", script);
+        Assert.Contains(expectedFileName, script);
     }
 
     [Fact]
-    public async Task WritePreMerge_WithNonNarClim2Dataset_ThrowsArgumentException()
+    public async Task GenerateVariableMergeScript_WithNonNarClim2Dataset_ThrowsArgumentException()
     {
-        // Arrange
-        Mock<IClimateDataset> mockDataset = new();
-        using StringWriter writer = new();
+        IClimateDataset mockDataset = new StaticMockDataset("/input");
 
-        // Act & Assert
         await Assert.ThrowsAsync<ArgumentException>(() => 
-            generator.PreMergeAsync(writer, mockDataset.Object, ClimateVariable.MaxTemperature));
+            generator.GenerateVariableMergeScript(mockDataset, ClimateVariable.ShortwaveRadiation));
     }
 
     [Fact]
@@ -72,20 +110,5 @@ public class NarClim2ScriptGeneratorTests : IDisposable
 
         Assert.NotNull(ex);
         Assert.Contains("No input files found for variable", ex.Message);
-    }
-
-    [Theory]
-    [InlineData(NarClim2Domain.AUS18, NarClim2Constants.Files.RlonValuesFileAUS18)]
-    [InlineData(NarClim2Domain.SEAus04, NarClim2Constants.Files.RlonValuesFileSEAus04)]
-    public void ReadRlonValuesFile_ReturnsCorrectPath(NarClim2Domain domain, string expectedFileName)
-    {
-        string basePath = "/path/to/narclim2";
-        NarClim2Dataset dataset = new NarClim2Dataset(basePath, domain);
-
-        string result = generator.ReadRlonValuesFile(dataset);
-
-        Assert.NotNull(result);
-        Assert.EndsWith(expectedFileName, result);
-        Assert.StartsWith(basePath, result);
     }
 }

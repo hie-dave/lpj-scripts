@@ -860,7 +860,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
 
         // Execute all scripts (making assumptions about file permissions).
         foreach (string script in scripts)
-            await writer.WriteLineAsync($"{script}");
+            await writer.WriteLineAsync(script);
         return scriptFile;
     }
 

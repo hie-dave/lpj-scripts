@@ -227,7 +227,11 @@ public class NarClim2Dataset : IClimateDataset
         return NarClim2Constants.FrequencyNames.FromString(freqStr);
     }
 
-    public string GenerateOutputFileName(ClimateVariable variable)
+    /// <inheritdoc />
+    /// <remarks>
+    /// Marked as virtual for testing.
+    /// </remarks>
+    public virtual string GenerateOutputFileName(ClimateVariable variable)
     {
         // Get the first input file for this variable to use as a pattern
         IEnumerable<string> inputFiles = GetInputFiles(variable);
