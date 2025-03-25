@@ -23,7 +23,27 @@ public class NarClim2Dataset : IClimateDataset
     /// <summary>
     /// The domain of the data.
     /// </summary>
-    public NarClim2Domain Domain { get => _domain; }
+    public NarClim2Domain Domain => _domain;
+
+    /// <summary>
+    /// The GCM of the data.
+    /// </summary>
+    public NarClim2GCM GCM => _gcm;
+
+    /// <summary>
+    /// The experiment of the data.
+    /// </summary>
+    public NarClim2Experiment Experiment => _experiment;
+
+    /// <summary>
+    /// The RCM of the data.
+    /// </summary>
+    public NarClim2RCM RCM => _rcm;
+
+    /// <summary>
+    /// The frequency of the data.
+    /// </summary>
+    public NarClim2Frequency Frequency => _frequency;
 
     /// <summary>
     /// The base path for all files in the dataset.

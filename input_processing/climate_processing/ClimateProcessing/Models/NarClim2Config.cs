@@ -30,15 +30,6 @@ public class NarClim2Config : ProcessingConfig
         IEnumerable<NarClim2RCM> rcms = GetRCMs();
         NarClim2Frequency frequency = NarClim2Constants.ParseFrequency(InputTimeStep.Hours);
 
-        if (!domains.Any())
-            throw new InvalidOperationException("No domains specified. Use the --domain option to specify at least one domain.");
-        if (!gcms.Any())
-            throw new InvalidOperationException("No GCMs specified. Use the --gcm option to specify at least one GCM.");
-        if (!experiments.Any())
-            throw new InvalidOperationException("No experiments specified. Use the --experiment option to specify at least one experiment.");
-        if (!rcms.Any())
-            throw new InvalidOperationException("No RCMs specified. Use the --rcm option to specify at least one RCM.");
-
         return from domain in domains
                from gcm in gcms
                from experiment in experiments
