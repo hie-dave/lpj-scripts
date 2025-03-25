@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Run unit tests and collect code coverage stats.
 dotnet test --collect:"XPlat Code Coverage"
 
-# dotnet tool install -g dotnet-reportgenerator-globaltool
+# Delete the coverage report directory if it exists.
 test -d coveragereport && rm -rf coveragereport
+
+# This requires the `reportgenerator` tool which is installed via:
+# dotnet tool install -g dotnet-reportgenerator-globaltool
+
+# Generate the coverage report.
 reportgenerator -reports:"**/coverage.cobertura.xml" -targetdir:"coveragereport" -reporttypes:Html
 
+# Open the coverage report (presumably in a web browser).
 xdg-open coveragereport/index.html
