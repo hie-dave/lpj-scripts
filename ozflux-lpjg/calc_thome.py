@@ -56,11 +56,12 @@ class Options:
     """Command line options for calc_thome.py."""
 
     def __init__(self, input_files: list[str], output_file: str, log_level: LogLevel,
-                 format: OutputFormat):
+                 show_progress: bool, format: OutputFormat):
         """Initialize with default values."""
         self.input_files = input_files
         self.output_file = output_file
         self.log_level = log_level
+        self.show_progress = show_progress
         self.format = format
 
 class DataPoint:
@@ -76,13 +77,14 @@ def parse_args(argv: list[str]) -> Options:
     """Parse command line arguments and return Options object."""
     parser = argparse.ArgumentParser(description = "Calculate Thome from air temperature data")
     parser.add_argument("-v", "--verbosity", type = int, help = f"Logging verbosity ({LogLevel.ERROR}-{LogLevel.DEBUG}, default: {LogLevel.INFORMATION})", default = LogLevel.INFORMATION)
+    parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
     parser.add_argument("-o", "--out-file", required = True, help = "Output NetCDF file to write Thome values")
     parser.add_argument("-f", "--format", default = "csv", help = "Output file format (csv|nc)")
     parser.add_argument("files", nargs = "+", help = "Input NetCDF files containing air temperature data to be processed")
 
     args = parser.parse_args(argv[1:])
     opts = Options(args.files, args.out_file, args.verbosity,
-                   parse_output_format(args.format))
+                   args.show_progress, parse_output_format(args.format))
     return opts
 
 def get_time_info(nc: Dataset) -> tuple[Dimension, Variable, list[datetime.datetime]]:
@@ -121,7 +123,7 @@ def read_temp_data(var: Variable) -> numpy.ndarray:
         log_diagnostic("Temperature already in ℃.")
     return data
 
-def calculate_thome_gridcell(temps: numpy.ndarray, times: list[datetime.datetime]) -> float:
+def calculate_thome_gridcell(temps: numpy.ndarray, times: list[datetime.datetime], pcb: Callable[[float], None]) -> float:
     """
     Calculate Thome (long-term mean maximum temperature of warmest month) for a single gridcell.
 
@@ -130,6 +132,7 @@ def calculate_thome_gridcell(temps: numpy.ndarray, times: list[datetime.datetime
 
     @param temps: 1-dimensional numpy array of temperature data.
     @param times: List of datetime objects corresponding to each temperature data point.
+    @param pcb: Callback function to report progress.
     @return: The Thome value for the gridcell - ie the long-term mean maximum daily temperature of the warmest month.
     """
     log_diagnostic("Calculating monthly maximums...")
@@ -165,11 +168,12 @@ def calculate_thome_gridcell(temps: numpy.ndarray, times: list[datetime.datetime
     # Get the month with the highest mean maximum daily temperature
     return numpy.max(max_temperatures)
 
-def calculate_thome(nc: Dataset) -> list[DataPoint]:
+def calculate_thome(nc: Dataset, pcb: Callable[[float], None]) -> list[DataPoint]:
     """
     Calculate Thome (long-term mean maximum temperature of warmest month).
 
     @param nc: NetCDF file containing temperature data.
+    @param pcb: Callback function to report progress.
     @return: Numpy array of Thome values, with same dimensionality as the original temperature data.
     """
     # Find temperature variable
@@ -212,7 +216,7 @@ def calculate_thome(nc: Dataset) -> list[DataPoint]:
         if hasattr(nc, "longitude"):
             lon = float(nc.longitude)
             log_diagnostic(f"Using longitude {lon} from global attribute")
-        return [DataPoint(calculate_thome_gridcell(temp_data, times), lat, lon)]
+        return [DataPoint(calculate_thome_gridcell(temp_data, times, pcb), lat, lon)]
 
     # Get the index of the latitude and longitude dimensions in the temperature
     # variable's dimensions.
@@ -225,14 +229,19 @@ def calculate_thome(nc: Dataset) -> list[DataPoint]:
 
     # Iterate through gridcells.
     data: list[DataPoint] = []
+    step_start = 0.0
+    step_size = 1 / (temp_data.shape[index_latitude] * temp_data.shape[index_longitude])
     for i in range(temp_data.shape[index_latitude]):
         for j in range(temp_data.shape[index_longitude]):
-            thome = calculate_thome_gridcell(temp_data[i, j], times)
+            pcb(step_start)
+            thome = calculate_thome_gridcell(temp_data[i, j], times, lambda p: pcb(step_start + step_size * p))
+            step_start += step_size
             lat = float(var_lat[i])
             lon = float(var_lon[j])
             log_diagnostic(f"thome at ({lon}, {lat}): {thome}")
             data.append(DataPoint(thome, lat, lon))
 
+    pcb(1.0)
     return data
 
 def write_netcdf(opts: Options, data: list[DataPoint]):
@@ -324,12 +333,16 @@ def main(opts: Options):
     """
     # Open input file.
     thome: list[DataPoint] = []
+    step_start = 0.0
+    step_size = 1 / len(opts.input_files)
     for in_file in opts.input_files:
         log_information(f"Processing {in_file}")
         with open_netcdf(in_file) as nc_in:
             # Calculate Thome.
             log_information("Calculating Thome...")
-            thome.extend(calculate_thome(nc_in))
+            thome.extend(calculate_thome(nc_in, lambda p: log_progress(step_start + step_size * p)))
+            step_start += step_size
+            log_progress(step_start)
 
         # Write output.
         log_information("Writing output...")
@@ -341,6 +354,7 @@ if __name__ == "__main__":
 	opts = parse_args(argv)
 
 	set_log_level(opts.log_level)
+	set_show_progress(opts.show_progress)
 
 	try:
 		main(opts)
