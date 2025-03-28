@@ -473,8 +473,6 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         string cleanupScript = await GenerateCleanupScript(dataset);
 
         // Add job submission logic.
-        await writer.WriteLineAsync("echo \"Submitting jobs...\"");
-        await writer.WriteLineAsync();
         bool requiresVpd = _config.Version == ModelVersion.Dave;
         bool vpdEmpty = true;
         bool allDepsEmpty = true;
