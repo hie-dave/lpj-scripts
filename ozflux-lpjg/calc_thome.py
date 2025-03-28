@@ -56,12 +56,11 @@ class Options:
     """Command line options for calc_thome.py."""
 
     def __init__(self, input_files: list[str], output_file: str, log_level: LogLevel,
-                 show_progress: bool, format: OutputFormat):
+                 format: OutputFormat):
         """Initialize with default values."""
         self.input_files = input_files
         self.output_file = output_file
         self.log_level = log_level
-        self.show_progress = show_progress
         self.format = format
 
 class DataPoint:
@@ -77,14 +76,13 @@ def parse_args(argv: list[str]) -> Options:
     """Parse command line arguments and return Options object."""
     parser = argparse.ArgumentParser(description = "Calculate Thome from air temperature data")
     parser.add_argument("-v", "--verbosity", type = int, help = f"Logging verbosity ({LogLevel.ERROR}-{LogLevel.DEBUG}, default: {LogLevel.INFORMATION})", default = LogLevel.INFORMATION)
-    parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
     parser.add_argument("-o", "--out-file", required = True, help = "Output NetCDF file to write Thome values")
     parser.add_argument("-f", "--format", default = "csv", help = "Output file format (csv|nc)")
     parser.add_argument("files", nargs = "+", help = "Input NetCDF files containing air temperature data to be processed")
 
     args = parser.parse_args(argv[1:])
     opts = Options(args.files, args.out_file, args.verbosity,
-                   args.show_progress, parse_output_format(args.format))
+                   parse_output_format(args.format))
     return opts
 
 def get_time_info(nc: Dataset) -> tuple[Dimension, Variable, list[datetime.datetime]]:
@@ -343,7 +341,6 @@ if __name__ == "__main__":
 	opts = parse_args(argv)
 
 	set_log_level(opts.log_level)
-	set_show_progress(opts.show_progress)
 
 	try:
 		main(opts)
