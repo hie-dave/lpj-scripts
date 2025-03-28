@@ -50,8 +50,9 @@ public class PBSWriter
 
         if (!string.IsNullOrEmpty(config.Email))
         {
+            string notificationString = GetEmailNotificationString();
             await writer.WriteLineAsync($"#PBS -M {config.Email}");
-            await writer.WriteLineAsync("#PBS -m abe");
+            await writer.WriteLineAsync($"#PBS -m {notificationString}");
         }
 
         // Add storage directives if required
@@ -100,6 +101,16 @@ public class PBSWriter
 
         // Add blank line after header
         await writer.WriteLineAsync("");
+    }
+
+    /// <summary>
+    /// Get a PBS email notification string based on the configuration.
+    /// </summary>
+    /// <returns>A PBS email notification string compatible with the PBS -m option.</returns>
+    private string GetEmailNotificationString()
+    {
+        // fixme
+        return "e";
     }
 
     /// <summary>
