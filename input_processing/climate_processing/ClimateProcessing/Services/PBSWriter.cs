@@ -109,8 +109,15 @@ public class PBSWriter
     /// <returns>A PBS email notification string compatible with the PBS -m option.</returns>
     private string GetEmailNotificationString()
     {
-        // fixme
-        return "e";
+        // TODO: make this user-configurable.
+
+        // Summary of available options:
+        // n    No mail is sent
+        // a    Mail is sent when the job is aborted by the batch system
+        // b    Mail is sent when the job begins execution
+        // e    Mail is sent when the job terminates
+        // j    Mail is sent for subjobs. Must be combined with one or more of the a , b , or e sub-options
+        return "a";
     }
 
     /// <summary>
