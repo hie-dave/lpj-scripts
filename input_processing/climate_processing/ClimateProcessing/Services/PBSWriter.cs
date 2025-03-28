@@ -109,15 +109,19 @@ public class PBSWriter
     /// <returns>A PBS email notification string compatible with the PBS -m option.</returns>
     private string GetEmailNotificationString()
     {
-        // TODO: make this user-configurable.
+        if (config.EmailNotifications == EmailNotificationType.None)
+            return "n";
 
-        // Summary of available options:
-        // n    No mail is sent
-        // a    Mail is sent when the job is aborted by the batch system
-        // b    Mail is sent when the job begins execution
-        // e    Mail is sent when the job terminates
-        // j    Mail is sent for subjobs. Must be combined with one or more of the a , b , or e sub-options
-        return "a";
+        List<char> flags = new List<char>();
+
+        if (config.EmailNotifications.HasFlag(EmailNotificationType.Aborted))
+            flags.Add('a');
+        if (config.EmailNotifications.HasFlag(EmailNotificationType.Before))
+            flags.Add('b');
+        if (config.EmailNotifications.HasFlag(EmailNotificationType.After))
+            flags.Add('e');
+
+        return flags.Any() ? string.Join("", flags) : "n";
     }
 
     /// <summary>

@@ -39,6 +39,11 @@ public class PBSConfig
     public PBSWalltime Walltime { get; init; }
 
     /// <summary>
+    /// The type of email notifications to enable for the job.
+    /// </summary>
+    public EmailNotificationType EmailNotifications { get; init; }
+
+    /// <summary>
     /// The email address to use for the job.
     /// </summary>
     public string? Email { get; init; }
@@ -52,6 +57,7 @@ public class PBSConfig
     /// <param name="jobFS">The amount of JobFS space to allocate to the job, in GiB.</param>
     /// <param name="project">The project to which the job will be debited.</param>
     /// <param name="walltime">Maximum walltime the job is allowed to use.</param>
+    /// <param name="emailNotifications">The type of email notifications to enable for the job.</param>
     /// <param name="email">The optional email address to which job notifications will be sent.</param>
     public PBSConfig(
         string queue,
@@ -60,6 +66,7 @@ public class PBSConfig
         int jobFS,
         string project,
         PBSWalltime walltime,
+        EmailNotificationType emailNotifications = EmailNotificationType.None,
         string? email = null)
     {
         Queue = queue;
@@ -68,6 +75,7 @@ public class PBSConfig
         JobFS = jobFS;
         Project = project;
         Walltime = walltime;
+        EmailNotifications = emailNotifications;
         Email = email;
     }
 
@@ -82,6 +90,7 @@ public class PBSConfig
     public static PBSConfig LightWeight(
         int jobfs,
         string project,
+        EmailNotificationType emailNotifications,
         string? email,
         PBSWalltime walltime) => new(
         PBSConstants.QueueNormal,
@@ -90,6 +99,7 @@ public class PBSConfig
         jobfs,
         project,
         walltime,
+        emailNotifications,
         email
     );
 }

@@ -41,11 +41,6 @@ public class NarClim2Dataset : IClimateDataset
     public NarClim2RCM RCM => _rcm;
 
     /// <summary>
-    /// The frequency of the data.
-    /// </summary>
-    public NarClim2Frequency Frequency => _frequency;
-
-    /// <summary>
     /// The base path for all files in the dataset.
     /// </summary>
     public string BasePath { get => _inputPath; }

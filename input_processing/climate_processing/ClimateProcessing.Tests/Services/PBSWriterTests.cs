@@ -52,6 +52,7 @@ public class PBSWriterTests : IDisposable
             jobfs,
             project,
             PBSWalltime.Parse(walltime),
+            EmailNotificationType.After | EmailNotificationType.Before | EmailNotificationType.Aborted,
             email);
         PathManager pathManager = new PathManager(outputDirectory);
         PBSWriter generator = new(config, pathManager);
@@ -148,5 +149,39 @@ public class PBSWriterTests : IDisposable
         {
             Assert.Empty(storageLines);
         }
+    }
+
+    [Theory]
+    [InlineData(EmailNotificationType.None, "n")]
+    [InlineData(EmailNotificationType.After, "e")]
+    [InlineData(EmailNotificationType.Before, "b")]
+    [InlineData(EmailNotificationType.Aborted, "a")]
+    [InlineData(EmailNotificationType.After | EmailNotificationType.Before, "be")]
+    [InlineData(EmailNotificationType.After | EmailNotificationType.Aborted, "ae")]
+    [InlineData(EmailNotificationType.Before | EmailNotificationType.Aborted, "ab")]
+    [InlineData(EmailNotificationType.After | EmailNotificationType.Before | EmailNotificationType.Aborted, "abe")]
+    public async Task WritePBSHeader_GeneratesCorrectHeader_WithEmailNotifications(
+        EmailNotificationType emailNotifications,
+        string expected)
+    {
+        StringWriter writer = new();
+        PBSConfig config = new(
+            "normal",
+            2,
+            8,
+            100,
+            "p123",
+            new PBSWalltime(1, 0, 0),
+            emailNotifications,
+            "test@example.com"
+        );
+        PathManager pathManager = new PathManager(outputDirectory);
+        PBSWriter generator = new(config, pathManager);
+
+        await generator.WritePBSHeader(writer, "test_job", Array.Empty<PBSStorageDirective>());
+        string result = writer.ToString();
+
+        string expectedDirective = $"#PBS -m {expected}";
+        Assert.Contains(expectedDirective, result);
     }
 }

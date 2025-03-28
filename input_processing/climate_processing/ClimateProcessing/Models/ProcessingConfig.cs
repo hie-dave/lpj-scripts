@@ -48,6 +48,9 @@ public abstract class ProcessingConfig
     [Option("email", Required = false, HelpText = "Email address for job notifications (optional)")]
     public string Email { get; set; } = string.Empty;
 
+    [Option("email-notification", Required = false, Default = EmailNotificationType.None, HelpText = "Email notification types (can be combined): none, before, after, error")]
+    public EmailNotificationType EmailNotifications { get; set; } = EmailNotificationType.None;
+
     [Option("vpd-method", Default = VPDMethod.Magnus, HelpText = "Method to calculate VPD: Magnus (default), Buck1981, AlduchovEskridge1996, AllenFAO1998, or Sonntag1990")]
     public VPDMethod VPDMethod { get; set; } = VPDMethod.Magnus;
 
@@ -71,6 +74,7 @@ public abstract class ProcessingConfig
         ValidateDirectories();
         ValidateBasicParameters();
         ValidateTimeStepSettings();
+        ValidateEmailSettings();
     }
 
     internal virtual void ValidateDirectories()
@@ -133,6 +137,25 @@ public abstract class ProcessingConfig
             throw new ArgumentException("Input timestep must be specified when processing for Dave.");
         if (OutputTimeStepHours == 0)
             throw new ArgumentException("Output timestep must be specified when processing for Dave.");
+    }
+
+    internal void ValidateEmailSettings()
+    {
+        if (EmailNotifications.HasFlag(EmailNotificationType.None))
+        {
+            // Ensure that "none" is not combined with other values.
+            if ((EmailNotifications & EmailNotificationType.None) != EmailNotificationType.None)
+                throw new ArgumentException("Cannot combine \"none\" and other values for email notifications.");
+
+            // No email notifications are required, so no further validation is
+            // necessary.
+            return;
+        }
+
+        // Some email notifications are required, so ensure that the email
+        // address is set.
+        if (string.IsNullOrEmpty(Email))
+            throw new ArgumentException("Must specify an email address when email notifications are enabled.");
     }
 
     /// <summary>

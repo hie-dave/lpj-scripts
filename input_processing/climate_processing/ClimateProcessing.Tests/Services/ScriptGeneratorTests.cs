@@ -640,7 +640,8 @@ public class ScriptGeneratorTests : IDisposable
             DryRun = true,
             Email = "test@example.com",
             JobFS = 128,
-            VPDMethod = VPDMethod.AlduchovEskridge1996
+            VPDMethod = VPDMethod.AlduchovEskridge1996,
+            EmailNotifications = EmailNotificationType.After | EmailNotificationType.Before | EmailNotificationType.Aborted
         };
         ScriptGenerator generator = new(config);
 

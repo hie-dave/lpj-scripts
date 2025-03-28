@@ -112,6 +112,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
             config.JobFS,
             config.Project,
             walltime,
+            config.EmailNotifications,
             config.Email
         );
         pbsHeavyweight = new PBSWriter(pbsConfig, pathManager);
@@ -119,6 +120,7 @@ public class ScriptGenerator : IScriptGenerator<IClimateDataset>
         PBSConfig lightweightConfig = PBSConfig.LightWeight(
             config.JobFS,
             config.Project,
+            config.EmailNotifications,
             config.Email,
             walltime
         );
