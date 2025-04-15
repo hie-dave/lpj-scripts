@@ -761,7 +761,7 @@ def remove_nans(data: list[float]
 	Replace any NaN in the list with a mean of nearby values.
 	"""
 	n = len(data)
-	N_NEIGHBOUR = 5
+	N_NEIGHBOUR = 2
 	for i in range(n):
 		if numpy.ma.is_masked(data[i]):
 			# Use mean of 5 closest values if value is nan.
