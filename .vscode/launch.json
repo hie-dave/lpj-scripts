@@ -455,17 +455,17 @@
 				"--keep-only-metadata",
 
 				"--metadata",
-				"AirTemperature,air_temperature,Air Temperature,degC,tas",
+				"AirTemperature,air_temperature,Air Temperature,degC,tav",
 				"--guard",
 				"AirTemperature/-50/50",
 
 				"--metadata",
-				"GlobalRadiation,surface_downwelling_shortwave_flux_in_air,Down-welling shortwave radiation,W/m^2,rs",
+				"GlobalRadiation,surface_downwelling_shortwave_flux_in_air,Down-welling shortwave radiation,W/m^2,insol",
 				"--guard",
 				"GlobalRadiation/0/2000",
 
 				"--metadata",
-				"Precipitation,thickness_of_rainfall_amount,Rainfall,mm,pr",
+				"Precipitation,thickness_of_rainfall_amount,Rainfall,mm,prec",
 				"--guard",
 				"Precipitation/0/1000",
 
@@ -483,6 +483,15 @@
 				"WindSpeed,wind_speed,Wind speed,m/s,wind",
 				"--guard",
 				"WindSpeed/0/40",
+
+				"--dim-lon",
+				"longitude",
+				"--dim-lat",
+				"latitude",
+
+				"--fill-gaps",
+				"--interpolation-method",
+				"linear",
 
 				"--in-file",
 				"${workspaceRoot}/ozflux-lpjg/data/marta/AbiskoClimateData_DAVEinput.csv",

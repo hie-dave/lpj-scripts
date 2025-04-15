@@ -80,7 +80,7 @@ class Options:
                  , missing_value: int, filter_nan: bool, bounds: list[Bounds]
                  , metadata: list[VariableMetadata], keep_only_metadata: bool
                  , year_column: str, day_column: str, hour_column: str, month_column: str
-                 , separator: str, constants: list[Constant]):
+                 , separator: str, constants: list[Constant], fill_gaps: bool, interpolation_method: str):
 
         self.log_level = log
         self.report_progress = prog
@@ -119,6 +119,9 @@ class Options:
         self.compression_level = compression_level
         if compression_level < 0:
             raise ValueError(f"Invalid compression level (must be >= 0): {compression_level}")
+
+        self.fill_gaps = fill_gaps
+        self.interpolation_method = interpolation_method
 
 def parse_metadata(raw: str) -> VariableMetadata:
     parts = raw.split(",")
@@ -196,6 +199,9 @@ def parse_args(argv: list[str]) -> Options:
     parser.add_argument("-c", "--chunk-sizes", default = "", help = "Chunk sizes for each dimension. This is optional, and if omitted, the size of each dimension will be used. This should be specified in the same format as for nco. E.g. lat/1,lon/1,time/365")
     parser.add_argument("--compression-level", type = int, default = 0, help = "Compression level 0-9. 0 means no compression. 9 means highest compression ratio but slowest performance (default: 0).")
 
+    parser.add_argument("--fill-gaps", action = "store_true", help = "Fill gaps in timeseries via interpolation")
+    parser.add_argument("--interpolation-method", default = "linear", help = "Interpolation method to use when filling gaps (default: linear)")
+
     group_lat = parser.add_mutually_exclusive_group(required = True)
     group_lat.add_argument("--latitude", type = float, help = "Latitude of all rows in the file")
     group_lat.add_argument("--latitude-column", help = "Name of the column containing latitude data")
@@ -231,7 +237,7 @@ def parse_args(argv: list[str]) -> Options:
                    , p.missing_value, p.filter_nan, parse_bounds(p.guard)
                    , metadata, p.keep_only_metadata
                    , p.year_column, p.day_column, p.hour_column, p.month_column
-                   , p.separator, constants)
+                   , p.separator, constants, p.fill_gaps, p.interpolation_method)
 
 def read_input_file(opts: Options) -> pandas.DataFrame:
     """
@@ -296,6 +302,51 @@ def read_input_file(opts: Options) -> pandas.DataFrame:
     if not opts.time_column in data.columns:
         raise ValueError(f"Time column '{opts.time_column}' does not exist in input file")
 
+    # Verify that all time points are equidistant and optionally fill gaps
+    time_diff = data[opts.time_column].diff().dropna()
+    expected_diff = time_diff.mode()[0]  # Most common difference
+    
+    # Check for irregular time differences
+    irregular = (time_diff != expected_diff)
+    if irregular.any():
+        if opts.fill_gaps:
+            # Fill gaps via interpolation
+            data = fill_time_gaps(data, opts.time_column, method=opts.interpolation_method)
+            print(f"Filled {irregular.sum()} gaps in timeseries via {opts.interpolation_method} interpolation")
+        else:
+            # Find all gaps in the timeseries
+            missing_times = []
+            for i in time_diff[irregular].index:
+                prev_time = data.loc[i-1, opts.time_column]
+                current_time = data.loc[i, opts.time_column]
+                missing_range = pandas.date_range(
+                    start=prev_time + expected_diff,
+                    end=current_time - expected_diff,
+                    freq=expected_diff
+                )
+                missing_times.extend(missing_range)
+            
+            # Format error message with missing times
+            if len(missing_times) > 5:
+                # For hourly data with many gaps, show unique dates instead
+                unique_dates = sorted({t.date() for t in missing_times})
+                if len(unique_dates) < len(missing_times):
+                    date_str = ', '.join(str(d) for d in unique_dates[:5])
+                    if len(unique_dates) > 5:
+                        date_str += f', ... (total {len(unique_dates)} missing days)'
+                    missing_str = f"Dates with missing data: {date_str}"
+                else:
+                    missing_str = ', '.join(str(t) for t in missing_times[:5])
+                    missing_str += f', ... (total {len(missing_times)} missing timesteps)'
+            else:
+                missing_str = ', '.join(str(t) for t in missing_times)
+            
+            raise ValueError(
+                f"Time series has gaps in column '{opts.time_column}'. "
+                f"Expected regular interval of {expected_diff}. "
+                f"Missing timesteps include: {missing_str}"
+            )
+
     # Group by time and ensure we have at most one value per timestamp.
     take_first = False
     if take_first:
@@ -352,6 +403,37 @@ def read_input_file(opts: Options) -> pandas.DataFrame:
     data[opts.dim_time] = date2num(list(data[opts.dim_time]), TIME_UNITS, TIME_CALENDAR)
     log_debug("Successfully parsed dates from input file")
     return data
+
+def fill_time_gaps(data, time_column, method='linear'):
+    """
+    Fill gaps in timeseries data by interpolation.
+    
+    Args:
+        data: pandas DataFrame containing the timeseries
+        time_column: Name of the column containing timestamps
+        method: Interpolation method ('linear', 'time', 'nearest', etc.)
+    
+    Returns:
+        DataFrame with gaps filled via interpolation
+    """
+    # Set timestamp as index for interpolation
+    data = data.set_index(time_column)
+    
+    # Create complete date range covering all timestamps
+    full_range = pandas.date_range(
+        start=data.index.min(),
+        end=data.index.max(),
+        freq=data.index.to_series().diff().mode()[0]
+    )
+    
+    # Reindex to full date range (this creates NaN rows for missing timestamps)
+    data = data.reindex(full_range)
+    
+    # Interpolate missing values
+    data = data.interpolate(method=method)
+    
+    # Reset index and return
+    return data.reset_index().rename(columns={'index': time_column})
 
 def sort_data(data: list[float]) -> list[float]:
     """
