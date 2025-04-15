@@ -37,6 +37,19 @@ class VariableMetadata:
         self.units = units
         self.newname = name if newname is None else newname
 
+class Bounds:
+    def __init__(self, name: str, low: float, high: float):
+        self.name = name
+        self.low = min(low, high)
+        self.high = max(low, high)
+    def clamp(self, value: float):
+        return min(self.high, max(self.low, value))
+
+class Constant:
+    def __init__(self, name: str, value: float):
+        self.name = name
+        self.value = value
+
 class Options:
     """
     Class for storing CLI arguments from the user.
@@ -63,9 +76,11 @@ class Options:
                  , latitude_column: str, longitude: float
                  , longitude_column: str, dim_lat: str, dim_lon: str
                  , dim_time: str, chunk_sizes: list[tuple[str, int]]
-                 , compression_level: int, missing_value: int
+                 , compression_level: int
+                 , missing_value: int, filter_nan: bool, bounds: list[Bounds]
                  , metadata: list[VariableMetadata], keep_only_metadata: bool
-                 , year_column: str, day_column: str, separator: str):
+                 , year_column: str, day_column: str, hour_column: str, month_column: str
+                 , separator: str, constants: list[Constant]):
 
         self.log_level = log
         self.report_progress = prog
@@ -90,11 +105,16 @@ class Options:
         self.chunk_sizes = chunk_sizes
 
         self.missing_value = missing_value
+        self.filter_nan = filter_nan
+        self.bounds = bounds
 
         self.year_column = year_column
         self.day_column = day_column
+        self.hour_column = hour_column
+        self.month_column = month_column
 
         self.separator = separator
+        self.constants = constants
 
         self.compression_level = compression_level
         if compression_level < 0:
@@ -105,6 +125,34 @@ def parse_metadata(raw: str) -> VariableMetadata:
     # fixme
     # if len(parts) <
     return VariableMetadata(*parts)
+
+def parse_guard(guard: str):
+    parts = str.split(guard, "/")
+    if len(parts) != 3:
+        raise ValueError(f"Failed to parse guard clause from string: {guard}. Input must be of form: name/low/high")
+    return Bounds(parts[0], float(parts[1]), float(parts[2]))
+
+def parse_bounds(guard_clauses: list[str]) -> list[Bounds]:
+    """
+    Parse a list of guard clauses from their string encodings.
+    """
+    if guard_clauses is None:
+        return []
+    return [parse_guard(g) for g in guard_clauses]
+
+def parse_constant(spec: str) -> Constant:
+    parts = str.split(spec, ",")
+    if len(parts) != 2:
+        raise ValueError(f"Failed to parse constant from string: {spec}. Input must be of form: name,value")
+    return Constant(parts[0], float(parts[1]))
+
+def parse_constants(constants: list[str]) -> list[Constant]:
+    """
+    Parse a list of constant specs from their string encodings.
+    """
+    if constants is None:
+        return []
+    return [parse_constant(c) for c in constants]
 
 def parse_args(argv: list[str]) -> Options:
     """
@@ -130,11 +178,17 @@ def parse_args(argv: list[str]) -> Options:
 
     parser.add_argument("--year-column", help = "Name of the year column")
     parser.add_argument("--day-column", help = "Name of the year column")
+    parser.add_argument("--hour-column", help = "Name of the hour column (optional for daily data or if using --time-column)")
+    parser.add_argument("--month-column", help = "Name of the month column (optional for daily data or if using --time-column)")
 
     parser.add_argument("--missing-value", help = "Special value used in input file to represent missing values.")
+    parser.add_argument("--filter-nan", action = "store_true", help = "Filter out NaN values by replacing them with mean of neighbouring values")
+    parser.add_argument("--guard", action = "append", help = "(Optional) Guard clause for variable bounds checks. Specify once per variable. Format should be name/low/high")
 
     parser.add_argument("--metadata", action = "append", help = "Variable-level metadata which will be written to the output file. This option may be passed multiple times (once per variable). The value should be of the form '--metadata name,std_name,long_name,units[,newname]'. Each part specifies an attribute which will be written. The newname part is optional, and if provided, will rename the variable.")
     parser.add_argument("--keep-only-metadata", action = "store_true", help = "Copy only coordinate variables and those variables which have a corresponding --metadata option.")
+
+    parser.add_argument("--constant", action = "append", help = "(Optional) Constant values to be added to the netcdf. Can be specified multiple times. Must be of the form name,value. A full timeseries will be generated for each. May be combined with a --metadata argument.")
 
     parser.add_argument("--dim-lat", default = DIM_LAT, help = f"Optional name of the latitude dimension to be created in the output file (default: {DIM_LAT})")
     parser.add_argument("--dim-lon", default = DIM_LON, help = f"Optional name of the longitude dimension to be created in the output file (default: {DIM_LON})")
@@ -168,12 +222,16 @@ def parse_args(argv: list[str]) -> Options:
     if p.separator is None or p.separator == "":
         raise ValueError("Field separator must be a non-empty string")
 
+    constants = parse_constants(p.constant)
+
     return Options(p.verbosity, p.in_file, p.out_file, p.show_progress
                    , p.time_column, p.time_format, p.latitude, p.latitude_column
                    , p.longitude, p.longitude_column, p.dim_lat, p.dim_lon
                    , p.dim_time, chunk_sizes, p.compression_level
-                   , p.missing_value, metadata, p.keep_only_metadata
-                   , p.year_column, p.day_column, p.separator)
+                   , p.missing_value, p.filter_nan, parse_bounds(p.guard)
+                   , metadata, p.keep_only_metadata
+                   , p.year_column, p.day_column, p.hour_column, p.month_column
+                   , p.separator, constants)
 
 def read_input_file(opts: Options) -> pandas.DataFrame:
     """
@@ -209,15 +267,59 @@ def read_input_file(opts: Options) -> pandas.DataFrame:
     elif not opts.longitude_column in data.columns:
         raise ValueError(f"User-provided longitude column '{opts.longitude_column}' does not exist in input file")
 
+    if opts.time_column is None:
+        opts.time_column = "time"
+        # Handle both year+day-of-year and year+month+day-of-month cases
+        if opts.month_column is not None:
+            # Year, month, day format
+            data[opts.time_column] = pandas.to_datetime(
+                dict(year=data[opts.year_column], 
+                     month=data[opts.month_column], 
+                     day=data[opts.day_column]))
+        else:
+            # Year and day-of-year format (original behavior)
+            data[opts.time_column] = pandas.to_datetime(
+                data[opts.year_column], format = "%Y") + \
+                pandas.to_timedelta(data[opts.day_column], unit = "D")
+        
+        # Drop the component columns
+        columns_to_drop = [opts.year_column, opts.day_column]
+        if opts.month_column is not None:
+            columns_to_drop.append(opts.month_column)
+        data.drop(columns = columns_to_drop, inplace = True)
+
+    if opts.hour_column is not None:
+        data[opts.time_column] += pandas.to_timedelta(data[opts.hour_column]
+        , unit = "h")
+        data.drop(columns = opts.hour_column, inplace = True)
+
     if not opts.time_column in data.columns:
         raise ValueError(f"Time column '{opts.time_column}' does not exist in input file")
 
-    if opts.time_column is None:
-        opts.time_column = "time"
-        data[opts.time_column] = pandas.to_datetime(
-            data[opts.year_column], format = "%Y") + \
-            pandas.to_timedelta(data[opts.day_column], unit = "D")
-        data.drop(columns = [opts.year_column, opts.day_column], inplace = True)
+    # Group by time and ensure we have at most one value per timestamp.
+    take_first = False
+    if take_first:
+        data = data.groupby(opts.time_column).first().reset_index()
+    if data[opts.time_column].duplicated().any():
+        dup_times = data[opts.time_column][data[opts.time_column].duplicated()].unique()
+        dup_details = []
+        for time in dup_times[:5]:  # Show details for first 5 duplicates
+            dup_rows = [idx+2 for idx in data.index[data[opts.time_column] == time].tolist()]
+            dup_details.append(
+                f"{time}: appears {len(dup_rows)} times (rows: {dup_rows[:10]}{'...' if len(dup_rows) > 10 else ''})"
+            )
+        dup_details.append("...")
+        raise ValueError(
+            f"{len(dup_times)} duplicate timestamps found in time column '{opts.time_column}'. "
+            f"Duplicate details:\n" + "\n".join(dup_details) + "\n"
+            "Did you forget to include time of day info (either in --time-format or by specifying --hour-column)?"
+        )
+
+    # Add constant values.
+    for const in opts.constants:
+        if const.name in data.columns:
+            raise ValueError(f"Constant '{const.name}' already exists in input file")
+        data[const.name] = const.value
 
     data = data.rename(columns = {
         opts.longitude_column: opts.dim_lon,
@@ -227,6 +329,12 @@ def read_input_file(opts: Options) -> pandas.DataFrame:
 
     columns = data.columns
     for col in columns:
+        # Filter out NaN values.
+        if opts.filter_nan and data.dtypes[col] == "float64":
+            data[col] = remove_nans(data[col], lambda _: ...)
+        bounds = get_bounds(col, opts.bounds)
+        if bounds is not None:
+            data[col] = [bounds.clamp(x) for x in data[col]]
         metadata = get_metadata(col, opts.metadata)
         if metadata is None:
             if opts.keep_only_metadata and col != opts.dim_time and \
@@ -300,6 +408,20 @@ def get_metadata(name: str, metadata: list[VariableMetadata]) -> Optional[Variab
             return meta
     return None
 
+def get_bounds(name: str, bounds: list[Bounds]) -> Optional[Bounds]:
+    """
+    Get the guard clause for the specified variable, if one has been provided by the user.
+
+    @param name: Name of the variable in the input file.
+    @param bounds: List of bounds clauses.
+    """
+    if bounds is None:
+        return None
+    for guard in bounds:
+        if guard.name == name:
+            return guard
+    return None
+
 def set_metadata(nc: Dataset, metadata: VariableMetadata):
     """
     Set metadata in the output file.
@@ -340,6 +462,7 @@ def init_outfile(opts: Options, data: pandas.DataFrame, nc: Dataset):
             continue
 
         fmt = get_nc_datatype(str(data[col].dtype))
+        log_warning(f"fmt={fmt}, col={col}")
         name = col
 
         create_var_if_not_exists(nc, name, fmt, dims, opts.compression_level

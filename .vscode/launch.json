@@ -423,50 +423,71 @@
 				"--show-progress",
 
 				"--longitude",
-				"-109.39",
+				"18.8164",
 				"--latitude",
-				"38.09",
-				"--time-column",
-				"TIMESTAMP_START",
-				"--time-format",
+				"68.3538",
+
 				// https://docs.python.org/3/library/datetime.html#strftime-strptime-behavior
 				// E.g. %d/%m/%y %H:%M:%S
-				"%Y%m%d%H%M",
+				// "--time-column",
+				// "Date",
+				// "--time-format",
+				// "%Y-%m-%d %H:%M:%S",
+
+				"--year-column",
+				"Year",
+				"--month-column",
+				"Month",
+				"--day-column",
+				"Day",
+				"--hour-column",
+				"Hour",
+
 				"--missing-value",
-				"-9999",
+				"NA",
+				"--filter-nan",
 
 				"--compression-level",
 				"5",
 				"--chunk-sizes",
-				"lon/1,lat/1,time/17520",
+				"lon/1,lat/1,time/8760",
 
 				"--keep-only-metadata",
 
 				"--metadata",
-				"TA_F,air_temperature,Air Temperature,degC",
+				"AirTemperature,air_temperature,Air Temperature,degC,tas",
+				"--guard",
+				"AirTemperature/-50/50",
 
 				"--metadata",
-				"SW_IN_F,surface_downwelling_shortwave_flux_in_air,Down-welling shortwave radiation,W/m^2",
+				"GlobalRadiation,surface_downwelling_shortwave_flux_in_air,Down-welling shortwave radiation,W/m^2,rs",
+				"--guard",
+				"GlobalRadiation/0/2000",
 
 				"--metadata",
-				"P_F,thickness_of_rainfall_amount,Rainfall,mm",
+				"Precipitation,thickness_of_rainfall_amount,Rainfall,mm,pr",
+				"--guard",
+				"Precipitation/0/1000",
 
 				"--metadata",
-				"CO2_F_MDS,mole_fraction_of_carbon_dioxide_in_air,CO2 concentration,umol/mol",
+				"VPD,water_vapor_saturation_deficit_in_air,Vapour pressure deficit,kPa,vpd",
+				"--guard",
+				"VPD/0/20",
+
+				"--constant",
+				"ps,96699",
+				"--metadata",
+				"ps,surface_air_pressure,Surface air pressure,Pa",
 
 				"--metadata",
-				"VPD_F,water_vapor_saturation_deficit_in_air,Vapour pressure deficit,hPa",
-
-				"--metadata",
-				"PA_F,surface_air_pressure,Surface air pressure,kPa",
-
-				"--metadata",
-				"WS_F,wind_speed,Wind speed,m/s",
+				"WindSpeed,wind_speed,Wind speed,m/s,wind",
+				"--guard",
+				"WindSpeed/0/40",
 
 				"--in-file",
-				"${workspaceRoot}/ozflux-lpjg/data/fluxnet/raw/FLX_US-Cop_FLUXNET2015_SUBSET_2001-2007_1-4/FLX_US-Cop_FLUXNET2015_SUBSET_HH_2001-2007_1-4.csv",
+				"${workspaceRoot}/ozflux-lpjg/data/marta/AbiskoClimateData_DAVEinput.csv",
 				"--out-file",
-				"${workspaceRoot}/ozflux-lpjg/data/fluxnet/raw/FLX_US-Cop_FLUXNET2015_SUBSET_2001-2007_1-4/CorralPocket.nc",
+				"${workspaceRoot}/ozflux-lpjg/data/marta/Abisko.nc",
 			],
 		},
 		{
