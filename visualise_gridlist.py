@@ -14,6 +14,7 @@ import pandas as pd
 import geopandas as gpd
 import matplotlib.pyplot as plt
 from shapely.geometry import Point
+import geodatasets
 
 def find_variable(nc, names: list[str]):
     for name in names:
@@ -42,7 +43,7 @@ geometry = [Point(xy) for xy in zip(grid_data['longitude'], grid_data['latitude'
 gdf = gpd.GeoDataFrame(grid_data, geometry=geometry)
 
 # Load a basemap to provide context (e.g., a world map)
-world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
+world = gpd.read_file(geodatasets.get_path('naturalearth.land'))
 
 # Plot the basemap and the grid points
 fig, ax = plt.subplots(figsize=(10, 10))
