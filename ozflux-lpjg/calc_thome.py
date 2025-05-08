@@ -125,9 +125,9 @@ def get_time_info(nc: Dataset) -> tuple[Dimension, Variable, list[datetime.datet
     time_var = get_dimension_variable(nc, time_dim)
 
     # Read and parse time values.
-    times = num2date(time_var[:], time_var.units, time_var.calendar,
-                     only_use_cftime_datetimes = False,
-                     only_use_python_datetimes = True)
+    # Note: using cftime values because unusal calendars such as 365_day don't
+    # play well with python datetime objects.
+    times = num2date(time_var[:], time_var.units, time_var.calendar)
     return time_dim, time_var, times
 
 def calculate_thome_gridcell(temps: numpy.ndarray, times: list[datetime.datetime], pcb: Callable[[float], None]) -> float:
@@ -146,7 +146,9 @@ def calculate_thome_gridcell(temps: numpy.ndarray, times: list[datetime.datetime
 
     # Convert times to month and day arrays for efficient grouping
     months = numpy.array([t.month for t in times])
-    dates = numpy.array([t.date() for t in times])
+    # dates = numpy.array([t.date() for t in times])
+    # cftime dates don't have a .date() method, so we use an integer encoding.
+    dates = numpy.array([t.year * 10000 + t.month * 100 + t.day for t in times])
 
     # Initialize array for monthly mean maximums
     max_temperatures = numpy.zeros(12)
