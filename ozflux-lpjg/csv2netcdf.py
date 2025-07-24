@@ -287,11 +287,14 @@ def read_input_file(opts: Options) -> pandas.DataFrame:
             data[opts.time_column] = pandas.to_datetime(
                 data[opts.year_column], format = "%Y") + \
                 pandas.to_timedelta(data[opts.day_column], unit = "D")
-        
+    else:
+        log_debug("Parsing dates from input file")
+        data[opts.time_column] = pandas.to_datetime(
+            data[opts.time_column], format = opts.time_fmt)
+
         # Drop the component columns
-        columns_to_drop = [opts.year_column, opts.day_column]
-        if opts.month_column is not None:
-            columns_to_drop.append(opts.month_column)
+        columns_to_drop = [opts.year_column, opts.month_column, opts.day_column]
+        columns_to_drop = [c for c in columns_to_drop if c is not None]
         data.drop(columns = columns_to_drop, inplace = True)
 
     if opts.hour_column is not None:
@@ -372,6 +375,13 @@ def read_input_file(opts: Options) -> pandas.DataFrame:
             raise ValueError(f"Constant '{const.name}' already exists in input file")
         data[const.name] = const.value
 
+    if opts.dim_time in data.columns and opts.dim_time != opts.time_column:
+        data.drop(columns = [opts.dim_time], inplace = True)
+    if opts.dim_lat in data.columns and opts.dim_lat != opts.latitude_column:
+        data.drop(columns = [opts.dim_lat], inplace = True)
+    if opts.dim_lon in data.columns and opts.dim_lon != opts.longitude_column:
+        data.drop(columns = [opts.dim_lon], inplace = True)
+
     data = data.rename(columns = {
         opts.longitude_column: opts.dim_lon,
         opts.latitude_column: opts.dim_lat,
@@ -380,6 +390,8 @@ def read_input_file(opts: Options) -> pandas.DataFrame:
 
     columns = data.columns
     for col in columns:
+        if col == opts.dim_time or col == opts.dim_lat or col == opts.dim_lon:
+            continue
         # Filter out NaN values.
         if opts.filter_nan and data.dtypes[col] == "float64":
             data[col] = remove_nans(data[col], lambda _: ...)
@@ -396,9 +408,8 @@ def read_input_file(opts: Options) -> pandas.DataFrame:
 
     # Convert time column to datetime type.
     # data[opts.time_column] = [datetime.datetime.strptime(t.__str__(), opts.time_fmt) for t in data[opts.time_column]]
-    log_debug("Parsing dates from input file")
+    # log_debug("Parsing dates from input file")
     # data[opts.dim_time] = data[opts.dim_time].apply(lambda x: datetime.datetime.strptime(str(x), opts.time_fmt))
-    data[opts.dim_time] = pandas.to_datetime(data[opts.dim_time], format = opts.time_fmt)
     # data[opts.dim_time] = data[opts.dim_time].apply(lambda x: x.date())
     data[opts.dim_time] = date2num(list(data[opts.dim_time]), TIME_UNITS, TIME_CALENDAR)
     log_debug("Successfully parsed dates from input file")
