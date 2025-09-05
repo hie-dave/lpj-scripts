@@ -137,6 +137,7 @@ def copy_to_csv(nc: Dataset, file: TextIO, opts: Options, progress_callback: Cal
             log_warning("Could not convert time values to datetime objects. Using raw values.")
             time_dates = time_values
     else:
+        log_warning("Time variable has no units attribute. Using raw values.")
         time_dates = time_values
 
     dimension_values = [[], [], []]
@@ -146,6 +147,7 @@ def copy_to_csv(nc: Dataset, file: TextIO, opts: Options, progress_callback: Cal
 
     # Determine chunk sizes for processing.
     chunk_sizes = choose_chunk_sizes(nc, var, opts.max_chunk_size)
+    log_diagnostic(f"Using chunk sizes: {chunk_sizes}")
 
     # Determine number of iterations over each dimension.
     niter = [math.ceil(s / c) for (s, c) in zip(shape, chunk_sizes)]
@@ -175,10 +177,6 @@ def copy_to_csv(nc: Dataset, file: TextIO, opts: Options, progress_callback: Cal
                 # add_offset attributes when reading data, so we get the
                 # actual values, not the raw packed values.
                 chunk = var[ir, jr, kr]
-
-                # Write progress update.
-                it += 1
-                progress_callback(it / it_max)
 
                 # Create rows for this chunk.
                 rows = []
@@ -211,22 +209,21 @@ def copy_to_csv(nc: Dataset, file: TextIO, opts: Options, progress_callback: Cal
                     lon_vals = dimension_values[lon_index][indices[:, lon_index]]
                     time_vals = dimension_values[time_index][indices[:, time_index]]
 
-                    # Create a dictionary of rows directly
-                    rows = [
-                        {
-                            opts.lat_column: lat_vals[i],
-                            opts.lon_column: lon_vals[i],
-                            opts.time_column: time_vals[i],
-                            opts.variable: values[i]
-                        }
-                        for i in range(len(values))
-                    ]
+                    # Create DataFrame directly from column arrays for better performance
+                    if len(values) > 0:
+                        df = pandas.DataFrame({
+                            opts.lat_column: lat_vals,
+                            opts.lon_column: lon_vals,
+                            opts.time_column: time_vals,
+                            opts.variable: values
+                        })
 
-                # Convert to DataFrame and add to the list of chunks to write
-                if rows:
-                    df = pandas.DataFrame(rows)
-                    # Write this chunk to the CSV file
-                    df.to_csv(file, index=False, header=False)
+                        # Write this chunk to the CSV file
+                        df.to_csv(file, index=False, header=False)
+
+                # Write progress update.
+                it += 1
+                progress_callback(it / it_max)
 
 def main(opts: Options, progress_callback: Callable[[float], None]):
     """
