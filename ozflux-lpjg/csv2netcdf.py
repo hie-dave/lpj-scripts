@@ -130,7 +130,7 @@ def parse_metadata(raw: str) -> VariableMetadata:
     return VariableMetadata(*parts)
 
 def parse_guard(guard: str):
-    parts = str.split(guard, "/")
+    parts = str.split(guard, "@")
     if len(parts) != 3:
         raise ValueError(f"Failed to parse guard clause from string: {guard}. Input must be of form: name/low/high")
     return Bounds(parts[0], float(parts[1]), float(parts[2]))
@@ -288,10 +288,13 @@ def read_input_file(opts: Options) -> pandas.DataFrame:
                 data[opts.year_column], format = "%Y") + \
                 pandas.to_timedelta(data[opts.day_column], unit = "D")
     else:
-        log_debug("Parsing dates from input file")
+        # Time column in use. Convert to datetime format using the specified
+        # format.
         data[opts.time_column] = pandas.to_datetime(
-            data[opts.time_column], format = opts.time_fmt)
-
+            data[opts.time_column],
+            format = opts.time_fmt
+        )
+        
         # Drop the component columns
         columns_to_drop = [opts.year_column, opts.month_column, opts.day_column]
         columns_to_drop = [c for c in columns_to_drop if c is not None]
@@ -402,6 +405,7 @@ def read_input_file(opts: Options) -> pandas.DataFrame:
         if metadata is None:
             if opts.keep_only_metadata and col != opts.dim_time and \
                     col != opts.dim_lon and col != opts.dim_lat:
+                print(f"Dropping column {col} due to no metadata being provided")
                 data = data.drop(col, axis = 1)
         elif metadata.name != metadata.newname:
             data.rename(columns = {col: metadata.newname}, inplace = True)
@@ -436,7 +440,28 @@ def fill_time_gaps(data, time_column, method='linear'):
         end=data.index.max(),
         freq=data.index.to_series().diff().mode()[0]
     )
-    
+
+    # Check for duplicate timestamps
+    duplicated_mask = data.index.duplicated(keep=False)
+    if duplicated_mask.any():
+        duplicate_timestamps = data.index[duplicated_mask].unique()
+        print(f"Found {len(duplicate_timestamps)} unique timestamps with duplicates")
+
+        # Process each duplicate timestamp
+        for timestamp in duplicate_timestamps:
+            # Get all rows with this timestamp
+            duplicate_rows = data.loc[timestamp]
+            
+            # If there's only one unique row (all duplicates are identical)
+            if isinstance(duplicate_rows, pandas.Series) or len(duplicate_rows.drop_duplicates()) == 1:
+                # Keep only the first occurrence
+                data = data.loc[~(data.index == timestamp)] if isinstance(duplicate_rows, pandas.Series) else data.loc[~(data.index == timestamp)]
+                data = pandas.concat([data, duplicate_rows.iloc[:1] if isinstance(duplicate_rows, pandas.DataFrame) else pandas.DataFrame(duplicate_rows).T])
+                print(f"Removed {len(duplicate_rows) - 1 if isinstance(duplicate_rows, pandas.DataFrame) else 0} identical duplicates for timestamp {timestamp}")
+            else:
+                # If duplicates have different data values, raise an exception
+                raise ValueError(f"Found duplicate timestamps with different data values at {timestamp}. Please fix the input data.")
+
     # Reindex to full date range (this creates NaN rows for missing timestamps)
     data = data.reindex(full_range)
     
