@@ -27,6 +27,7 @@ class Options:
                  lon_column: str,
                  time_column: str,
                  max_chunk_size: int,
+                 date_fmt: str,
                  log_level: LogLevel,
                  show_progress: bool):
         self.input_file = input_file
@@ -37,6 +38,7 @@ class Options:
         self.lon_column = lon_column
         self.time_column = time_column
         self.max_chunk_size = max_chunk_size
+        self.date_fmt = date_fmt
         self.log_level = log_level
         self.show_progress = show_progress
 
@@ -53,8 +55,9 @@ def parse_cli(argv: list[str]) -> Options:
     parser.add_argument("--lon-column", default="Lon", help="Name of the longitude column in the output file")
     parser.add_argument("--time-column", default="Time", help="Name of the time column in the output file")
     parser.add_argument("--max-chunk-size", type=int, default=DEFAULT_MAX_CHUNK_SIZE, help="Maximum chunk size in number of elements")
-    parser.add_argument("--verbosity", type=int, default=LogLevel.WARNING, choices=[LogLevel.NONE, LogLevel.ERROR, LogLevel.WARNING, LogLevel.INFORMATION, LogLevel.DIAGNOSTIC, LogLevel.DEBUG], help="Log level")
-    parser.add_argument("--show-progress", action="store_true", default=False, help="Show progress")
+    parser.add_argument("--date-fmt", default="%Y-%m-%d", help="Date format (default: %Y-%m-%d)")
+    parser.add_argument("--log-level", "-l", type=int, default=LogLevel.WARNING, choices=[LogLevel.NONE, LogLevel.ERROR, LogLevel.WARNING, LogLevel.INFORMATION, LogLevel.DIAGNOSTIC, LogLevel.DEBUG], help="Log level")
+    parser.add_argument("--show-progress", "-p", action="store_true", default=False, help="Show progress")
     parsed = parser.parse_args(argv)
     return Options(parsed.in_file,
                    parsed.out_file,
@@ -64,7 +67,8 @@ def parse_cli(argv: list[str]) -> Options:
                    parsed.lon_column,
                    parsed.time_column,
                    parsed.max_chunk_size,
-                   parsed.verbosity,
+                   parsed.date_fmt,
+                   parsed.log_level,
                    parsed.show_progress)
 
 def choose_chunk_sizes(nc: Dataset, var: Variable, max_chunk_size: int) -> list[int]:
@@ -124,26 +128,24 @@ def copy_to_csv(nc: Dataset, file: TextIO, opts: Options, progress_callback: Cal
     lat_index = index_of_throw(DIM_LAT, dimensions, lambda: f"Variable {opts.variable} has no latitude dimension")
     lon_index = index_of_throw(DIM_LON, dimensions, lambda: f"Variable {opts.variable} has no longitude dimension")
 
-    # Get dimension values
+    # Get dimension values.
+    log_diagnostic(f"Reading coordinates for {opts.variable}...")
     lat_values = lat[:]
     lon_values = lon[:]
     time_values = time[:]
+    log_debug(f"Successfully read all coordinates for {opts.variable}")
 
     # Convert time values to datetime objects if they're numeric
     if hasattr(time, 'units'):
         try:
-            time_dates = num2date(time_values, time.units, time.calendar if hasattr(time, 'calendar') else 'gregorian')
+            calendar = get_calendar(time)
+            time_dates = num2date(time_values, time.units, calendar)
         except:
             log_warning("Could not convert time values to datetime objects. Using raw values.")
             time_dates = time_values
     else:
         log_warning("Time variable has no units attribute. Using raw values.")
         time_dates = time_values
-
-    dimension_values = [[], [], []]
-    dimension_values[lat_index] = lat_values
-    dimension_values[lon_index] = lon_values
-    dimension_values[time_index] = time_dates
 
     # Determine chunk sizes for processing.
     chunk_sizes = choose_chunk_sizes(nc, var, opts.max_chunk_size)
@@ -159,6 +161,7 @@ def copy_to_csv(nc: Dataset, file: TextIO, opts: Options, progress_callback: Cal
     it = 0
 
     # Process data in chunks to avoid memory issues
+    log_diagnostic(f"Processing data in chunks. Total iterations: {it_max}")
     for i in range(niter[0]):
         ilow = i * chunk_sizes[0]
         ihigh = min(shape[0], ilow + chunk_sizes[0])
@@ -178,43 +181,36 @@ def copy_to_csv(nc: Dataset, file: TextIO, opts: Options, progress_callback: Cal
                 # actual values, not the raw packed values.
                 chunk = var[ir, jr, kr]
 
-                # Create rows for this chunk.
-                rows = []
-
-                # Get non-NaN values and their indices
+                # We need to filter out any missing values.
                 valid_mask = ~numpy.isnan(chunk)
                 if numpy.any(valid_mask):
-                    # Get the indices of non-NaN values
+                    # Get the indices of non-NaN values.
                     ii, jj, kk = numpy.nonzero(valid_mask)
-                    values = chunk[valid_mask]
+                    values = chunk[ii, jj, kk]
 
-                    # Convert ranges to numpy arrays for array indexing
+                    # Convert ranges to numpy arrays for array indexing.
                     ir_array = numpy.array(list(ir))
                     jr_array = numpy.array(list(jr))
                     kr_array = numpy.array(list(kr))
 
-                    # Create arrays for the actual indices in the full dataset
+                    # Create arrays for the actual indices in the full dataset.
                     i_indices = ir_array[ii]
                     j_indices = jr_array[jj]
                     k_indices = kr_array[kk]
 
-                    # Create arrays for each dimension's indices
-                    indices = numpy.zeros((len(values), 3), dtype=int)
-                    indices[:, 0] = i_indices
-                    indices[:, 1] = j_indices
-                    indices[:, 2] = k_indices
+                    # Create arrays for each dimension's indices.
+                    indices = [i_indices, j_indices, k_indices]
 
-                    # Get the dimension values using vectorized operations
-                    lat_vals = dimension_values[lat_index][indices[:, lat_index]]
-                    lon_vals = dimension_values[lon_index][indices[:, lon_index]]
-                    time_vals = dimension_values[time_index][indices[:, time_index]]
+                    # Format the datetime objects using the specified format
+                    dt = time_dates[indices[time_index]]
+                    formatted_dates = [td.strftime(opts.date_fmt) for td in dt]
 
-                    # Create DataFrame directly from column arrays for better performance
+                    # Create DataFrame directly from column arrays.
                     if len(values) > 0:
                         df = pandas.DataFrame({
-                            opts.lat_column: lat_vals,
-                            opts.lon_column: lon_vals,
-                            opts.time_column: time_vals,
+                            opts.lat_column: lat_values[indices[lat_index]],
+                            opts.lon_column: lon_values[indices[lon_index]],
+                            opts.time_column: formatted_dates,
                             opts.variable: values
                         })
 
@@ -258,5 +254,5 @@ if __name__ == "__main__":
         set_show_progress(opts.show_progress)
         main(opts, log_progress)
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Failed to process file {opts.input_file}: {e}")
         exit(1)
