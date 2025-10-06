@@ -99,9 +99,10 @@ def normalise_site_name(site_name: str) -> str:
 
     # Handle synonyms/common alternative names.
     if normalised in _synonyms:
-        log_diagnostic(f"Identified site name {site_name}: {normalised}")
-        _lookup_table[site_name] = normalised
-        return normalised
+        result = _synonyms[normalised]
+        log_diagnostic(f"Identified site name {site_name}: {result}")
+        _lookup_table[site_name] = result
+        return result
 
     # Handle site code with fluxnet country prefix.
     code = f"AU-{normalised}"
