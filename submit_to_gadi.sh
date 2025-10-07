@@ -146,8 +146,9 @@ GRIDLIST="$(get_gridlist "${INSFILE}")"
 
 # Get path to lpj-guess output files as specified in .ins file.
 OUTPATH="$(get_variable "${INSFILE}" outputdirectory 0)"
+# SAVE_STATE is an optional parameter in some model versions.
 SAVE_STATE="$(get_variable "${INSFILE}" save_state 1)"
-if [ ${SAVE_STATE} -eq 1 ]
+if [ -n "${SAVE_STATE:-0}" -a ${SAVE_STATE} -eq 1 ]
 then
   STATE_PATH="$(get_variable "${INSFILE}" state_path 0)"
 fi
@@ -403,7 +404,8 @@ do
     RUN_DIR="${RUNS_DIR}/run${a}"
     mkdir -p "${RUN_DIR}"
     mkdir -p "${RUN_DIR}/${OUTPATH}"
-    if [ ${SAVE_STATE} -eq 1 ]
+    # SAVE_STATE is an optional parameter in some model versions.
+    if [ ${SAVE_STATE:-0} -eq 1 ]
     then
       mkdir -p "${RUN_DIR}/${STATE_PATH}"
     fi
