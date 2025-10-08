@@ -14,7 +14,7 @@ from sys import argv, exit
 from traceback import print_exc
 import pandas, os
 
-_MODIS_VERSION = "0.1.0"
+_MODIS_VERSION = "1.0.0"
 
 # Name of the "site name" column in the LAI data file.
 _LAI_COL_ID = "ID"
