@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 #
 # Helper script providing utility methods for normalising ozflux site names.
 #
@@ -115,3 +116,9 @@ def normalise_site_name(site_name: str) -> str:
     # Log a warning and return original site code.
     log_warning(f"Unknown site name: {site_name}")
     return site_name
+
+if __name__ == "__main__":
+    set_log_level(LogLevel.ERROR)
+    # Read input site names from argv[1:], normalise them, and print to stdout.
+    for site_name in sys.argv[1:]:
+        print(normalise_site_name(site_name))

@@ -235,6 +235,7 @@ _units_conversions = {
 	("kPa", "Pa"): lambda x, _: x * PA_PER_KPA,
 	("umol/m2/s", "kgC/m2/day"): lambda x, _: x * MOL_PER_UMOL * G_C_PER_MOL * KG_PER_G * SECONDS_PER_DAY,
 	("umol/m2/s", "gC/m2/day"): lambda x, _: x * MOL_PER_UMOL * G_C_PER_MOL * SECONDS_PER_DAY,
+	("umol/m2/s", "gC/m2"): lambda x, t: x * MOL_PER_UMOL * G_C_PER_MOL * t,
 	("Pa", "kPa"): lambda x, _: x / PA_PER_KPA,
 	("hPa", "Pa"): lambda x, _: x * PA_PER_HPA,
 	("hPa", "kPa"): lambda x, _: x * PA_PER_HPA / PA_PER_KPA,

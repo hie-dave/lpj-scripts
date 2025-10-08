@@ -155,7 +155,7 @@ _CANONICAL_SITE_NAMES_LOOKUP = {
 }
 
 # https://github.com/OzFlux/PyFluxPro/wiki/QC-Flag-Definitions
-_qc_flag_definitions = {
+qc_flag_definitions = {
 	# Table 1: Definition of QC flag values for Levels 1 to 3.
 	0: (True, "Data has passed all QC checks"),
 	1: (False, "Data missing from L1 Excel spreadsheet"),
@@ -310,8 +310,8 @@ def _filter_qc(data: list[float], qc: list[float]
 		if i % PROGRESS_CHUNK_SIZE == 0:
 			pcb(i / len(data))
 		qc_flag = int(qc[i])
-		if qc_flag in _qc_flag_definitions:
-			(result, msg) = _qc_flag_definitions[qc_flag]
+		if qc_flag in qc_flag_definitions:
+			(result, msg) = qc_flag_definitions[qc_flag]
 			if not result:
 				data.mask[i] = True
 				log_debug("Filtering QC flag %d in row %d: %s" % (qc_flag, i, msg))
