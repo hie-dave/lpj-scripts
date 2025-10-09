@@ -3,9 +3,18 @@
 # Helper script providing utility methods for normalising ozflux site names.
 #
 from ozflux_logging import *
+import pandas
+import os
+
+class Site:
+    def __init__(self, site: str, lon: float, lat: float):
+        self.site = site
+        self.lon = lon
+        self.lat = lat
 
 _sites_without_codes = [
     "Arcturus",
+    "Emerald",
     "Longreach",
     "Loxton",
     "RedDirtMelonFarm"
@@ -15,6 +24,8 @@ _synonyms = {
     "FletcherviewTropicalRangeland": "FletcherView",
     "Wallaby": "WallabyCreek",
 }
+
+_site_grid = None
 
 site_codes = {
     "AU-Ade": "AdelaideRiver",
@@ -116,6 +127,64 @@ def normalise_site_name(site_name: str) -> str:
     # Log a warning and return original site code.
     log_warning(f"Unknown site name: {site_name}")
     return site_name
+
+def get_standard_sites() -> list[str]:
+    """
+    Get a list of standard site names.
+    """
+    return ["AdelaideRiver",
+            "AliceSpringsMulga",
+            "Boyagin",
+            "Calperum",
+            "CapeTribulation",
+            "Collie",
+            "CowBay",
+            "CumberlandPlain",
+            "DalyPasture",
+            "DalyUncleared",
+            "DryRiver",
+            "Emerald",
+            "FletcherView",
+            "FoggDam",
+            "Gingin",
+            "GreatWesternWoodlands",
+            "HowardSprings",
+            "Litchfield",
+            "Longreach",
+            "Otway",
+            "RedDirtMelonFarm",
+            "Ridgefield",
+            "RiggsCreek",
+            "RobsonCreek",
+            "Samford",
+            "SilverPlains",
+            "SturtPlains",
+            "TiTreeEast",
+            "Tumbarumba",
+            "WallabyCreek",
+            "Warra",
+            "Whroo",
+            "WombatStateForest",
+            "Yanco"]
+
+def _read_site_grid() -> pandas.DataFrame:
+    return pandas.read_csv("ozflux.grid", sep = ",")
+
+def resolve_site(site_name: str) -> Site:
+    global _site_grid
+    if _site_grid is None:
+        _site_grid = _read_site_grid()
+    normalised = normalise_site_name(site_name)
+    row = _site_grid[_site_grid["site"] == normalised]
+    if len(row) == 0:
+        raise ValueError(f"Site {site_name} not found in site grid")
+    if len(row) > 1:
+        raise ValueError(f"Multiple sites found in site grid for {site_name}")
+    # row[...] returns a Series; select the first (and only) element as scalars
+    site = row["site"].iloc[0]
+    lon = float(row["lon"].iloc[0])
+    lat = float(row["lat"].iloc[0])
+    return Site(site, lon, lat)
 
 if __name__ == "__main__":
     set_log_level(LogLevel.ERROR)
