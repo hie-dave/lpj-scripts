@@ -213,7 +213,14 @@ if [ "${LOG_LEVEL}" -ge 4 ]; then
     # Log level = DEBUG: enable verbose output from curl.
     CURL_OPTS="${CURL_OPTS} --verbose"
 elif [ "${LOG_LEVEL}" -eq 3 ]; then
-    CURL_OPTS="${CURL_OPTS} --no-progress-meter"
+    # --no-progress-meter only supported in curl >=7.67.0
+    # In older versions, use --silent --show-error as below.
+    CURL_VERSION=$(curl --version | head -n 1 | cut -d ' ' -f 2)
+    if [ "${CURL_VERSION}" ">" "7.67.0" ]; then
+        CURL_OPTS="${CURL_OPTS} --no-progress-meter"
+    else
+        CURL_OPTS="${CURL_OPTS} --silent --show-error"
+    fi
 elif [ "${LOG_LEVEL}" -lt 3 ]; then
     # Log level < DIAG: disable progress output from curl.
     # (If log level is DIAG, we get default curl output)
