@@ -15,10 +15,11 @@ from typing import Optional, Callable
 from sys import argv, exit
 from traceback import print_exc
 import pandas, os, numpy
-from ozflux_common import find_units_conversion
+from ozflux_common import find_units_conversion_opt
 
 _VERSION = "0.1.0"
 
+# Aggregation methods. These are applied to the variable in the *input units*.
 _AGGREGATORS = {
     "ER_LL": lambda x: numpy.mean(x), # umol/m2/s
     "ER_LT": lambda x: numpy.mean(x), # umol/m2/s
@@ -29,7 +30,14 @@ _AGGREGATORS = {
     "NEE_LL": lambda x: numpy.mean(x), # umol/m2/s
     "NEE_LT": lambda x: numpy.mean(x), # umol/m2/s
     "NEE_SOLO": lambda x: numpy.mean(x), # umol/m2/s
+    "NEP_LL": lambda x: numpy.mean(x), # umol/m2/s
+    "NEP_LT": lambda x: numpy.mean(x), # umol/m2/s
+    "NEP_SOLO": lambda x: numpy.mean(x), # umol/m2/s
     "ET": lambda x: numpy.mean(x), # kg/m2/s
+    "Ta": lambda x: numpy.mean(x), # ℃
+    "Fsd": lambda x: numpy.mean(x), # W/m2
+    "Precip": lambda x: numpy.sum(x), # mm
+    "Sws": lambda x: numpy.mean(x), # m3/m3
 }
 
 class Options:
@@ -157,6 +165,9 @@ def _read_data(file: str, variable: str, data_col: str) -> tuple[pandas.DataFram
     @param data_col: Column name for the data.
     """
     with open_netcdf(file) as nc:
+        if variable not in nc.variables:
+            log_warning(f"Variable {variable} not found in file {file}; skipping")
+            return None, None
         var = nc.variables[variable]
         time = get_var_from_std_name(nc, STD_TIME)
 
@@ -169,15 +180,16 @@ def _read_data(file: str, variable: str, data_col: str) -> tuple[pandas.DataFram
         if not hasattr(time, ATTR_UNITS):
             raise ValueError(f"Time variable {time.name} has no units attribute")
 
-        if not hasattr(time, ATTR_CALENDAR):
-            raise ValueError(f"Time variable {time.name} has no calendar attribute")
+        calendar = "standard"
+        if hasattr(time, ATTR_CALENDAR):
+            calendar = time.calendar
 
         if not hasattr(var, ATTR_UNITS):
             raise ValueError(f"Variable {variable} has no units attribute")
         units = var.units
 
         # Read and convert the time variable to dates.
-        dates = num2date(time[:], time.units, time.calendar,
+        dates = num2date(time[:], time.units, calendar,
                          only_use_cftime_datetimes = False,
                          only_use_python_datetimes = True)
 
@@ -210,7 +222,8 @@ def _guess_site_name(filename: str) -> str:
     return normalise_site_name(site_name)
 
 def _convert_units(df: pandas.DataFrame, column: str,
-                   in_units: str, out_units: str) -> pandas.DataFrame:
+                   in_units: str, out_units: str,
+                   annual: bool) -> pandas.DataFrame:
     """
     Convert units of the data frame to the specified units.
 
@@ -222,18 +235,22 @@ def _convert_units(df: pandas.DataFrame, column: str,
         return df
 
     # Find the conversion function (this will throw if not found).
-    conversion = find_units_conversion(in_units, out_units)
+    conversion = find_units_conversion_opt(in_units, out_units)
 
-    # Build a forward-looking delta per row (seconds). Ensure the index is
-    # a proper datetime64 Series so that .dt accessors are available.
-    idx_series = pandas.Series(pandas.to_datetime(df.index), index=df.index)
-    delta_s = (idx_series.shift(-1) - idx_series).dt.total_seconds()
-
-    # Fill the last row's delta with the previous delta if possible, else 0 for a single-row frame
-    if len(delta_s) > 1:
-        delta_s.iloc[-1] = delta_s.iloc[-2]
+    # Compute timestep seconds per row.
+    if annual:
+        # Index is year (int). Compute exact seconds for each calendar year,
+        # e.g., accounting for leap years by using Jan 1 to Jan 1 of next year.
+        years = pandas.Index(df.index).astype(int)
+        starts = pandas.to_datetime([f"{y}-01-01" for y in years])
+        ends = pandas.to_datetime([f"{y+1}-01-01" for y in years])
+        delta_s = pandas.Series((ends - starts) / numpy.timedelta64(1, 's'), index=df.index)
     else:
-        delta_s.iloc[-1] = 0
+        # Daily (or other) aggregation: derive forward difference from datetime index (or dates).
+        idx_series = pandas.Series(pandas.to_datetime(df.index), index=df.index)
+        delta_s = (idx_series.shift(-1) - idx_series).dt.total_seconds()
+        # Fill the last row's delta with the previous delta if possible, else 0 for a single-row frame.
+        delta_s = delta_s.ffill().fillna(0)
 
     # Apply the conversion elementwise: f(value, timestep_seconds)
     df[column] = df[column].combine(delta_s, lambda v, s: conversion(v, s))
@@ -243,18 +260,28 @@ def main(opts):
     var = opts.variable
     mkdir(os.path.dirname(opts.out_file))
     dfs: list[pandas.DataFrame] = []
+    sites: set[str] = set()
     i = 0
     for file in opts.in_files:
         aggregator = _get_aggregator(var)
         df, units = _read_data(file, var, opts.data_col)
+        if df is None:
+            continue
         df = _aggregate_temporally(df, opts.annual, aggregator)
-        df = _convert_units(df, opts.data_col, units, opts.out_units)
+        df = _convert_units(df, opts.data_col, units, opts.out_units, opts.annual)
 
         # Add site column from basename of the input file
-        df[opts.site_col] = _guess_site_name(file)
+        site = _guess_site_name(file)
+        df[opts.site_col] = site
 
         # Reorder columns
         df = df[[opts.site_col, opts.data_col]]
+
+        # Check if any df in the list already has this site in the site column.
+        if site in sites:
+            log_warning(f"Multiple input files contain site {site}; data from input file {file} will be ignored")
+            continue
+        sites.add(site)
 
         dfs.append(df)
         i += 1

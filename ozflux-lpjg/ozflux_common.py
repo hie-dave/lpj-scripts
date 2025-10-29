@@ -1,6 +1,8 @@
 import datetime, math, re
 from enum import IntEnum
 from typing import Callable
+from os import makedirs
+from ozflux_logging import *
 
 ## Constants
 
@@ -205,7 +207,7 @@ _units_synonyms = [
 	["ppm", "umol/mol"],
 	["degC", "°C", "degrees C"],
 	["umol/m2/s", "umol/m^2/s"],
-	["m3/m3", "m^3/m^3"],
+	["m3/m3", "m^3/m^3", "m3 m-3"],
 	["gC/m^2/day", "gC/m2/day"]
 ]
 
@@ -230,12 +232,15 @@ _units_conversions = {
 	("mm", "kg/m2/s"): lambda x, t: x / t, # Assuming mm means mm per timestep
 	("kg/m2/s", "mm"): lambda x, t: t * x,
 	("kg/m2/s", "mm/day"): lambda x, t: SECONDS_PER_DAY * x,
+	("mm/day", "mm"): lambda x, t: x * t / SECONDS_PER_DAY,
+	("gC/m^2/day", "kgC/m2"): lambda x, t: x * KG_PER_G * t / SECONDS_PER_DAY,
 	("degC", "K"): lambda x, _: x + DEG_C_TO_K,
 	("K", "degC"): lambda x, _: x - DEG_C_TO_K,
 	("kPa", "Pa"): lambda x, _: x * PA_PER_KPA,
 	("umol/m2/s", "kgC/m2/day"): lambda x, _: x * MOL_PER_UMOL * G_C_PER_MOL * KG_PER_G * SECONDS_PER_DAY,
 	("umol/m2/s", "gC/m2/day"): lambda x, _: x * MOL_PER_UMOL * G_C_PER_MOL * SECONDS_PER_DAY,
 	("umol/m2/s", "gC/m2"): lambda x, t: x * MOL_PER_UMOL * G_C_PER_MOL * t,
+	("umol/m2/s", "kgC/m2"): lambda x, t: x * MOL_PER_UMOL * G_C_PER_MOL * KG_PER_G * t,
 	("Pa", "kPa"): lambda x, _: x / PA_PER_KPA,
 	("hPa", "Pa"): lambda x, _: x * PA_PER_HPA,
 	("hPa", "kPa"): lambda x, _: x * PA_PER_HPA / PA_PER_KPA,
@@ -486,3 +491,10 @@ def find_units_conversion_opt(current: str, desired: str) -> Callable[[float], f
 	if units_match(current, desired):
 		return lambda x, _: x
 	return find_units_conversion(current, desired)
+
+def mkdir_p(path: str):
+	"""
+	Create a directory, creating parent directories as needed.
+	"""
+	log_diagnostic(f"Creating directory tree: {path}")
+	makedirs(path, exist_ok = True)
