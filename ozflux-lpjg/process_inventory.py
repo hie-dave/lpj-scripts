@@ -263,9 +263,17 @@ def get_inventory_data(inventory_path: str, site: str, opts: Options) -> pandas.
     df[opts.live_col] = df[opts.live_col] / df[COL_PLOT_AREA]
     df[opts.dead_col] = df[opts.dead_col] / df[COL_PLOT_AREA]
 
+    # Convert diameters from cm to m.
+    df[opts.diameter_col] = df[opts.diameter_col] / 100
+    df[col_diameter_90] = df[col_diameter_90] / 100
+
     # Calculate basal area from diameter (assuming cylindrical trees).
     df[opts.ba_col] = numpy.pi * (df[opts.diameter_col] / 2) ** 2
     df[col_ba_90] = numpy.pi * (df[col_diameter_90] / 2) ** 2
+
+    # Replace 0-values for biomass with NaN.
+    df[opts.live_col] = df[opts.live_col].replace(0, numpy.nan)
+    df[opts.dead_col] = df[opts.dead_col].replace(0, numpy.nan)
 
     # If date column is string-typed, we need to convert it to datetime.
     if not df.empty and not isinstance(df[opts.date_col].iloc[0], datetime.datetime):
