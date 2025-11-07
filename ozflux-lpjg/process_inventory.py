@@ -208,6 +208,12 @@ def get_inventory_data(inventory_path: str, site: str, opts: Options) -> pandas.
         log_warning(f"{site} inventory data is missing columns: [{missing}]")
         df[COL_PLOT_AREA] = numpy.nan
 
+    # Convert start and end visit dates to datetime format.
+    if COL_START_DATE in df and not isinstance(df[COL_START_DATE].iloc[0], datetime.datetime):
+        df[COL_START_DATE] = pandas.to_datetime(df[COL_START_DATE], format=opts.date_infmt)
+    if COL_END_DATE in df and not isinstance(df[COL_END_DATE].iloc[0], datetime.datetime):
+        df[COL_END_DATE] = pandas.to_datetime(df[COL_END_DATE], format=opts.date_infmt)
+
     in_col_diam = biom_processing.get_diameter_col(df)
     if in_col_diam == None:
         log_warning(f"Inventory data file does not contain diameter column")
@@ -233,20 +239,25 @@ def get_inventory_data(inventory_path: str, site: str, opts: Options) -> pandas.
     # Group by the combination of plot ID, start and end date.
     agg_map = {
         COL_PLOT_AREA: (COL_PLOT_AREA, "first"),
-        opts.date_col: (COL_START_DATE, "first"),
+        COL_START_DATE: (COL_START_DATE, "first"),
+        COL_END_DATE: (COL_END_DATE, "first"),
         # live/dead: sum then divide by plot area to get biomass in kg/m2.
         opts.live_col: (in_col_biomass_live, "sum"),
         opts.dead_col: (in_col_biomass_dead, "sum"),
         # Calculate mean height, diameter, and basal area.
         opts.height_col: (in_col_height, "mean"),
         opts.diameter_col: (in_col_diam, "mean"),
-        # Calculate 90th percentile height and diameter.
-        col_diameter_90: (in_col_diam, lambda s: numpy.percentile(s, 90)),
-        col_height_90: (in_col_height, lambda s: numpy.percentile(s, 90)),
+        # Calculate 90th percentile height and diameter, ignoring NaN values.
+        col_diameter_90: (in_col_diam, lambda s: numpy.nanpercentile(s, 90)),
+        col_height_90: (in_col_height, lambda s: numpy.nanpercentile(s, 90)),
     }
 
     group_cols = [in_col_plot, COL_START_DATE, COL_END_DATE]
     df = df.groupby(group_cols, as_index=False).agg(**agg_map)
+
+    # Date column is mean of start and end dates.
+    # date = start + (end - start) / 2
+    df[opts.date_col] = df.apply(lambda row: row[COL_START_DATE] + (row[COL_END_DATE] - row[COL_START_DATE]) / 2, axis=1)
 
     # Convert biomass from kg to kg/m2
     df[opts.live_col] = df[opts.live_col] / df[COL_PLOT_AREA]
@@ -274,7 +285,7 @@ def write(df: pandas.DataFrame, col: str, opts: Options, filename: str):
         data_cols.append(col_p90)
 
     # Filter out rows with NaN in all data columns.
-    df_filtered = df.dropna(subset=data_cols)
+    df_filtered = df.dropna(subset=data_cols, how = "all")
 
     cols = [opts.date_col, opts.site_col] + data_cols
 
