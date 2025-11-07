@@ -73,13 +73,13 @@ COL_DEAD = "standingDeadAboveGroundBiomass_kilograms"
 _COL_INDIV = "plantId"
 
 # Name of the column which gives the patch name/ID.
-_COL_PATCH = "plotId"
+COL_PATCH = "plotId"
 
 # Candidate names of the column which gives the diameter.
-_COLS_DIAMETER = ["stemDiameter_centimetres", "stemDiameter_centimeters"]
+COLS_DIAMETER = ["stemDiameter_centimetres", "stemDiameter_centimeters"]
 
 # Name of the column which gives the height.
-_COL_HEIGHT = "stemHeight_metres"
+COL_HEIGHT = "stemHeight_metres"
 
 # Conversion factor from cm to m.
 CM_TO_M = 0.01
@@ -119,10 +119,10 @@ class InventoryReading():
 	"""
 	Represents a biomass reading on a particular day.
 	"""
-	def __init__(self, date: datetime.date, patch: int, indiv: int, diameter: float, height: float, live_biomass: float, dead_biomass: float):
+	def __init__(self, date: datetime.date, plot: int, indiv: int, diameter: float, height: float, live_biomass: float, dead_biomass: float):
 		"""
 		@param date: Date of the reading.
-		@param patch: Patch number.
+		@param plot: Plot number.
 		@param indiv: Individual number.
 		@param diameter: Diameter of the tree (m).
 		@param height: Height of the tree (m).
@@ -130,46 +130,46 @@ class InventoryReading():
 		@param dead_biomass: Dead biomass of the tree (kg).
 		"""
 		self.date = date
-		self.patch = patch
+		self.plot = plot
 		self.indiv = indiv
 		self.diameter = diameter
 		self.height = height
 		self.live_biomass = live_biomass
 		self.dead_biomass = dead_biomass
 	def __str__(self) -> str:
-		return f"Patch {self.patch}, Individual {self.indiv}: {self.date} - {self.live_biomass}kg (live), {self.dead_biomass}kg (dead). Height: {self.height}m, Diameter: {self.diameter}m"
+		return f"Patch {self.plot}, Individual {self.indiv}: {self.date} - {self.live_biomass}kg (live), {self.dead_biomass}kg (dead). Height: {self.height}m, Diameter: {self.diameter}m"
 
-class Patch:
+class Plot:
 	"""
-	Represents a patch of land.
+	Represents a plot of land.
 	"""
 	def __init__(self, id: int, name: str, area: float):
 		self.id = id
 		self.name = name
 		self.area = area # can be NaN if data doesn't contain plot length/width.
 	def __str__(self) -> str:
-		return f"Patch {self.id}: {self.name} ({self.area}m2)"
+		return f"Plot {self.id}: {self.name} ({self.area}m2)"
 
 class Inventory:
 	"""
 	Represents the inventory of a gridcell.
 	"""
-	def __init__(self, patches: list[Patch], readings: list[InventoryReading]):
-		self.patches = patches
+	def __init__(self, plots: list[Plot], readings: list[InventoryReading]):
+		self.plots = plots
 		self.readings = readings
-	def get_area(self, patch: int) -> float:
+	def get_area(self, plot: int) -> float:
 		"""
-		Get the area of a patch.
+		Get the area of a plot.
 
-		@param patch: Patch number.
-		@return Area of the patch (m2).
+		@param plot: plot number.
+		@return Area of the plot (m2).
 		"""
-		patches = [p for p in self.patches if p.id == patch]
-		if len(patches) != 1:
-			raise ValueError(f"Patch {patch} not found")
-		return patches[0].area
+		plots = [p for p in self.plots if p.id == plot]
+		if len(plots) != 1:
+			raise ValueError(f"Patch {plot} not found")
+		return plots[0].area
 	def __str__(self) -> str:
-		return "\n".join([f"{str(p)}: {len([r for r in self.readings if r.patch == p.id])} readings over {len(numpy.unique([r.date for r in self.readings if r.patch == p.id]))} timesteps" for p in self.patches])
+		return "\n".join([f"{str(p)}: {len([r for r in self.readings if r.plot == p.id])} readings over {len(numpy.unique([r.date for r in self.readings if r.plot == p.id]))} timesteps" for p in self.plots])
 
 def parse_args(argv: list[str]) -> Options:
 	"""
@@ -241,6 +241,30 @@ def transect_area_from_transect_dim(data: pandas.DataFrame, row: int) -> float:
 	dim = data.iloc[row][COL_SUBPLOT_DIMENSION]
 	return area_from_dim(dim)
 
+def get_plot_length(data: pandas.DataFrame, row: int, col: str) -> float:
+	"""
+	Get the plot length specified on the given row in m.
+
+	@param data: The data frame.
+	@param row: The row index.
+	"""
+	log_debug(f"Attempting to parse {col} {row} from '{data.iloc[row][col]}'")
+	raw = data.iloc[row][col]
+	if type(raw) == float and math.isnan(raw):
+		log_debug(f"Missing {col} in row {row}")
+		# Fallback: group data frame by plot ID, get all distinct non-NaN values
+		# and if there is one value, use that. If there are multiple, we will
+		# need to emit an exception.
+		patch = data.iloc[row][COL_PATCH]
+		group = data[data[COL_PATCH] == patch]
+		lengths = group[COL_PLOT_LENGTH].dropna().unique()
+		if len(lengths) != 1:
+			raise ValueError(f"Multiple plot lengths found for plot {patch}")
+		else:
+			return ozflux_common.get_length(lengths[0])
+	else:
+		return ozflux_common.get_length(raw)
+
 def get_plot_area(data: pandas.DataFrame, row: int) -> float:
 	"""
 	Get the plot area specified on the given row in m2.
@@ -252,10 +276,8 @@ def get_plot_area(data: pandas.DataFrame, row: int) -> float:
 		log_warning(f"Inventory data file does not contain plot length/width data")
 		return math.nan
 	# This will throw if these column don't exist.
-	log_debug(f"Attempting to parse length from '{data.iloc[row][COL_PLOT_LENGTH]}'")
-	plot_length = ozflux_common.get_length(data.iloc[row][COL_PLOT_LENGTH])
-	log_debug(f"Attempting to parse width from '{data.iloc[row][COL_PLOT_WIDTH]}'")
-	plot_width = ozflux_common.get_length(data.iloc[row][COL_PLOT_WIDTH])
+	plot_length = get_plot_length(data, row, COL_PLOT_LENGTH)
+	plot_width = get_plot_length(data, row, COL_PLOT_WIDTH)
 	return plot_length * plot_width
 
 def get_transect_area(data: pandas.DataFrame, row: int) -> float:
@@ -327,6 +349,17 @@ def get_num_transects(data: pandas.DataFrame, rows: list[int]) -> int:
 		return 1
 	return data.iloc[rows].groupby(col_name).ngroups
 
+def get_diameter_col(df: pandas.DataFrame) -> str:
+	"""
+	Get the name of the diameter column in the data frame.
+
+	@param df: The data frame.
+	"""
+	for col in COLS_DIAMETER:
+		if col in df.columns:
+			return col
+	return None
+
 def parse_inventory_reading(row: pandas.Series, patches: list[str], indivs: list[str]) -> InventoryReading:
 	"""
 	Parse an inventory reading from a row in a data frame.
@@ -336,7 +369,7 @@ def parse_inventory_reading(row: pandas.Series, patches: list[str], indivs: list
 	@param indivs: List of unique individual IDs (note these may not be ints).
 	"""
 	date = datetime.datetime.strptime(row[COL_DATE], _DATE_FMT)
-	patch = int(numpy.where(patches == row[_COL_PATCH])[0][0])
+	patch = int(numpy.where(patches == row[COL_PATCH])[0][0])
 	indiv = int(numpy.where(indivs == row[_COL_INDIV])[0][0])
 
 	diameter = math.nan
@@ -344,13 +377,13 @@ def parse_inventory_reading(row: pandas.Series, patches: list[str], indivs: list
 	live_biomass = math.nan
 	dead_biomass = math.nan
 
-	diameter_cols = [c for c in _COLS_DIAMETER if c in row.keys()]
+	diameter_cols = [c for c in COLS_DIAMETER if c in row.keys()]
 	col_diameter = diameter_cols[0] if len(diameter_cols) > 0 else None
 	if col_diameter != None:
 		diameter = parse_float(row, col_diameter) * CM_TO_M
 
-	if _COL_HEIGHT in row.keys():
-		height = parse_float(row, _COL_HEIGHT) # already in m
+	if COL_HEIGHT in row.keys():
+		height = parse_float(row, COL_HEIGHT) # already in m
 	if COL_LIVE in row.keys():
 		live_biomass = parse_float(row, COL_LIVE) # kg
 	if COL_DEAD in row.keys():
@@ -359,19 +392,19 @@ def parse_inventory_reading(row: pandas.Series, patches: list[str], indivs: list
 	return InventoryReading(date, patch, indiv, diameter, height, live_biomass,
 							dead_biomass)
 
-def parse_patch(data: pandas.DataFrame, patch_name: str, patches: list[str]) -> Patch:
+def parse_patch(data: pandas.DataFrame, patch_name: str, patches: list[str]) -> Plot:
 	"""
 	Parse a patch from a data frame.
 
 	@param data: The data frame.
 	@param patch_name: The name of the patch.
 	"""
-	patch_rows = data[data[_COL_PATCH] == patch_name]
+	patch_rows = data[data[COL_PATCH] == patch_name]
 	if len(patch_rows) == 0:
 		raise ValueError(f"Patch '{patch_name}' has no data.")
 	area = get_plot_area(patch_rows, 0)
 	id = int(numpy.where(patches == patch_name)[0][0])
-	return Patch(id, patch_name, area)
+	return Plot(id, patch_name, area)
 
 def read_inventory_data(data: pandas.DataFrame) -> Inventory:
 	"""
@@ -380,7 +413,7 @@ def read_inventory_data(data: pandas.DataFrame) -> Inventory:
 
 	@param data: Data frame containing the data.
 	"""
-	patch_names = data[_COL_PATCH].unique()
+	patch_names = data[COL_PATCH].unique()
 	indivs = data[_COL_INDIV].unique()
 	readings = data.apply(parse_inventory_reading, axis=1, args=(patch_names, indivs))
 	patches = [parse_patch(data, patch_name, patch_names) for patch_name in patch_names]
