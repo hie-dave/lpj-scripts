@@ -84,13 +84,28 @@ class Options:
 
     @param input_dir Input directory
     @param output_dir Output directory
+    @param live_file File name for live biomass (default: live_biomass.csv.gz)
+    @param dead_file File name for dead biomass (default: dead_biomass.csv.gz)
+    @param height_file File name for height (default: height.csv.gz)
+    @param diameter_file File name for diameter (default: diameter.csv.gz)
+    @param ba_file File name for basal area (default: ba.csv.gz)
+    @param date_col Date column name in the output file
     @param site_col Site column name in the output file
+    @param live_col Live biomass column name in the output file
+    @param dead_col Dead biomass column name in the output file
+    @param height_col Height column name in the output file
+    @param diameter_col Diameter column name in the output file
+    @param ba_col Basal area column name in the output file
+    @param log_level Log level
+    @param show_progress Show progress
+    @param date_infmt Format of dates in the input files
+    @param date_fmt Date format to be used in the output file
     """
     def __init__(self, input_dir: str, output_dir: str, live_file: str,
                  dead_file: str, height_file: str, diameter_file: str,
                  ba_file: str, date_col: str, site_col: str, live_col: str,
                  dead_col: str, height_col: str, diameter_col: str, ba_col: str,
-                 log_level: LogLevel, show_progress: bool):
+                 log_level: LogLevel, show_progress: bool, date_infmt: str, date_fmt: str):
         self.input_dir = input_dir
         self.output_dir = output_dir
         self.live_file = live_file
@@ -107,6 +122,8 @@ class Options:
         self.ba_col = ba_col
         self.verbosity = log_level
         self.show_progress = show_progress
+        self.date_infmt = date_infmt
+        self.date_fmt = date_fmt
 
 def parse_args(opts: list[str]) -> Options:
     """
@@ -127,6 +144,8 @@ def parse_args(opts: list[str]) -> Options:
     parser.add_argument("--height-file", default = "height.csv.gz", help="File name for height (default: height.csv.gz)")
     parser.add_argument("--diameter-file", default = "diameter.csv.gz", help="File name for diameter (default: diameter.csv.gz)")
     parser.add_argument("--ba-file", default = "ba.csv.gz", help="File name for basal area (default: ba.csv.gz)")
+    parser.add_argument("--date-infmt", default = "%d/%m/%Y", help = "Format of dates in the input files (default: '%d/%m/%Y')")
+    parser.add_argument("--date-fmt", default = "%Y-%m-%d", help = "Date format to be used in the output file (default: '%Y-%m-%d')")
     parser.add_argument("-v", "--verbosity", default=LogLevel.INFORMATION, type = int, help=f"Log level (0-5, default {LogLevel.INFORMATION})")
     parser.add_argument("-p", "--show-progress", action="store_true", help='Show progress')
     p = parser.parse_args(opts)
@@ -134,7 +153,8 @@ def parse_args(opts: list[str]) -> Options:
     return Options(p.input_dir, p.output_dir, p.live_file, p.dead_file,
                    p.height_file, p.diameter_file, p.ba_file, p.date_col,
                    p.site_col, p.live_col, p.dead_col, p.height_col,
-                   p.diameter_col, p.ba_col, p.verbosity, p.show_progress)
+                   p.diameter_col, p.ba_col, p.verbosity, p.show_progress,
+                   p.date_infmt, p.date_fmt)
 
 def get_inventory_data_file(in_path: str, site: str) -> str | None:
     """
@@ -224,6 +244,7 @@ def get_inventory_data(inventory_path: str, site: str, opts: Options) -> pandas.
         col_diameter_90: (in_col_diam, lambda s: numpy.percentile(s, 90)),
         col_height_90: (in_col_height, lambda s: numpy.percentile(s, 90)),
     }
+
     group_cols = [in_col_plot, COL_START_DATE, COL_END_DATE]
     df = df.groupby(group_cols, as_index=False).agg(**agg_map)
 
@@ -234,6 +255,11 @@ def get_inventory_data(inventory_path: str, site: str, opts: Options) -> pandas.
     # Calculate basal area from diameter (assuming cylindrical trees).
     df[opts.ba_col] = numpy.pi * (df[opts.diameter_col] / 2) ** 2
     df[col_ba_90] = numpy.pi * (df[col_diameter_90] / 2) ** 2
+
+    # If date column is string-typed, we need to convert it to datetime.
+    if not df.empty and not isinstance(df[opts.date_col].iloc[0], datetime.datetime):
+        df[opts.date_col] = pandas.to_datetime(df[opts.date_col],
+                                               format = opts.date_infmt)
 
     return df
 
@@ -255,8 +281,8 @@ def write(df: pandas.DataFrame, col: str, opts: Options, filename: str):
     # Generate the file path.
     file_path = os.path.join(opts.output_dir, filename)
 
-    log_diagnostic(f"Writing {len(df_filtered)} rows of [{col}] to {file_path}")
-    df_filtered[cols].to_csv(file_path, index=False)
+    log_diagnostic(f"Writing {len(df_filtered)} rows of [{cols}] to {file_path}")
+    df_filtered[cols].to_csv(file_path, index=False, date_format=opts.date_fmt)
 
 def main(opts: Options):
     """
