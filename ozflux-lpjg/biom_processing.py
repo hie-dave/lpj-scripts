@@ -76,7 +76,11 @@ _COL_INDIV = "plantId"
 COL_PATCH = "plotId"
 
 # Candidate names of the column which gives the diameter.
-COLS_DIAMETER = ["stemDiameter_centimetres", "stemDiameter_centimeters"]
+COLS_DIAMETER = [
+	"stemDiameter_centimetres",
+	"stemDiameter_centimeters",
+	"StemDiameter_centimetres" # outrageous
+]
 
 # Name of the column which gives the height.
 COL_HEIGHT = "stemHeight_metres"
