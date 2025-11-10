@@ -64,6 +64,18 @@ COL_DIAMETER_90 = f"{COL_DIAMETER}{SFX_90}"
 # (in m2).
 COL_BA_90 = f"{COL_BA}{SFX_90}"
 
+# Possible column names for live biomass in the input data.
+COLS_LIVE_BIOMASS = [
+    "aboveGroundBiomass_kilograms",
+    "aboveGroundLiveBiomass_kilograms",
+    "stemBiomass_kilograms"
+]
+
+COLS_DEAD_BIOMASS = [
+    "standingDeadAboveGroundBiomass_kilograms",
+    "aboveGroundDeadBiomass_kilograms"
+]
+
 # Dictionary mapping input file names to canonical site names.
 _INVENTORY_SITE_NAMES = {
     "Alice_Mulga_diameter_height_biomass_data_lVZI0qg.csv": "AliceSpringsMulga",
@@ -176,6 +188,18 @@ def get_inventory_data_file(in_path: str, site: str) -> str | None:
             return file
     return None
 
+def get_live_biomass_col(dt: pandas.DataFrame) -> str | None:
+    for col in COLS_LIVE_BIOMASS:
+        if col in dt.columns:
+            return col
+    return biom_processing.COL_LIVE
+
+def get_dead_biomass_col(dt: pandas.DataFrame) -> str | None:
+    for col in COLS_DEAD_BIOMASS:
+        if col in dt.columns:
+            return col
+    return biom_processing.COL_DEAD
+
 def get_inventory_data(inventory_path: str, site: str, opts: Options) -> pandas.DataFrame:
     """
     Read inventory data from the specified path.
@@ -193,7 +217,7 @@ def get_inventory_data(inventory_path: str, site: str, opts: Options) -> pandas.
     """
     file = get_inventory_data_file(inventory_path, site)
     if file is None:
-        log_warning(f"No inventory data for site '{site}'")
+        log_warning(f"No inventory data file name provided for site '{site}'")
         return pandas.DataFrame()
 
     # Read data from disk.
@@ -224,8 +248,8 @@ def get_inventory_data(inventory_path: str, site: str, opts: Options) -> pandas.
         return pandas.DataFrame()
 
     in_col_plot = biom_processing.COL_PATCH
-    in_col_biomass_live = biom_processing.COL_LIVE
-    in_col_biomass_dead = biom_processing.COL_DEAD
+    in_col_biomass_live = get_live_biomass_col(df)
+    in_col_biomass_dead = get_dead_biomass_col(df)
     in_col_height = biom_processing.COL_HEIGHT
 
     # If any data columns are missing from the input file, create them and fill
@@ -261,11 +285,22 @@ def get_inventory_data(inventory_path: str, site: str, opts: Options) -> pandas.
     }
 
     group_cols = [in_col_plot, COL_START_DATE, COL_END_DATE]
+    group_cols = [c for c in group_cols if c in df.columns and not pandas.isnull(df[c]).any()]
+    if len(group_cols) == 0:
+        log_warning(f"No valid columns found to group by for {site}. Verify that the site has valid data in the following columns: [{in_col_plot}, {COL_START_DATE}, {COL_END_DATE}]")
+        return pandas.DataFrame()
     df = df.groupby(group_cols, as_index=False).agg(**agg_map)
 
     # Date column is mean of start and end dates.
     # date = start + (end - start) / 2
-    df[opts.date_col] = df.apply(lambda row: row[COL_START_DATE] + (row[COL_END_DATE] - row[COL_START_DATE]) / 2, axis=1)
+    if pandas.isnull(df[COL_END_DATE]).any():
+        # date = start
+        df[opts.date_col] = df[COL_START_DATE]
+    elif pandas.isnull(df[COL_START_DATE]).any():
+        # date = end
+        df[opts.date_col] = df[COL_END_DATE]
+    else:
+        df[opts.date_col] = df.apply(lambda row: row[COL_START_DATE] + (row[COL_END_DATE] - row[COL_START_DATE]) / 2, axis=1)
 
     # Convert biomass from kg to kg/m2
     df[opts.live_col] = df[opts.live_col] / df[COL_PLOT_AREA]
