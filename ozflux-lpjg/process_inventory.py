@@ -7,10 +7,14 @@
 # Biomass is calculated as the sum of all biomass for a given start-end visit
 # date pair, divided by plot area to get biomass in kg/m2.
 #
-## Height, Diameter, and Basal Area
+## Height, Diameter
 #
 # Height and diamter are outputted as mean and 90th-percentile values for all
 # live trees in the plot, measured in a single "visit".
+#
+## Basal Area
+#
+# Basal area is outputted in total m2/ha of basal area.
 #
 
 import argparse, biom_processing, numpy, os, pandas
@@ -234,7 +238,9 @@ def get_inventory_data(inventory_path: str, site: str, opts: Options) -> pandas.
 
     col_height_90 = f"{opts.height_col}{SFX_90}"
     col_diameter_90 = f"{opts.diameter_col}{SFX_90}"
-    col_ba_90 = f"{opts.ba_col}{SFX_90}"
+
+    # Calculate basal area for each row in m2, converting diameter from cm to m.
+    df[opts.ba_col] = numpy.pi * (df[in_col_diam] / 200) ** 2
 
     # Group by the combination of plot ID, start and end date.
     agg_map = {
@@ -250,6 +256,8 @@ def get_inventory_data(inventory_path: str, site: str, opts: Options) -> pandas.
         # Calculate 90th percentile height and diameter, ignoring NaN values.
         col_diameter_90: (in_col_diam, lambda s: numpy.nanpercentile(s, 90)),
         col_height_90: (in_col_height, lambda s: numpy.nanpercentile(s, 90)),
+        # Sum basal area.
+        opts.ba_col: (opts.ba_col, "sum"),
     }
 
     group_cols = [in_col_plot, COL_START_DATE, COL_END_DATE]
@@ -267,9 +275,8 @@ def get_inventory_data(inventory_path: str, site: str, opts: Options) -> pandas.
     df[opts.diameter_col] = df[opts.diameter_col] / 100
     df[col_diameter_90] = df[col_diameter_90] / 100
 
-    # Calculate basal area from diameter (assuming cylindrical trees).
-    df[opts.ba_col] = numpy.pi * (df[opts.diameter_col] / 2) ** 2
-    df[col_ba_90] = numpy.pi * (df[col_diameter_90] / 2) ** 2
+    # Convert basal area from m2/plot to m2/ha by multiplying by 10000/plotarea.
+    df[opts.ba_col] = df[opts.ba_col] * 10_000 / df[COL_PLOT_AREA]
 
     # Replace 0-values for biomass with NaN.
     df[opts.live_col] = df[opts.live_col].replace(0, numpy.nan)
