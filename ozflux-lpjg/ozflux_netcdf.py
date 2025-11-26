@@ -1742,6 +1742,67 @@ def _append_2d(nc_in: Dataset, nc_out: Dataset, name:str, min_chunk_size: int, p
 			it += 1
 			pcb(it / it_max)
 
+def get_var_from_long_name(nc: Dataset, long_name: str) -> Variable:
+	"""
+	Find a variable in the input file with the specified long name. Raise an exception
+	if no matching variable is found.
+
+	@param nc: The input netcdf file.
+	@param long_name: The long name for which we search.
+	"""
+	for var in nc.variables:
+		var = nc.variables[var]
+		if hasattr(var, ATTR_LONG_NAME):
+			if getattr(var, ATTR_LONG_NAME) == long_name:
+				return var			
+	return None
+
+def get_var_from_units(nc: Dataset, units: str) -> Variable:
+	"""
+	Find a variable in the input file with the specified units. Raise an exception
+	if no matching variable is found.
+
+	@param nc: The input netcdf file.
+	@param units: The units for which we search.
+	"""
+	for var in nc.variables:
+		var = nc.variables[var]
+		if hasattr(var, ATTR_UNITS):
+			if getattr(var, ATTR_UNITS) == units:
+				return var			
+	return None
+
+def get_var_from_std_name_or_units(nc: Dataset, name: str,
+								   units: str) -> Variable:
+	"""
+	Find a variable in the input file with the specified standard name or units.
+	Raise an exception if no matching variable is found.
+
+	@param nc: The input netcdf file.
+	@param name: The standard name for which we search.
+	@param units: The units for which we search.
+	"""
+	var = get_var_from_units(nc, units) # fixme: will not throw
+	if var is not None:
+		return var
+	return get_var_from_std_name(nc, name) # will throw
+
+def find_var(nc: Dataset, std_name: str, long_name: str,
+			 units: str) -> Variable:
+	"""
+	Find a variable in the input file with the specified standard name, long name,
+	or units. Raise an exception if no matching variable is found.
+
+	@param nc: The input netcdf file.
+	@param std_name: The standard name for which we search.
+	@param long_name: The long name for which we search.
+	@param units: The units for which we search.
+	"""
+	var = get_var_from_long_name(nc, long_name) # will not throw
+	if var is not None:
+		return var
+	return get_var_from_std_name_or_units(nc, std_name, units)
+
 def get_var_from_std_name(nc: Dataset, name: str) -> Variable:
 	"""
 	Find a variable in the input file with the specified standard name. Raise
