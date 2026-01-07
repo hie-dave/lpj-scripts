@@ -28,11 +28,11 @@ class Options:
 
 def parse_args(argv: list[str]) -> Options:
     parser = argparse.ArgumentParser(description="Read longitude/latitude values from input .nc file, and overwrite the values in the output file.")
-    parser.add_argument("-i", "--in-file", type=str, help="Input file path.")
-    parser.add_argument("-o", "--out-file", type=str, help="Output file path.")
-    parser.add_argument("-v", "--verbosity", type=int, default=LogLevel.INFORMATION, help=f"Verbosity level (default={LogLevel.INFORMATION}).")
-    parser.add_argument("-d", "--dry-run", action="store_true", help="Dry run (do not overwrite output file).")
-    parser.add_argument("--warnings-as-errors", action="store_true", help="Treat all warnings as errors.")
+    parser.add_argument("-i", "--in-file", type=str, required = True, help="Input file path.")
+    parser.add_argument("-o", "--out-file", type=str, required = True, help="Output file path.")
+    parser.add_argument("-v", "--verbosity", type=int, default=LogLevel.INFORMATION, choices=list(LogLevel), help=f"Verbosity level (default={LogLevel.INFORMATION}).")
+    parser.add_argument("-d", "--dry-run", action="store_true", default = False, help="Dry run (do not overwrite output file).")
+    parser.add_argument("--warnings-as-errors", action="store_true", default = False, help="Treat all warnings as errors.")
     parsed = parser.parse_args(argv)
     return Options(parsed.in_file, parsed.out_file, parsed.verbosity,
                    parsed.dry_run, parsed.warnings_as_errors)
