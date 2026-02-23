@@ -249,8 +249,8 @@ def calculate_thome(nc: Dataset, pcb: Callable[[float], None], gridlist: list[Co
     # Iterate through gridcells.
     data: list[DataPoint] = []
     subset = gridlist is not None and len(gridlist) > 0
-    nlon = 1 if subset else temp_data.shape[index_longitude]
-    nlat = len(gridlist) if subset else temp_data.shape[index_latitude]
+    nlon = 1 if subset else temp_var.shape[index_longitude]
+    nlat = len(gridlist) if subset else temp_var.shape[index_latitude]
 
     lats = var_lat[:]
     lons = var_lon[:]
@@ -263,9 +263,9 @@ def calculate_thome(nc: Dataset, pcb: Callable[[float], None], gridlist: list[Co
 
     for i in range(nlat):
         for j in range(nlon):
-            indices[index_latitude] = index_of(lats, gridlist[i].lat) if subset else lats[i]
+            indices[index_latitude] = index_of(lats, gridlist[i].lat) if subset else i
             # Note: j is always 0 for subset mode, so use i for gridlist lookup.
-            indices[index_longitude] = index_of(lons, gridlist[i].lon) if subset else lons[j]
+            indices[index_longitude] = index_of(lons, gridlist[i].lon) if subset else j
             temperature = temp_var[tuple(indices)]
             if conversion is not None:
                 temperature = conversion(temperature)
