@@ -126,6 +126,14 @@ def normalise_site_name(site_name: str) -> str:
         _lookup_table[site_name] = result
         return result
 
+    # AliceSpringsMulga1 -> AliceSpringsMulga
+    if normalised.endswith("1"):
+        base = normalised[:-1]
+        if base in site_codes.values():
+            log_diagnostic(f"Identified site name {site_name}: {base}")
+            _lookup_table[site_name] = base
+            return base
+
     # Log a warning and return original site code.
     log_warning(f"Unknown site name: {site_name}")
     return site_name
