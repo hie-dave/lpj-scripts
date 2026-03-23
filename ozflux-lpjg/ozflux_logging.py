@@ -3,7 +3,6 @@
 import enum, sys
 import datetime
 from io import TextIOWrapper
-from mpi4py import MPI
 
 # Maximum length of a progress message. ie how many characters are used
 # by printing the longest possible progress message?
@@ -55,7 +54,8 @@ _progress_interval = 5
 # Default is "\r" if stdout is a terminal, otherwise "\n".
 _progress_end: str
 _progress_end = "\r" if sys.stdout.isatty() else "\n"
-if MPI.COMM_WORLD.size > 1:
+# Check if mpi4py is loaded
+if "mpi4py" in sys.modules and sys.modules["mpi4py"].MPI.COMM_WORLD.size > 1:
 	_progress_end = "\n"
 
 _progress_len: int = 0
