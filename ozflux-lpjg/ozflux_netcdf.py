@@ -144,10 +144,6 @@ mutex = multiprocessing.BoundedSemaphore(1)
 # get_data_*_prop variables.
 gd_tp_lock = multiprocessing.BoundedSemaphore(1)
 
-# copy_data_*() time proportion lock. Used to synchronise access to the
-# global_*_prop variables.
-cd_tp_lock = multiprocessing.BoundedSemaphore(1)
-
 # Some flux data file names don't exactly match what we use as the "canonical"
 # name for this site in our processing scripts. These are mapped here.
 _CANONICAL_SITE_NAMES_LOOKUP = {
@@ -1065,6 +1061,18 @@ def get_site_name(nc_file: str) -> str:
 	"""
 	with open_netcdf(nc_file) as nc:
 		return nc.site_name
+
+def create_var_with_metadata(nc: Dataset, name: str, format: str,
+							 dims: tuple[str], std_name: str, long_name: str,
+							 units: str, compression_level: int = 0,
+							 compression_type: str = None,
+							 chunksizes: tuple[int] = None):
+	create_var_if_not_exists(nc, name, format, dims, compression_level,
+								compression_type, chunksizes)
+	var = nc.variables[name]
+	setattr(var, ATTR_STD_NAME, std_name)
+	setattr(var, ATTR_LONG_NAME, long_name)
+	setattr(var, ATTR_UNITS, units)
 
 def create_var_if_not_exists(nc: Dataset, name: str, format: str
 	, dims: tuple[str], compression_level: int = 0, compression_type: str = None

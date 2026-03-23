@@ -101,7 +101,7 @@ def temp_var(i: str, o: str, aggregator: Callable[[list[float]], float]) \
 	units = _TEMP_UNITS_TRUNK if _TRUNK else _TEMP_UNITS_DAVE
 	return ForcingVariable(i, o, units, aggregator, MIN_TEMP, MAX_TEMP)
 
-def get_dailygrass_vars(timestep: int) -> list[ForcingVariable]:
+def get_ozflux_vars(timestep: int) -> list[ForcingVariable]:
 	"""
 	Get the list of variables required for the daily grass version.
 
@@ -158,55 +158,6 @@ def get_ameriflux_vars(timestep: int) -> list[ForcingVariable]:
 		vars.append(temp_var(_AMERIFLUX_TAIR, _OUT_TMIN, numpy.amin))
 
 	return vars
-
-def create_dimensions(nc: Dataset, ngridcell: int):
-	"""
-	Create dimensions required by the dave-daily-grass version.
-
-	@param nc: Output .nc file.
-	@param ngridcell: The number of grid points being written to this file.
-	"""
-	# Dailygrass mode needs lon/lat dimensions (as it's gridded).
-	# Chunk size for geographic (ie lat/lon) variables.
-	geo_chunk_size = (1,)
-	dim_size = 0 if UNLIMITED_DIMS else ngridcell
-	create_dim_if_not_exists(nc, DIM_LON, dim_size)
-	create_dim_if_not_exists(nc, DIM_LAT, dim_size)
-	create_var_if_not_exists(nc, DIM_LON, FORMAT_FLOAT, DIM_LON, chunksizes = geo_chunk_size)
-	create_var_if_not_exists(nc, DIM_LAT, FORMAT_FLOAT, DIM_LAT, chunksizes = geo_chunk_size)
-	var_lon = nc.variables[DIM_LON]
-	var_lat = nc.variables[DIM_LAT]
-	var_lon.long_name = LONG_LON
-	var_lat.long_name = LONG_LAT
-	var_lon.standard_name = STD_LON
-	var_lat.standard_name = STD_LAT
-	var_lon.units = UNITS_LON
-	var_lat.units = UNITS_LAT
-
-def create_dave_variables(nc: Dataset, timestep: int, vars: list[ForcingVariable]
-		, compression_level: int, compression_type: str):
-	"""
-	Create the variables required for dailygrass mode.
-
-	@param nc: The output netcdf file.
-	@param timestep: The output timestep length in minutes.
-	@param compression_level: Compression level [1-9], 9 = slowest/smallest.
-	@param compression_type: Compression algorithm to be used (or None).
-	"""
-	# TODO: configurable dimension order (achieved via constants)
-	dims = (DIM_LAT, DIM_LON, DIM_TIME)
-	time_chunksize = get_steps_per_year(timestep)
-	chunksizes = (1, 1, time_chunksize)
-	format = FORMAT_FLOAT
-
-	for var in vars:
-		create_var_if_not_exists(nc, var.out_name, format, dims
-			, compression_level, compression_type, chunksizes)
-
-	# We also need a time dimension.
-	time_chunks = (time_chunksize,)
-	create_var_if_not_exists(nc, DIM_TIME, FORMAT_FLOAT, DIM_TIME
-		, compression_level, compression_type, time_chunks)
 
 def write_metadata(nc: Dataset):
 	"""
