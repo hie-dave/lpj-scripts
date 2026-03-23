@@ -27,10 +27,9 @@ class Options:
 	@param single_outfile: Iff true, inputs will be written to a single output file.
 	@param ameriflux: True to treat input files as ameriflux files (e.g. for checking variable names).
 	"""
-	def __init__(self, log : LogLevel, files: list[str], odir: str, \
-		prog: bool, parallel: bool, timestep: int, out_type: LpjVersion,
-		compression_level: int, compression_type: str, single_outfile: bool,
-		ameriflux: bool):
+	def __init__(self, log : LogLevel, files: list[str], odir: str, prog: bool,
+			     parallel: bool, timestep: int, compression_level: int,
+		         compression_type: str, single_outfile: bool, ameriflux: bool):
 		self.log_level = log
 		self.files = files
 		self.out_dir = odir
@@ -39,19 +38,16 @@ class Options:
 		self.timestep = timestep
 		self.compression_level = compression_level
 		self.compression_type = compression_type
-		self.out_type = LpjVersion(out_type)
 		self.single_outfile = single_outfile
 		self.ameriflux = ameriflux
 
 class MetProcessingTask(ozflux_parallel.Task):
-	def __init__(self, infile: str, outfile: str, timestep: int
-	      , out_type: LpjVersion, compression_level: int
-		  , compression_type: str, ngridcell: int
-		  , first_date: datetime.datetime):
+	def __init__(self, infile: str, outfile: str, timestep: int,
+			  	 compression_level: int, compression_type: str, ngridcell: int,
+				 first_date: datetime.datetime):
 		self.infile = infile
 		self.outfile = outfile
 		self.timestep = timestep
-		self.out_type = out_type
 		self.compression_level = compression_level
 		self.compression_type = compression_type
 		self.ngridcell = ngridcell
@@ -59,9 +55,9 @@ class MetProcessingTask(ozflux_parallel.Task):
 
 	def exec(self, pcb: Callable[[float], None]):
 		try:
-			process_file(self.infile, self.outfile, self.timestep
-			, self.out_type, self.compression_level, self.compression_type
-			, self.ngridcell, self.first_date, pcb)
+			process_file(self.infile, self.outfile, self.timestep,
+						 self.compression_level, self.compression_type,
+						 self.ngridcell, self.first_date, pcb)
 		except BaseException as err:
 			raise ValueError(f"Failed to process {self.infile}") from err
 
@@ -131,20 +127,15 @@ def change_start_minute(datetime: str, minute: int) -> str:
 		raise ValueError(m % datetime)
 	return "%s%d%s" % (matches[0], minute, matches[1])
 
-def get_vars(version: LpjVersion, timestep: int) -> list[ForcingVariable]:
+def get_vars(timestep: int) -> list[ForcingVariable]:
 	"""
 	Get the list of variables to be copied to the output file.
 
-	@param version: The target lpj-guess version.
 	@param timestep: Output timestep in minutes.
 	"""
-	if version == LpjVersion.LSM:
-		return ozflux_lsm.get_lsm_vars()
-	if version == LpjVersion.DAILY_GRASS:
-		if (opts.ameriflux):
-			return get_ameriflux_vars(timestep)
-		return get_dailygrass_vars(timestep)
-	raise ValueError("Unknown output mode: %d" % version)
+	if (opts.ameriflux):
+		return get_ameriflux_vars(timestep)
+	return get_dailygrass_vars(timestep)
 
 def copy_data_lsm(in_file: Dataset, out_file: Dataset, timestep: int, \
 	pcb: Callable[[float], None]):
@@ -197,8 +188,7 @@ def get_latitude(nc: Dataset) -> float:
 	return get_coord(nc, "latitude", STD_LAT)
 
 def write_data(nc_in: Dataset, nc_out: Dataset, data: list[float] \
-	, var: ForcingVariable, version: LpjVersion, toffset: int
-	, pcb: Callable[[float], None]):
+	, var: ForcingVariable, toffset: int, pcb: Callable[[float], None]):
 	"""
 	Write the data to the output file.
 
@@ -209,32 +199,25 @@ def write_data(nc_in: Dataset, nc_out: Dataset, data: list[float] \
 	@param toffset: Offset of the data on the time dimension.
 	@param pcb: Progress callback function.
 	"""
-	if version == LpjVersion.LSM:
-		ozflux_lsm.write_data(nc_out, data, var, pcb)
-	elif version == LpjVersion.DAILY_GRASS:
-		lon = get_longitude(nc_in)
-		lat = get_latitude(nc_in)
-		write_data_dg(nc_out, var.out_name, data, lon, lat, toffset, pcb)
-	else:
-		raise ValueError("Unknown lpj version %d" % version)
+	lon = get_longitude(nc_in)
+	lat = get_latitude(nc_in)
+	write_data_dg(nc_out, var.out_name, data, lon, lat, toffset, pcb)
 
-def copy_data(nc_in: Dataset, nc_out: Dataset, timestep: int
-	, version: LpjVersion, first_date: datetime.datetime
-	, pcb: Callable[[float], None]):
+def copy_data(nc_in: Dataset, nc_out: Dataset, timestep: int,
+			  first_date: datetime.datetime, pcb: Callable[[float], None]):
 	"""
 	Copy data to the output file in dailygrass format.
 
 	@param nc_in: Input NetCDF file.
 	@param nc_out: Output NetCDF file.
 	@param timestep: Output timestep length in minutes.
-	@param version: Output lpj-guess version selected by the user.
 	@param first_date: Date of first datum in output file.
 	@param progress_cb: Progress callback function.
 	"""
 	i = 0
 
 	# Variables to be added to output file.
-	variables = get_vars(version, timestep)
+	variables = get_vars(timestep)
 
 	# 95% of time to read
 	global global_read_prop, global_write_prop
@@ -268,7 +251,7 @@ def copy_data(nc_in: Dataset, nc_out: Dataset, timestep: int
 		log_diagnostic("Writing %s data" % var.in_name)
 		reporter = lambda p: pcb( (i + read_prop + write_prop * p) / nvar)
 		write_start = time.time()
-		write_data(nc_in, nc_out, data, var, version, toffset, reporter)
+		write_data(nc_in, nc_out, data, var, toffset, reporter)
 		write_time = time.time() - write_start
 
 		# Bookkeeping.
@@ -282,7 +265,7 @@ def copy_data(nc_in: Dataset, nc_out: Dataset, timestep: int
 		if opts.parallel:
 			cd_tp_lock.release()
 
-		# Copy a few attributes.f
+		# Copy a few attributes.
 		in_var = nc_in.variables[var.in_name]
 		out_var = nc_out.variables[var.out_name]
 
@@ -327,21 +310,17 @@ def copy_data(nc_in: Dataset, nc_out: Dataset, timestep: int
 		thigh = up + toffset
 		var_time[tlow:thigh] = values[i:up]
 
-def create_dimensions(nc: Dataset, version: LpjVersion, ngridcell: int):
+def create_dimensions(nc: Dataset, ngridcell: int):
 	"""
 	Create the required dimensions in the output file.
 	"""
 	log_debug("Creating output dimensions")
-	if (version == LpjVersion.LSM):
-		ozflux_lsm.create_dimensions(nc)
-	else:
-		ozflux_dave.create_dimensions(nc, ngridcell)
+	ozflux_dave.create_dimensions(nc, ngridcell)
 
 	# Time dimension is needed in both LSM and daily_grass mode.
 	create_dim_if_not_exists(nc, DIM_TIME)
 
-def create_variables(nc: Dataset, version: LpjVersion, timestep: int
-	, clevel: int, ctype: str):
+def create_variables(nc: Dataset, timestep: int, clevel: int, ctype: str):
 	"""
 	Create the required variables in the output file.
 
@@ -352,51 +331,29 @@ def create_variables(nc: Dataset, version: LpjVersion, timestep: int
 	@param ctype: Compression algorithm to be used (or None).
 	"""
 	log_debug("Creating output variables")
-	if (version == LpjVersion.LSM):
-		ozflux_lsm.create_variables(nc)
-	else:
-		# I've created a separate function for the dailygrass variables to
-		# improve readability in this function.
-		vars = get_vars(version, timestep)
-		ozflux_dave.create_dailygrass_variables(nc, timestep, vars, clevel, ctype)
+	vars = get_vars(timestep)
+	ozflux_dave.create_dave_variables(nc, timestep, vars, clevel, ctype)
 
-def prepare_outfile(nc: Dataset, version: LpjVersion, ngridcell: int
-	, timestep: int, clevel: int, ctype: str):
+def prepare_outfile(nc: Dataset, ngridcell: int, timestep: int, clevel: int,
+					ctype: str):
 	"""
 	Create the variables in the output NetCDF file. The variables created
 	will depend to some degree on the output type.
 
 	@param nc: Output .nc file.
-	@param version: Output lpj-guess version selected by the user.
 	@param ngridcell: The number of gridcells to be stored in this output file.
 	@param timestep: Output timestep in minutes.
 	@param clevel: Compression level [1-9], 9 = slowest/smallest.
 	@param ctype: Compression algorithm to be used (or None).
 	"""
-	create_dimensions(nc, version, ngridcell)
-	create_variables(nc, version, timestep, clevel, ctype)
+	create_dimensions(nc, ngridcell)
+	create_variables(nc, timestep, clevel, ctype)
 
 def open_outfile(file: str) -> Dataset:
 	log_debug("Opening output file %s for writing" % file)
 	return Dataset(file, "r+", format = NC_FORMAT)
 
-def process_files(in_files: list[str], out_file: str, timestep: int, out_type: \
-	LpjVersion, pcb: Callable[[float], None]):
-	"""
-	Read the input files and write all data to the specified output file.
-
-	@param in_files: Input files.
-	@param out_file: Output file path.
-	@param timestep: Output timestep in minutes.
-	@param out_type: Target lpj-guess branch (LSM or daily-grass).
-	@param pcb: Progress reporting function.
-	"""
-	read_prop = 0.9
-	write_prop = 1 - read_prop
-	with open_outfile(out_file) as nc_out:
-		...
-
-def write_metadata(nc: Dataset, timestep: int, version: LpjVersion):
+def write_metadata(nc: Dataset, timestep: int):
 	"""
 	Write version-specific metadata.
 
@@ -405,13 +362,7 @@ def write_metadata(nc: Dataset, timestep: int, version: LpjVersion):
 	@param version: Output version selected by the user.
 	"""
 	ozflux_netcdf.write_common_metadata(nc, timestep)
-
-	if version == LpjVersion.DAILY_GRASS:
-		ozflux_dave.write_metadata(nc)
-	elif version == LpjVersion.LSM:
-		ozflux_lsm.write_metadata(nc)
-	else:
-		raise ValueError("Unknown output version %d" % version)
+	ozflux_dave.write_metadata(nc)
 
 def get_timestep(nc: Dataset) -> int:
 	"""
@@ -433,10 +384,9 @@ def get_timestep(nc: Dataset) -> int:
 	timestep.min
 	return timestep.total_seconds() // 60
 
-def process_file(in_file: str, out_file: str, timestep: int \
-	, version: LpjVersion, clevel: int, ctype: str, ngridcell
-	, first_date: datetime.datetime
-	, pcb: Callable[[float], None]):
+def process_file(in_file: str, out_file: str, timestep: int, clevel: int,
+				 ctype: str, ngridcell, first_date: datetime.datetime,
+				 pcb: Callable[[float], None]):
 	"""
 	Read the input file and generate an output file at the specified
 	path in LPJ-Guess (lsminput) format.
@@ -444,7 +394,6 @@ def process_file(in_file: str, out_file: str, timestep: int \
 	@param in_file: Input file path.
 	@param out_file: Output file path.
 	@param timestep: Output timestep length in minutes.
-	@param version: Output version selected by the user.
 	@param clevel: Compression level [1-9], 9 = slowest/smallest.
 	@param ctype: Compression algorithm to be used (or None).
 	@param ngridcell: Total number of gridcells to be processed.
@@ -458,17 +407,15 @@ def process_file(in_file: str, out_file: str, timestep: int \
 			# Quick sanity check of time step.
 			instep = get_timestep(nc_in)
 			if instep > timestep:
-				m = "Invalid input timestep (%d). Must be <= output (%d)"
-				raise ValueError(m % instep, timestep)
+				raise RuntimeError(f"Invalid input timestep ({instep}). Must be <= output ({timestep})")
 			if timestep % instep != 0:
-				m = "Invalid input timestep: %d. Must be an integer multiple of output timestep (%d)"
-				raise ValueError(m % (instep, timestep))
+				raise ValueError(f"Invalid input timestep: {instep}. Must be an integer multiple of output timestep ({timestep})")
 
-			prepare_outfile(nc_out, version, ngridcell, timestep, clevel, ctype)
+			prepare_outfile(nc_out, ngridcell, timestep, clevel, ctype)
 
 			# Copy data into this variable.
 			log_debug("Migrating data")
-			copy_data(nc_in, nc_out, timestep, version, first_date, pcb)
+			copy_data(nc_in, nc_out, timestep, first_date, pcb)
 
 			# Write site metadata.
 			start_date = get_next_year(get_first_date(nc_in))
@@ -494,7 +441,7 @@ def process_file(in_file: str, out_file: str, timestep: int \
 				nc_out.site_name = site_name
 
 			# Write additional global/common metadata.
-			write_metadata(nc_out, timestep, opts.out_type)
+			write_metadata(nc_out, timestep)
 
 def get_outfile_name(infile: str, opts: Options):
 	"""
@@ -504,8 +451,6 @@ def get_outfile_name(infile: str, opts: Options):
 	"""
 	if opts.single_outfile:
 		return "combined.nc"
-	if opts.out_type == LpjVersion.LSM:
-		return get_output_filename(infile)
 	return os.path.basename(infile)
 
 def parse_args(argv: list[str]) -> Options:
@@ -531,10 +476,10 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("--version", action = "version", version = "%(prog)s " + VERSION)
 
 	parsed = parser.parse_args(argv[1:])
-	return Options(parsed.verbosity, parsed.files, parsed.out_dir
-	, parsed.show_progress, parsed.parallel, parsed.timestep
-	, parsed.output_compatibility, parsed.compression_level
-	, parsed.compression_type, parsed.single_outfile, parsed.ameriflux)
+	return Options(parsed.verbosity, parsed.files, parsed.out_dir,
+				   parsed.show_progress, parsed.parallel, parsed.timestep,
+				   parsed.compression_level, parsed.compression_type,
+				   parsed.single_outfile, parsed.ameriflux)
 
 def read_first_date(nc: Dataset) -> datetime.datetime:
 	"""
@@ -565,6 +510,10 @@ def get_first_date(nc: Dataset) -> datetime.datetime:
 	else:
 		# The fallback is to read the first time value from the input file.
 		start_date = read_first_date(nc)
+
+	if missing_first_timestep(nc):
+		timestep_seconds = get_timestep(nc) * SECONDS_PER_MINUTE
+		start_date = start_date - datetime.timedelta(seconds = timestep_seconds)
 
 	if (start_date.minute == 30):
 		# temporal_aggregation() trims the first value if it lies on the
@@ -622,9 +571,9 @@ def main(opts: Options):
 		if os.path.exists(outfile):
 			os.remove(outfile)
 
-		job = MetProcessingTask(infile, outfile, opts.timestep, opts.out_type
-			  , opts.compression_level, opts.compression_type, ngridcell
-			  , first_date)
+		job = MetProcessingTask(infile, outfile, opts.timestep,
+						        opts.compression_level, opts.compression_type,
+								ngridcell, first_date)
 
 		job_manager.add_job(job, os.path.getsize(infile))
 

@@ -27,7 +27,10 @@ _OUT_TMIN = "tmin"
 _OUT_PS = "ps"
 
 # Output units for temperature variables.
-_TEMP_UNITS = "degC"
+_TEMP_UNITS_DAVE = "degC"
+
+# Output units for temperature variables.
+_TEMP_UNITS_TRUNK = "K"
 
 # Output units for shortwave radiation.
 _SWDOWN_UNITS = "W/m2"
@@ -52,6 +55,18 @@ _OUT_WIND = "wind"
 
 # Output units for wind speed.
 _WIND_UNITS = "m/s"
+
+# Input name for relative humidity.
+_IN_RH = "RH"
+
+# Output name for relative humidity.
+_OUT_RH = "relhum"
+
+# Output units for relative humidity.
+_RH_OUT_UNITS = "1"
+
+# fixme: CLI option
+_TRUNK = False
 
 ################################################################################
 # Ameriflux input variable names.
@@ -83,7 +98,8 @@ def temp_var(i: str, o: str, aggregator: Callable[[list[float]], float]) \
 	"""
 	Create a 
 	"""
-	return ForcingVariable(i, o, _TEMP_UNITS, aggregator, MIN_TEMP, MAX_TEMP)
+	units = _TEMP_UNITS_TRUNK if _TRUNK else _TEMP_UNITS_DAVE
+	return ForcingVariable(i, o, units, aggregator, MIN_TEMP, MAX_TEMP)
 
 def get_dailygrass_vars(timestep: int) -> list[ForcingVariable]:
 	"""
@@ -101,13 +117,16 @@ def get_dailygrass_vars(timestep: int) -> list[ForcingVariable]:
 	pressure = ForcingVariable(IN_PS, _OUT_PS, _PS_UNITS, numpy.mean, MIN_PS \
 				, MAX_PS)
 	wind = ForcingVariable(IN_WIND, _OUT_WIND, _WIND_UNITS, numpy.mean, 0, 100)
+	rh = ForcingVariable("RH", "rh", "1", numpy.mean, 0, 1)
 
-	vars = [tair, swdown, precip, co2, vpd, pressure, wind]
+	vars = [tair, swdown, precip, co2, vpd, pressure, wind, rh]
 
 	# If generating a daily file, need to include tmax/tmin variables in output.
 	if timestep / MINUTES_PER_HOUR == 24:
 		vars.append(temp_var(IN_TEMP, _OUT_TMAX, numpy.amax))
 		vars.append(temp_var(IN_TEMP, _OUT_TMIN, numpy.amin))
+		vars.append(ForcingVariable(_IN_RH, _OUT_RH, _RH_OUT_UNITS,
+							  		numpy.mean, 0, 100))
 
 	return vars
 
@@ -164,7 +183,7 @@ def create_dimensions(nc: Dataset, ngridcell: int):
 	var_lon.units = UNITS_LON
 	var_lat.units = UNITS_LAT
 
-def create_dailygrass_variables(nc: Dataset, timestep: int, vars: list[ForcingVariable]
+def create_dave_variables(nc: Dataset, timestep: int, vars: list[ForcingVariable]
 		, compression_level: int, compression_type: str):
 	"""
 	Create the variables required for dailygrass mode.

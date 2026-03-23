@@ -263,6 +263,8 @@ def get_units(var_id: Variable) -> str:
 	"""
 	Get the units for the specified variable in the .nc file.
 	"""
+	if not hasattr(var_id, ATTR_UNITS):
+		raise ValueError(f"Variable {var_id.name} has no units attribute")
 	return var_id.units
 
 def get_data(in_file: Dataset \
