@@ -1,5 +1,5 @@
 import datetime, numpy, os, pandas, re, threading, time
-import multiprocessing, multiprocessing.connection
+import multiprocessing
 import traceback, sys, warnings
 from ozflux_common import *
 from ozflux_logging import *
@@ -1854,12 +1854,16 @@ def get_calendar(var: Variable) -> str:
 def get_timestep(nc: Dataset) -> int:
 	"""
 	Get the timestep of the netcdf file, in seconds.
+
+	@param nc: Input NetCDF file.
 	"""
 	var_time = get_var_from_std_name(nc, STD_TIME)
 	units = getattr(var_time, ATTR_UNITS)
 	calendar = get_calendar(var_time)
 
-	times = num2date(var_time[0:2], units, calendar, only_use_cftime_datetimes = False, only_use_python_datetimes = True)
+	times = num2date(var_time[0:2], units, calendar,
+				     only_use_cftime_datetimes = False,
+					 only_use_python_datetimes = True)
 	return (times[1] - times[0]).total_seconds()
 
 def get_nexist(var: Variable) -> int:

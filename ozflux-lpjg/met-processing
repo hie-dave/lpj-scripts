@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 from argparse import ArgumentParser
-import os, re, time
+import os, time
 from pandas import date_range
 import ozflux_dave, ozflux_netcdf, ozflux_parallel
 from traceback import format_exc
@@ -78,30 +78,12 @@ def get_output_filename(infile: str) -> str:
 	"""
 	Get the expected output file name for the given input .nc file.
 	"""
-	with Dataset(infile, "r", format=NC_FORMAT) as nc:
+	with open_netcdf(infile) as nc:
 		# Read latitude/longitude from input .nc file.
 		lon = float(nc.longitude)
 		lat = float(nc.latitude)
 
 		return get_met_filename(lon, lat)
-
-def change_start_minute(datetime: str, minute: int) -> str:
-	"""
-	Change the minute value of a date/time string.
-
-	@param datetime: Date/time string in format yyyy-MM-dd hh:mm:ss
-	@param minute: The new value of the minute field.
-	"""
-	if minute < 0 or minute > 59:
-		m = "Unable to set start minute: minute value %d must be in range [0, 59]"
-		raise ValueError(m % minute)
-
-	pattern = r"(\d{4}-\d{1,2}-\d{1,2} \d{1,2}:)\d{1,2}(:\d{1,2})"
-	matches = re.findall(pattern, datetime)
-	if len(matches) < 2:
-		m = "Invalid datetime format; expected yyyy-MM-dd hh:mm:ss format, but was '%s'"
-		raise ValueError(m % datetime)
-	return "%s%d%s" % (matches[0], minute, matches[1])
 
 def get_vars(timestep: int, dataset_type: DatasetType) -> list[ForcingVariable]:
 	"""
@@ -366,7 +348,7 @@ def process_file(in_file: str, out_file: str, timestep: int, clevel: int,
 				 pcb: Callable[[float], None]):
 	"""
 	Read the input file and generate an output file at the specified
-	path in LPJ-Guess (lsminput) format.
+	path in LPJ-GUESS-DAVE format.
 
 	@param in_file: Input file path.
 	@param out_file: Output file path.
@@ -382,7 +364,7 @@ def process_file(in_file: str, out_file: str, timestep: int, clevel: int,
 	log_debug(f"Opening output file {out_file} for writing")
 	with open_netcdf(out_file, True) as nc_out:
 		log_debug(f"Opening input file {in_file} for reading")
-		with Dataset(in_file, "r", format=NC_FORMAT) as nc_in:
+		with open_netcdf(in_file) as nc_in:
 			# Quick sanity check of time step.
 			instep = get_timestep(nc_in)
 			if instep > timestep:
@@ -438,7 +420,6 @@ def parse_args(argv: list[str]) -> Options:
 	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
 	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel")
 	parser.add_argument("-t", "--timestep", type = int, required = True, help = "Output timestep in minutes")
-	parser.add_argument("-c", "--output-compatibility", type = int, default = 0, help = "Output compatibility type; ie the LPJ-Guess input module to be used (0 = dave (ie NC input module), 1 = LSM) (default: 0)")
 	parser.add_argument("--compression-level", type = int, nargs = "?", default = 4, help = "Compression quality for output file [0, 9]. 0 = none, 1 = fastest compression, largest filesize, 9 = slowest compression, smallest filesize (default 4)")
 	parser.add_argument("--compression-type", default = "zlib", help = "Compression algorithm to be used (default 'zlib')")
 	parser.add_argument("-a", "--ameriflux", action = "store_true", help = "Treat input files as ameriflux files (e.g. for checking variable names).")
@@ -509,7 +490,7 @@ def get_file_first_date(ncfile: str):
 
 	@param ncfile: Input netcdf file path.
 	"""
-	with Dataset(ncfile, "r", format=NC_FORMAT) as nc_in:
+	with open_netcdf(ncfile) as nc_in:
 		return get_first_date(nc_in)
 
 # @profile

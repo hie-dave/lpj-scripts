@@ -1,5 +1,5 @@
 from typing import Callable
-import multiprocessing
+import multiprocessing, multiprocessing.connection
 import ozflux_logging
 
 class Task:
@@ -34,7 +34,8 @@ class _Job(multiprocessing.Process):
 		self.progress_writer = progress_writer
 		self.progress = 0.0
 
-	def _progress_local(self, progress: float, start: float, total_weight:float):
+	def _progress_local(self, progress: float, start: float,
+					 	total_weight: float):
 		"""
 		Progress reporting function used when the job is run locally.
 
@@ -165,6 +166,12 @@ class JobManager:
 			for process in self._jobs:
 				process.join()
 
+			# If any job failed, raise an exception.
+			# TODO: is it possible to include error context (ie exception)?
+			for job in self._jobs:
+				if not (job.exitcode == 0 or job.exitcode is None):
+					raise RuntimeError(f"Job {job} exited with non-zero exit code")
+
 	def run_single_threaded(self):
 		"""
 		Run all jobs one at a time, in the current thread, and wait for them to
@@ -179,7 +186,7 @@ class JobManager:
 
 				job.run_local(cum_weight, self._total_weight)
 				if not (job.exitcode == 0 or job.exitcode is None):
-					raise ValueError(f"Job {job} exited with non-zero exit code")
+					raise RuntimeError(f"Job {job} exited with non-zero exit code")
 				cum_weight += job.weight
 
 	def _wait_until(self, condition: Callable[[], bool] = lambda: False):
