@@ -23,6 +23,8 @@ _sites_without_codes = [
 _synonyms = {
     "FletcherviewTropicalRangeland": "FletcherView",
     "Wallaby": "WallabyCreek",
+    "YarramundiControl": "YarCon",
+    "YarramundiIrrigated": "YarIrr",
 }
 
 _site_grid = None
