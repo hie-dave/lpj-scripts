@@ -13,531 +13,531 @@ from ozflux_common import *
 from ozflux_dave import get_ozflux_vars, get_ameriflux_vars
 
 class DatasetType(enum.IntEnum):
-	OZFLUX = 0,
-	AMERIFLUX = 1
+    OZFLUX = 0,
+    AMERIFLUX = 1
 
 class Options:
-	"""
-	Class for storing CLI arguments from the user.
+    """
+    Class for storing CLI arguments from the user.
 
-	@param log: Log level.
-	@param files: Input files.
-	@param odir: Output directory.
-	@param prog: True to write progress messages, 0 otherwise.
-	@param parallel: True to process files in parallel.
-	@param timestep: Desired output timestep, in minutes.
-	@param compression_level: Compression quality for output file [0, 9]. 0 = none, 1 = fastest compression, largest filesize, 9 = slowest compression, smallest filesize.
-	@param compression_type: Compression algorithm to be used (default 'zlib').
-	@param dataset_type: Type of dataset (OZFLUX or AMERIFLUX).
-	"""
-	def __init__(self, log : LogLevel, files: list[str], odir: str, prog: bool,
-			     parallel: bool, timestep: int, compression_level: int,
-		         compression_type: str, dataset_type: DatasetType):
-		self.log_level = log
-		self.files = files
-		self.out_dir = odir
-		self.report_progress = prog
-		self.parallel = parallel
-		self.timestep = timestep
-		self.compression_level = compression_level
-		self.compression_type = compression_type
-		self.dataset_type = dataset_type
+    @param log: Log level.
+    @param files: Input files.
+    @param odir: Output directory.
+    @param prog: True to write progress messages, 0 otherwise.
+    @param parallel: True to process files in parallel.
+    @param timestep: Desired output timestep, in minutes.
+    @param compression_level: Compression quality for output file [0, 9]. 0 = none, 1 = fastest compression, largest filesize, 9 = slowest compression, smallest filesize.
+    @param compression_type: Compression algorithm to be used (default 'zlib').
+    @param dataset_type: Type of dataset (OZFLUX or AMERIFLUX).
+    """
+    def __init__(self, log : LogLevel, files: list[str], odir: str, prog: bool,
+                 parallel: bool, timestep: int, compression_level: int,
+                 compression_type: str, dataset_type: DatasetType):
+        self.log_level = log
+        self.files = files
+        self.out_dir = odir
+        self.report_progress = prog
+        self.parallel = parallel
+        self.timestep = timestep
+        self.compression_level = compression_level
+        self.compression_type = compression_type
+        self.dataset_type = dataset_type
 
 class MetProcessingTask(ozflux_parallel.Task):
-	def __init__(self, infile: str, outfile: str, timestep: int,
-			  	 compression_level: int, compression_type: str, ngridcell: int,
-				 first_date: datetime.datetime, dataset_type: DatasetType):
-		self.infile = infile
-		self.outfile = outfile
-		self.timestep = timestep
-		self.compression_level = compression_level
-		self.compression_type = compression_type
-		self.ngridcell = ngridcell
-		self.first_date = first_date
-		self.dataset_type = dataset_type
+    def __init__(self, infile: str, outfile: str, timestep: int,
+                 compression_level: int, compression_type: str, ngridcell: int,
+                 first_date: datetime.datetime, dataset_type: DatasetType):
+        self.infile = infile
+        self.outfile = outfile
+        self.timestep = timestep
+        self.compression_level = compression_level
+        self.compression_type = compression_type
+        self.ngridcell = ngridcell
+        self.first_date = first_date
+        self.dataset_type = dataset_type
 
-	def exec(self, pcb: Callable[[float], None]):
-		try:
-			process_file(self.infile, self.outfile, self.timestep,
-						 self.compression_level, self.compression_type,
-						 self.ngridcell, self.first_date, self.dataset_type,
-						 pcb)
-		except BaseException as err:
-			raise ValueError(f"Failed to process {self.infile}") from err
+    def exec(self, pcb: Callable[[float], None]):
+        try:
+            process_file(self.infile, self.outfile, self.timestep,
+                         self.compression_level, self.compression_type,
+                         self.ngridcell, self.first_date, self.dataset_type,
+                         pcb)
+        except BaseException as err:
+            raise ValueError(f"Failed to process {self.infile}") from err
 
 def six_digit_string(x: float) -> str:
-	"""
-	Return a number, encoded as a 6 digit string.
-	"""
-	# Round x to 2 digits.
-	res = str(abs(int(round(x, 2) * 1000)))
-	pad = "0" * (6 - len(res))
-	return f"{pad}{res}"
+    """
+    Return a number, encoded as a 6 digit string.
+    """
+    # Round x to 2 digits.
+    res = str(abs(int(round(x, 2) * 1000)))
+    pad = "0" * (6 - len(res))
+    return f"{pad}{res}"
 
 def get_output_filename(infile: str) -> str:
-	"""
-	Get the expected output file name for the given input .nc file.
-	"""
-	with open_netcdf(infile) as nc:
-		# Read latitude/longitude from input .nc file.
-		lon = float(nc.longitude)
-		lat = float(nc.latitude)
+    """
+    Get the expected output file name for the given input .nc file.
+    """
+    with open_netcdf(infile) as nc:
+        # Read latitude/longitude from input .nc file.
+        lon = float(nc.longitude)
+        lat = float(nc.latitude)
 
-		return get_met_filename(lon, lat)
+        return get_met_filename(lon, lat)
 
 def get_vars(timestep: int, dataset_type: DatasetType) -> list[ForcingVariable]:
-	"""
-	Get the list of variables to be copied to the output file.
+    """
+    Get the list of variables to be copied to the output file.
 
-	@param timestep: Output timestep in minutes.
-	@param dataset_type: Type of dataset (OZFLUX or AMERIFLUX).
-	"""
-	if (dataset_type == DatasetType.AMERIFLUX):
-		return get_ameriflux_vars(timestep)
-	return get_ozflux_vars(timestep)
+    @param timestep: Output timestep in minutes.
+    @param dataset_type: Type of dataset (OZFLUX or AMERIFLUX).
+    """
+    if (dataset_type == DatasetType.AMERIFLUX):
+        return get_ameriflux_vars(timestep)
+    return get_ozflux_vars(timestep)
 
 def get_coord(nc: Dataset, attr: str, std_name: str):
-	if hasattr(nc, attr):
-		return float(getattr(nc, attr))
-	dim = get_dim_from_std_name(nc, std_name)
-	if dim.size > 1:
-		raise ValueError(f"Input file has multiple ({len(dim)}) {std_name} values")
-	if dim.size < 1:
-		raise ValueError(f"Input file has 0 {std_name} values")
-	if not dim.name in nc.variables:
-		raise ValueError(f"Variable not found: {dim.name}")
-	return nc.variables[dim.name][0]
+    if hasattr(nc, attr):
+        return float(getattr(nc, attr))
+    dim = get_dim_from_std_name(nc, std_name)
+    if dim.size > 1:
+        raise ValueError(f"Input file has multiple ({len(dim)}) {std_name} values")
+    if dim.size < 1:
+        raise ValueError(f"Input file has 0 {std_name} values")
+    if not dim.name in nc.variables:
+        raise ValueError(f"Variable not found: {dim.name}")
+    return nc.variables[dim.name][0]
 
 def get_longitude(nc: Dataset) -> float:
-	return get_coord(nc, "longitude", STD_LON)
+    return get_coord(nc, "longitude", STD_LON)
 
 def get_latitude(nc: Dataset) -> float:
-	return get_coord(nc, "latitude", STD_LAT)
+    return get_coord(nc, "latitude", STD_LAT)
 
 def write_data(nc_in: Dataset, nc_out: Dataset, data: list[float],
-			   var: ForcingVariable, toffset: int):
-	"""
-	Write the data to the output file.
+               var: ForcingVariable, toffset: int):
+    """
+    Write the data to the output file.
 
-	@param nc: The output netcdf file.
-	@param data: The data to be written.
-	@param var: The variable being copied.
-	@param version: The lpj-guess version selected by the user.
-	@param toffset: Offset of the data on the time dimension.
-	@param pcb: Progress callback function.
-	"""
-	lon = get_longitude(nc_in)
-	lat = get_latitude(nc_in)
-	(ilon, ilat) = get_coord_indices(nc_out, lon, lat)
-	var = nc_out.variables[var.out_name]
-	var[ilat, ilon, :] = data
+    @param nc: The output netcdf file.
+    @param data: The data to be written.
+    @param var: The variable being copied.
+    @param version: The lpj-guess version selected by the user.
+    @param toffset: Offset of the data on the time dimension.
+    @param pcb: Progress callback function.
+    """
+    lon = get_longitude(nc_in)
+    lat = get_latitude(nc_in)
+    (ilon, ilat) = get_coord_indices(nc_out, lon, lat)
+    var = nc_out.variables[var.out_name]
+    var[ilat, ilon, :] = data
 
 def get_metadata(in_var, attr_name: str, default: str) -> str:
-	if hasattr(in_var, attr_name):
-		return getattr(in_var, attr_name)
-	return default
+    if hasattr(in_var, attr_name):
+        return getattr(in_var, attr_name)
+    return default
 
 def set_metadata(in_var, out_var):
-	"""
-	Copy metadata from the input variable to the output variable, where
-	applicable.
+    """
+    Copy metadata from the input variable to the output variable, where
+    applicable.
 
-	@param in_var: The input variable.
-	@param out_var: The output variable.
-	"""
-	std_name = get_metadata(in_var, ATTR_STD_NAME, in_var.name)
-	setattr(out_var, ATTR_STD_NAME, std_name)
-	long_name = get_metadata(in_var, ATTR_LONG_NAME, in_var.name)
-	setattr(out_var, ATTR_LONG_NAME, long_name)
+    @param in_var: The input variable.
+    @param out_var: The output variable.
+    """
+    std_name = get_metadata(in_var, ATTR_STD_NAME, in_var.name)
+    setattr(out_var, ATTR_STD_NAME, std_name)
+    long_name = get_metadata(in_var, ATTR_LONG_NAME, in_var.name)
+    setattr(out_var, ATTR_LONG_NAME, long_name)
 
 def copy_data(nc_in: Dataset, nc_out: Dataset, timestep: int,
-			  dataset_type: DatasetType,
-			  first_date: datetime.datetime, pcb: Callable[[float], None]):
-	"""
-	Copy data to the output file in dailygrass format.
+              dataset_type: DatasetType,
+              first_date: datetime.datetime, pcb: Callable[[float], None]):
+    """
+    Copy data to the output file in dailygrass format.
 
-	@param nc_in: Input NetCDF file.
-	@param nc_out: Output NetCDF file.
-	@param timestep: Output timestep length in minutes.
-	@param first_date: Date of first datum in output file.
-	@param progress_cb: Progress callback function.
-	"""
-	i = 0
+    @param nc_in: Input NetCDF file.
+    @param nc_out: Output NetCDF file.
+    @param timestep: Output timestep length in minutes.
+    @param first_date: Date of first datum in output file.
+    @param progress_cb: Progress callback function.
+    """
+    i = 0
 
-	# Variables to be added to output file.
-	variables = get_vars(timestep, dataset_type)
+    # Variables to be added to output file.
+    variables = get_vars(timestep, dataset_type)
 
-	global global_read_prop, global_write_prop
-	read_prop = global_read_prop
-	write_prop = global_write_prop
+    global global_read_prop, global_write_prop
+    read_prop = global_read_prop
+    write_prop = global_write_prop
 
-	nvar = len(variables)
+    nvar = len(variables)
 
-	# Determine offset along the time dimension in the output file.
-	tstart = get_first_date(nc_in)
-	timestep_hours = timestep / MINUTES_PER_HOUR
-	toffset = int((tstart - first_date).days * HOURS_PER_DAY / timestep_hours)
+    # Determine offset along the time dimension in the output file.
+    tstart = get_first_date(nc_in)
+    timestep_hours = timestep / MINUTES_PER_HOUR
+    toffset = int((tstart - first_date).days * HOURS_PER_DAY / timestep_hours)
 
-	n = 0
-	for var in variables:
-		log_diagnostic("----- %s -----" % var.in_name)
-		log_diagnostic("Reading %s data" % var.in_name)
+    n = 0
+    for var in variables:
+        log_diagnostic("----- %s -----" % var.in_name)
+        log_diagnostic("Reading %s data" % var.in_name)
 
-		reporter = lambda p: pcb( (i + p * read_prop) / nvar)
-		read_start = time.time()
-		data = get_data(nc_in, var, timestep, False, True, reporter)
-		read_time = time.time() - read_start
+        reporter = lambda p: pcb( (i + p * read_prop) / nvar)
+        read_start = time.time()
+        data = get_data(nc_in, var, timestep, False, True, reporter)
+        read_time = time.time() - read_start
 
-		n = max(n, len(data))
+        n = max(n, len(data))
 
-		log_diagnostic("Writing %s data" % var.in_name)
-		reporter = lambda p: pcb( (i + read_prop + write_prop * p) / nvar)
-		write_start = time.time()
-		write_data(nc_in, nc_out, data, var, toffset)
-		write_time = time.time() - write_start
+        log_diagnostic("Writing %s data" % var.in_name)
+        reporter = lambda p: pcb( (i + read_prop + write_prop * p) / nvar)
+        write_start = time.time()
+        write_data(nc_in, nc_out, data, var, toffset)
+        write_time = time.time() - write_start
 
-		# Bookkeeping.
-		total_time = read_time + write_time
-		read_prop = read_time / total_time
-		write_prop = write_time / total_time
-		log_debug(f"read_prop={read_prop:.2f}")
-		log_debug(f"write_prop={write_prop:.2f}")
+        # Bookkeeping.
+        total_time = read_time + write_time
+        read_prop = read_time / total_time
+        write_prop = write_time / total_time
+        log_debug(f"read_prop={read_prop:.2f}")
+        log_debug(f"write_prop={write_prop:.2f}")
 
-		# Copy a few attributes.
-		in_var = nc_in.variables[var.in_name]
-		out_var = nc_out.variables[var.out_name]
+        # Copy a few attributes.
+        in_var = nc_in.variables[var.in_name]
+        out_var = nc_out.variables[var.out_name]
 
-		set_metadata(in_var, out_var)
+        set_metadata(in_var, out_var)
 
-		i += 1
+        i += 1
 
-	# Copy data into time variable. This is # of hours since start date.
-	# So it starts at the offset from the baseline date, and increments by
-	# timestep width (in hours). Data is written in chunks to improve speed.
+    # Copy data into time variable. This is # of hours since start date.
+    # So it starts at the offset from the baseline date, and increments by
+    # timestep width (in hours). Data is written in chunks to improve speed.
 
-	# First we need to get the offset since the baseline date. For that, we need
-	# to know the start date of the output data.
-	start_date = get_first_date(nc_in)
-	if (start_date.minute == 30):
-		# temporal_aggregation() trims the first value if it lies on the
-		# half-hour boundary. We need to do the same here.
-		log_debug("Data starts on 30m boundary: 1st value is ignored")
-		start_date = start_date + datetime.timedelta(minutes = 30)
-	start_date = get_next_year(start_date)
+    # First we need to get the offset since the baseline date. For that, we need
+    # to know the start date of the output data.
+    start_date = get_first_date(nc_in)
+    if (start_date.minute == 30):
+        # temporal_aggregation() trims the first value if it lies on the
+        # half-hour boundary. We need to do the same here.
+        log_debug("Data starts on 30m boundary: 1st value is ignored")
+        start_date = start_date + datetime.timedelta(minutes = 30)
+    start_date = get_next_year(start_date)
 
-	step_width = timestep / MINUTES_PER_HOUR
-	dlt = datetime.timedelta(hours = step_width)
-	dates = date_range(start_date, periods = n, freq = dlt)
-	dates = [d.to_pydatetime() for d in dates]
+    step_width = timestep / MINUTES_PER_HOUR
+    dlt = datetime.timedelta(hours = step_width)
+    dates = date_range(start_date, periods = n, freq = dlt)
+    dates = [d.to_pydatetime() for d in dates]
 
-	var_time = nc_out.variables[VAR_TIME]
-	values = date2num(dates, var_time.units, var_time.calendar)
+    var_time = nc_out.variables[VAR_TIME]
+    values = date2num(dates, var_time.units, var_time.calendar)
 
-	for i in range(toffset, n, CHUNK_SIZE):
-		up = min(n, i + CHUNK_SIZE)
-		tlow = i + toffset
-		thigh = up + toffset
-		var_time[tlow:thigh] = values[i:up]
+    for i in range(toffset, n, CHUNK_SIZE):
+        up = min(n, i + CHUNK_SIZE)
+        tlow = i + toffset
+        thigh = up + toffset
+        var_time[tlow:thigh] = values[i:up]
 
 def create_dimensions(nc: Dataset, ngridcell: int):
-	"""
-	Create the required dimensions in the output file.
-	"""
-	log_debug("Creating output dimensions")
+    """
+    Create the required dimensions in the output file.
+    """
+    log_debug("Creating output dimensions")
 
-	dim_size = 0 if UNLIMITED_DIMS else ngridcell
-	create_dim_if_not_exists(nc, DIM_LON, dim_size)
-	create_dim_if_not_exists(nc, DIM_LAT, dim_size)
+    dim_size = 0 if UNLIMITED_DIMS else ngridcell
+    create_dim_if_not_exists(nc, DIM_LON, dim_size)
+    create_dim_if_not_exists(nc, DIM_LAT, dim_size)
 
-	# Create time dimension with unlimited size.
-	create_dim_if_not_exists(nc, DIM_TIME)
+    # Create time dimension with unlimited size.
+    create_dim_if_not_exists(nc, DIM_TIME)
 
 def create_variables(nc: Dataset, timestep: int, clevel: int, ctype: str,
-					 dataset_type: DatasetType):
-	"""
-	Create the required variables in the output file.
+                     dataset_type: DatasetType):
+    """
+    Create the required variables in the output file.
 
-	@param nc: The output .nc file.
-	@param version: The lpj-guses version selected by the user.
-	@param timestep: Output timestep in minutes.
-	@param clevel: Compression level [1-9], 9 = slowest/smallest.
-	@param ctype: Compression algorithm to be used (or None).
-	@param dataset_type: Type of dataset (OZFLUX or AMERIFLUX).
-	"""
-	log_debug("Creating output variables")
-	vars = get_vars(timestep, dataset_type)
-	format = FORMAT_FLOAT
+    @param nc: The output .nc file.
+    @param version: The lpj-guses version selected by the user.
+    @param timestep: Output timestep in minutes.
+    @param clevel: Compression level [1-9], 9 = slowest/smallest.
+    @param ctype: Compression algorithm to be used (or None).
+    @param dataset_type: Type of dataset (OZFLUX or AMERIFLUX).
+    """
+    log_debug("Creating output variables")
+    vars = get_vars(timestep, dataset_type)
+    format = FORMAT_FLOAT
 
-	geo_chunk_size = (1,)
-	create_var_with_metadata(nc, DIM_LON, format, DIM_LON, STD_LON,
-						  	 LONG_LON, UNITS_LON, chunksizes = geo_chunk_size)
-	create_var_with_metadata(nc, DIM_LAT, format, DIM_LAT, STD_LAT,
-						  	 LONG_LAT, UNITS_LAT, chunksizes = geo_chunk_size)
+    geo_chunk_size = (1,)
+    create_var_with_metadata(nc, DIM_LON, format, DIM_LON, STD_LON,
+                               LONG_LON, UNITS_LON, chunksizes = geo_chunk_size)
+    create_var_with_metadata(nc, DIM_LAT, format, DIM_LAT, STD_LAT,
+                               LONG_LAT, UNITS_LAT, chunksizes = geo_chunk_size)
 
-	time_chunksize = get_steps_per_year(timestep)
-	time_chunks = (time_chunksize,)
-	time_units = f"hours since {DATE_BASELINE}"
-	create_var_with_metadata(nc, DIM_TIME, format, DIM_TIME, STD_TIME,
-						     LONG_TIME, time_units, clevel, ctype, time_chunks)
-	nc.variables[DIM_TIME].calendar = CALENDAR_GREGORIAN
+    time_chunksize = get_steps_per_year(timestep)
+    time_chunks = (time_chunksize,)
+    time_units = f"hours since {DATE_BASELINE}"
+    create_var_with_metadata(nc, DIM_TIME, format, DIM_TIME, STD_TIME,
+                             LONG_TIME, time_units, clevel, ctype, time_chunks)
+    nc.variables[DIM_TIME].calendar = CALENDAR_GREGORIAN
 
-	# TODO: configurable dimension order (achieved via constants)
-	dims = (DIM_LAT, DIM_LON, DIM_TIME)
-	chunksizes = (1, 1, time_chunksize)
-	for var in vars:
-		# TODO: we should set standard_name and long_name here too, rather than
-		# relying on them to exist in the input files.
-		# TODO: variable detection should have multiple options:
-		# 1. Look for user-specified names supplied via CLI
-		# 2. Detect variables in input files based on standard_name
-		create_var_if_not_exists(nc, var.out_name, format, dims, clevel, ctype,
-						         chunksizes)
-		out_var = nc.variables[var.out_name]
-		setattr(out_var, ATTR_UNITS, var.out_units)
+    # TODO: configurable dimension order (achieved via constants)
+    dims = (DIM_LAT, DIM_LON, DIM_TIME)
+    chunksizes = (1, 1, time_chunksize)
+    for var in vars:
+        # TODO: we should set standard_name and long_name here too, rather than
+        # relying on them to exist in the input files.
+        # TODO: variable detection should have multiple options:
+        # 1. Look for user-specified names supplied via CLI
+        # 2. Detect variables in input files based on standard_name
+        create_var_if_not_exists(nc, var.out_name, format, dims, clevel, ctype,
+                                 chunksizes)
+        out_var = nc.variables[var.out_name]
+        setattr(out_var, ATTR_UNITS, var.out_units)
 
 def prepare_outfile(nc: Dataset, ngridcell: int, timestep: int, clevel: int,
-					ctype: str, dataset_type: DatasetType):
-	"""
-	Create the variables in the output NetCDF file. The variables created
-	will depend to some degree on the output type.
+                    ctype: str, dataset_type: DatasetType):
+    """
+    Create the variables in the output NetCDF file. The variables created
+    will depend to some degree on the output type.
 
-	@param nc: Output .nc file.
-	@param ngridcell: The number of gridcells to be stored in this output file.
-	@param timestep: Output timestep in minutes.
-	@param clevel: Compression level [1-9], 9 = slowest/smallest.
-	@param ctype: Compression algorithm to be used (or None).
-	@param dataset_type: Type of dataset (OZFLUX or AMERIFLUX).
-	"""
-	create_dimensions(nc, ngridcell)
-	create_variables(nc, timestep, clevel, ctype, dataset_type)
+    @param nc: Output .nc file.
+    @param ngridcell: The number of gridcells to be stored in this output file.
+    @param timestep: Output timestep in minutes.
+    @param clevel: Compression level [1-9], 9 = slowest/smallest.
+    @param ctype: Compression algorithm to be used (or None).
+    @param dataset_type: Type of dataset (OZFLUX or AMERIFLUX).
+    """
+    create_dimensions(nc, ngridcell)
+    create_variables(nc, timestep, clevel, ctype, dataset_type)
 
 def write_metadata(nc: Dataset, timestep: int):
-	"""
-	Write version-specific metadata.
+    """
+    Write version-specific metadata.
 
-	@param nc: Output .nc file.
-	@param timestep: Output timestep in minutes.
-	@param version: Output version selected by the user.
-	"""
-	ozflux_netcdf.write_common_metadata(nc, timestep)
-	ozflux_dave.write_metadata(nc)
+    @param nc: Output .nc file.
+    @param timestep: Output timestep in minutes.
+    @param version: Output version selected by the user.
+    """
+    ozflux_netcdf.write_common_metadata(nc, timestep)
+    ozflux_dave.write_metadata(nc)
 
 def get_timestep(nc: Dataset) -> int:
-	"""
-	Get the timestep of the specified file in minutes.
+    """
+    Get the timestep of the specified file in minutes.
 
-	@param nc: The netcdf file.
-	"""
-	# The ozflux method.
-	ATTR_TIMESTEP = "time_ste"
-	if hasattr(nc, ATTR_TIMESTEP):
-		return getattr(nc, ATTR_TIMESTEP)
+    @param nc: The netcdf file.
+    """
+    # The ozflux method.
+    ATTR_TIMESTEP = "time_ste"
+    if hasattr(nc, ATTR_TIMESTEP):
+        return getattr(nc, ATTR_TIMESTEP)
 
-	# The fallback.
-	time = nc.variables[VAR_TIME]
-	times = time[0:2]
-	dates = num2date(times, time.units, time.calendar
-		, only_use_cftime_datetimes = False, only_use_python_datetimes = True)
-	timestep: datetime.timedelta = dates[1] - dates[0]
-	timestep.min
-	return timestep.total_seconds() // 60
+    # The fallback.
+    time = nc.variables[VAR_TIME]
+    times = time[0:2]
+    dates = num2date(times, time.units, time.calendar
+        , only_use_cftime_datetimes = False, only_use_python_datetimes = True)
+    timestep: datetime.timedelta = dates[1] - dates[0]
+    timestep.min
+    return timestep.total_seconds() // 60
 
 def process_file(in_file: str, out_file: str, timestep: int, clevel: int,
-				 ctype: str, ngridcell, first_date: datetime.datetime,
-				 dataset_type: DatasetType,
-				 pcb: Callable[[float], None]):
-	"""
-	Read the input file and generate an output file at the specified
-	path in LPJ-GUESS-DAVE format.
+                 ctype: str, ngridcell, first_date: datetime.datetime,
+                 dataset_type: DatasetType,
+                 pcb: Callable[[float], None]):
+    """
+    Read the input file and generate an output file at the specified
+    path in LPJ-GUESS-DAVE format.
 
-	@param in_file: Input file path.
-	@param out_file: Output file path.
-	@param timestep: Output timestep length in minutes.
-	@param clevel: Compression level [1-9], 9 = slowest/smallest.
-	@param ctype: Compression algorithm to be used (or None).
-	@param ngridcell: Total number of gridcells to be processed.
-	@param first_date: Date of first datum in output file.
-	@param dataset_type: Type of dataset (OZFLUX or AMERIFLUX).
-	@param pcb: Progress callback function.
-	"""
-	log_information("Processing %s..." % in_file)
-	log_debug(f"Opening output file {out_file} for writing")
-	with open_netcdf(out_file, True) as nc_out:
-		log_debug(f"Opening input file {in_file} for reading")
-		with open_netcdf(in_file) as nc_in:
-			# Quick sanity check of time step.
-			instep = get_timestep(nc_in)
-			if instep > timestep:
-				raise RuntimeError(f"Invalid input timestep ({instep}). Must be <= output ({timestep})")
-			if timestep % instep != 0:
-				raise ValueError(f"Invalid input timestep: {instep}. Must be an integer multiple of output timestep ({timestep})")
+    @param in_file: Input file path.
+    @param out_file: Output file path.
+    @param timestep: Output timestep length in minutes.
+    @param clevel: Compression level [1-9], 9 = slowest/smallest.
+    @param ctype: Compression algorithm to be used (or None).
+    @param ngridcell: Total number of gridcells to be processed.
+    @param first_date: Date of first datum in output file.
+    @param dataset_type: Type of dataset (OZFLUX or AMERIFLUX).
+    @param pcb: Progress callback function.
+    """
+    log_information("Processing %s..." % in_file)
+    log_debug(f"Opening output file {out_file} for writing")
+    with open_netcdf(out_file, True) as nc_out:
+        log_debug(f"Opening input file {in_file} for reading")
+        with open_netcdf(in_file) as nc_in:
+            # Quick sanity check of time step.
+            instep = get_timestep(nc_in)
+            if instep > timestep:
+                raise RuntimeError(f"Invalid input timestep ({instep}). Must be <= output ({timestep})")
+            if timestep % instep != 0:
+                raise ValueError(f"Invalid input timestep: {instep}. Must be an integer multiple of output timestep ({timestep})")
 
-			prepare_outfile(nc_out, ngridcell, timestep, clevel, ctype, dataset_type)
+            prepare_outfile(nc_out, ngridcell, timestep, clevel, ctype, dataset_type)
 
-			# Copy data into this variable.
-			log_debug("Copying data")
-			copy_data(nc_in, nc_out, timestep, dataset_type, first_date, pcb)
+            # Copy data into this variable.
+            log_debug("Copying data")
+            copy_data(nc_in, nc_out, timestep, dataset_type, first_date, pcb)
 
-			# Write site metadata.
-			start_date = get_next_year(get_first_date(nc_in))
-			attr_tstart = "time_coverage_start"
-			attr_tend = "time_coverage_end"
-			attr_lon = "longitude"
-			attr_lat = "latitude"
+            # Write site metadata.
+            start_date = get_next_year(get_first_date(nc_in))
+            attr_tstart = "time_coverage_start"
+            attr_tend = "time_coverage_end"
+            attr_lon = "longitude"
+            attr_lat = "latitude"
 
-			setattr(nc_out, attr_tstart, start_date.strftime(DATE_FORMAT))
-			setattr(nc_out, attr_tend, get_last_date(nc_out).strftime(DATE_FORMAT))
-			setattr(nc_out, attr_lat, get_latitude(nc_in))
-			setattr(nc_out, attr_lon, get_longitude(nc_out))
+            setattr(nc_out, attr_tstart, start_date.strftime(DATE_FORMAT))
+            setattr(nc_out, attr_tend, get_last_date(nc_out).strftime(DATE_FORMAT))
+            setattr(nc_out, attr_lat, get_latitude(nc_in))
+            setattr(nc_out, attr_lon, get_longitude(nc_out))
 
-			site_name = os.path.basename(in_file)
-			site_name = os.path.splitext(site_name)[0]
-			nc_out.site_name = site_name
+            site_name = os.path.basename(in_file)
+            site_name = os.path.splitext(site_name)[0]
+            nc_out.site_name = site_name
 
-			# Write additional global/common metadata.
-			write_metadata(nc_out, timestep)
+            # Write additional global/common metadata.
+            write_metadata(nc_out, timestep)
 
 def get_outfile_name(infile: str, opts: Options):
-	"""
-	Get the name of the output file corresponding to the given input file.
-	@param infile: Name of the input file for which we need an output filename.
-	@param opts: CLI options.
-	"""
-	return os.path.basename(infile)
+    """
+    Get the name of the output file corresponding to the given input file.
+    @param infile: Name of the input file for which we need an output filename.
+    @param opts: CLI options.
+    """
+    return os.path.basename(infile)
 
 def parse_args(argv: list[str]) -> Options:
-	"""
-	Parse CLI arguments, return a parsed options object.
+    """
+    Parse CLI arguments, return a parsed options object.
 
-	@param argv: Raw CLI arguments.
+    @param argv: Raw CLI arguments.
 
-	@return Parsed Options object.
-	"""
-	parser = ArgumentParser(prog=argv[0], description = "Formatting ozflux data into a format suitable for consumption by LPJ-Guess")
-	parser.add_argument("-v", "--verbosity", type = int, help = "Logging verbosity (1-5, default 3)", nargs = "?", const = LogLevel.INFORMATION, default = LogLevel.INFORMATION)
-	parser.add_argument("files", nargs = "+", help = "Input .nc files to be processed")
-	parser.add_argument("-o", "--out-dir", required = True, help = "Path to the output directory. Processed files will be saved with the same file name into this directory")
-	parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
-	parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel")
-	parser.add_argument("-t", "--timestep", type = int, required = True, help = "Output timestep in minutes")
-	parser.add_argument("--compression-level", type = int, nargs = "?", default = 4, help = "Compression quality for output file [0, 9]. 0 = none, 1 = fastest compression, largest filesize, 9 = slowest compression, smallest filesize (default 4)")
-	parser.add_argument("--compression-type", default = "zlib", help = "Compression algorithm to be used (default 'zlib')")
-	parser.add_argument("-a", "--ameriflux", action = "store_true", help = "Treat input files as ameriflux files (e.g. for checking variable names).")
-	parser.add_argument("--version", action = "version", version = "%(prog)s " + VERSION)
+    @return Parsed Options object.
+    """
+    parser = ArgumentParser(prog=argv[0], description = "Formatting ozflux data into a format suitable for consumption by LPJ-Guess")
+    parser.add_argument("-v", "--verbosity", type = int, help = "Logging verbosity (1-5, default 3)", nargs = "?", const = LogLevel.INFORMATION, default = LogLevel.INFORMATION)
+    parser.add_argument("files", nargs = "+", help = "Input .nc files to be processed")
+    parser.add_argument("-o", "--out-dir", required = True, help = "Path to the output directory. Processed files will be saved with the same file name into this directory")
+    parser.add_argument("-p", "--show-progress", action = "store_true", help = "Report progress")
+    parser.add_argument("-P", "--parallel", action = "store_true", help = "Process files in parallel")
+    parser.add_argument("-t", "--timestep", type = int, required = True, help = "Output timestep in minutes")
+    parser.add_argument("--compression-level", type = int, nargs = "?", default = 4, help = "Compression quality for output file [0, 9]. 0 = none, 1 = fastest compression, largest filesize, 9 = slowest compression, smallest filesize (default 4)")
+    parser.add_argument("--compression-type", default = "zlib", help = "Compression algorithm to be used (default 'zlib')")
+    parser.add_argument("-a", "--ameriflux", action = "store_true", help = "Treat input files as ameriflux files (e.g. for checking variable names).")
+    parser.add_argument("--version", action = "version", version = "%(prog)s " + VERSION)
 
-	parsed = parser.parse_args(argv[1:])
-	dataset_type = DatasetType.AMERIFLUX if parsed.ameriflux else DatasetType.OZFLUX
-	return Options(parsed.verbosity, parsed.files, parsed.out_dir,
-				   parsed.show_progress, parsed.parallel, parsed.timestep,
-				   parsed.compression_level, parsed.compression_type,
-				   dataset_type)
+    parsed = parser.parse_args(argv[1:])
+    dataset_type = DatasetType.AMERIFLUX if parsed.ameriflux else DatasetType.OZFLUX
+    return Options(parsed.verbosity, parsed.files, parsed.out_dir,
+                   parsed.show_progress, parsed.parallel, parsed.timestep,
+                   parsed.compression_level, parsed.compression_type,
+                   dataset_type)
 
 def read_first_date(nc: Dataset) -> datetime.datetime:
-	"""
-	Read the first date within the netcdf file and return it as a python
-	datetime object.
+    """
+    Read the first date within the netcdf file and return it as a python
+    datetime object.
 
-	@param nc: The netcdf file.
-	"""
-	# Assuming the name of the time variable is time...
-	# Assuming the variable is one-dimensional...
-	time = nc.variables[VAR_TIME]
-	return num2date(time[0], time.units, time.calendar, only_use_cftime_datetimes = False, only_use_python_datetimes = True)
+    @param nc: The netcdf file.
+    """
+    # Assuming the name of the time variable is time...
+    # Assuming the variable is one-dimensional...
+    time = nc.variables[VAR_TIME]
+    return num2date(time[0], time.units, time.calendar, only_use_cftime_datetimes = False, only_use_python_datetimes = True)
 
 def get_first_date(nc: Dataset) -> datetime.datetime:
-	"""
-	Determine the first date of the output data which will be produced from
-	the given input file.
+    """
+    Determine the first date of the output data which will be produced from
+    the given input file.
 
-	@param nc: Opened netcdf dataset.
-	"""
-	# Ozflux method.
-	ATTR_TIME_START = "time_coverage_start"
-	start_date: datetime
-	if hasattr(nc, ATTR_TIME_START):
-		# Ozflux sites provide an attribute. It would be better to not rely on
-		# this but I'm not going to refactor this at this point.
-		start_date = parse_date(getattr(nc, ATTR_TIME_START))
-	else:
-		# The fallback is to read the first time value from the input file.
-		start_date = read_first_date(nc)
+    @param nc: Opened netcdf dataset.
+    """
+    # Ozflux method.
+    ATTR_TIME_START = "time_coverage_start"
+    start_date: datetime
+    if hasattr(nc, ATTR_TIME_START):
+        # Ozflux sites provide an attribute. It would be better to not rely on
+        # this but I'm not going to refactor this at this point.
+        start_date = parse_date(getattr(nc, ATTR_TIME_START))
+    else:
+        # The fallback is to read the first time value from the input file.
+        start_date = read_first_date(nc)
 
-	if missing_first_timestep(nc):
-		timestep_seconds = get_timestep(nc) * SECONDS_PER_MINUTE
-		start_date = start_date - datetime.timedelta(seconds = timestep_seconds)
+    if missing_first_timestep(nc):
+        timestep_seconds = get_timestep(nc) * SECONDS_PER_MINUTE
+        start_date = start_date - datetime.timedelta(seconds = timestep_seconds)
 
-	if (start_date.minute == 30):
-		# temporal_aggregation() trims the first value if it lies on the
-		# half-hour boundary. We need to do the same here.
-		log_debug("Data starts on 30m boundary: 1st value is ignored")
-		start_date = start_date + datetime.timedelta(minutes = 30)
-	start_date = get_next_year(start_date)
-	return start_date
+    if (start_date.minute == 30):
+        # temporal_aggregation() trims the first value if it lies on the
+        # half-hour boundary. We need to do the same here.
+        log_debug("Data starts on 30m boundary: 1st value is ignored")
+        start_date = start_date + datetime.timedelta(minutes = 30)
+    start_date = get_next_year(start_date)
+    return start_date
 
 def get_last_date(nc: Dataset) -> datetime.datetime:
-	"""
-	Get the last date in the given file.
-	"""
-	time = nc.variables[VAR_TIME]
-	value = time[len(time) - 1]
-	return num2date(value, time.units, time.calendar
-		, only_use_cftime_datetimes = False, only_use_python_datetimes = True)
+    """
+    Get the last date in the given file.
+    """
+    time = nc.variables[VAR_TIME]
+    value = time[len(time) - 1]
+    return num2date(value, time.units, time.calendar
+        , only_use_cftime_datetimes = False, only_use_python_datetimes = True)
 
 def get_file_first_date(ncfile: str):
-	"""
-	Determine the first date of the output data which will be produced from
-	the given input file.
+    """
+    Determine the first date of the output data which will be produced from
+    the given input file.
 
-	@param ncfile: Input netcdf file path.
-	"""
-	with open_netcdf(ncfile) as nc_in:
-		return get_first_date(nc_in)
+    @param ncfile: Input netcdf file path.
+    """
+    with open_netcdf(ncfile) as nc_in:
+        return get_first_date(nc_in)
 
 # @profile
 def main(opts: Options):
-	"""
-	Main CLI entrypoint function.
+    """
+    Main CLI entrypoint function.
 
-	@param opts: Object containing parsed CLI arguments.
-	"""
-	# Create output directory if it doesn't exist.
-	if not os.path.exists(opts.out_dir):
-		os.makedirs(opts.out_dir)
+    @param opts: Object containing parsed CLI arguments.
+    """
+    # Create output directory if it doesn't exist.
+    if not os.path.exists(opts.out_dir):
+        os.makedirs(opts.out_dir)
 
-	job_manager = ozflux_parallel.JobManager()
+    job_manager = ozflux_parallel.JobManager()
 
-	# TODO: we should verify this assumption.
-	ngridcell = 1
-	for infile in opts.files:
-		first_date = get_file_first_date(infile)
-		out_file_name = get_outfile_name(infile, opts)
+    # TODO: we should verify this assumption.
+    ngridcell = 1
+    for infile in opts.files:
+        first_date = get_file_first_date(infile)
+        out_file_name = get_outfile_name(infile, opts)
 
-		outfile = os.path.join(opts.out_dir, out_file_name)
-		if os.path.exists(outfile):
-			os.remove(outfile)
+        outfile = os.path.join(opts.out_dir, out_file_name)
+        if os.path.exists(outfile):
+            os.remove(outfile)
 
-		job = MetProcessingTask(infile, outfile, opts.timestep,
-						        opts.compression_level, opts.compression_type,
-								ngridcell, first_date, opts.dataset_type)
+        job = MetProcessingTask(infile, outfile, opts.timestep,
+                                opts.compression_level, opts.compression_type,
+                                ngridcell, first_date, opts.dataset_type)
 
-		job_manager.add_job(job, os.path.getsize(infile))
+        job_manager.add_job(job, os.path.getsize(infile))
 
-	if opts.parallel:
-		job_manager.run_parallel()
-	else:
-		job_manager.run_single_threaded()
+    if opts.parallel:
+        job_manager.run_parallel()
+    else:
+        job_manager.run_single_threaded()
 
 if __name__ == "__main__":
-	# Parse CLI args
-	opts = parse_args(argv)
+    # Parse CLI args
+    opts = parse_args(argv)
 
-	set_log_level(opts.log_level)
-	set_show_progress(opts.report_progress)
+    set_log_level(opts.log_level)
+    set_show_progress(opts.report_progress)
 
-	try:
-		# Actual logic is in main().
-		main(opts)
-	except BaseException as error:
-		# Basic error handling.
-		log_error(format_exc())
-		exit(1)
+    try:
+        # Actual logic is in main().
+        main(opts)
+    except BaseException as error:
+        # Basic error handling.
+        log_error(format_exc())
+        exit(1)
