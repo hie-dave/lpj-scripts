@@ -245,7 +245,8 @@ _units_conversions = {
 	("hPa", "Pa"): lambda x, _: x * PA_PER_HPA,
 	("hPa", "kPa"): lambda x, _: x * PA_PER_HPA / PA_PER_KPA,
 	("Mg/ha", "kg/m2"): lambda x, _: x * 0.1,
-	("/ha", "/m2"): lambda x, _: x / 10000
+	("/ha", "/m2"): lambda x, _: x / 10000,
+	("percent", "1"): lambda x, _: x / 100
 }
 
 # Number of seconds per day.
