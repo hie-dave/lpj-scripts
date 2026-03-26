@@ -152,6 +152,7 @@ if [ ${SAVE_STATE:-0} -eq 1 ]
 then
   STATE_PATH="$(get_variable "${INSFILE}" state_path 0)"
 fi
+mkdir -p "${OUT_DIR}"
 
 # Convert to absolute paths.
 INSFILE="$(get_absolute_path "${INSFILE}")"
@@ -249,7 +250,6 @@ check_read "${BINARY}"
 check_read "${INSFILE}"
 check_read "${GRIDLIST}"
 check_execute "${BINARY}"
-mkdir -p "${OUT_DIR}"
 check_dir_exists "${OUT_DIR}"
 
 # Output path for this run.
