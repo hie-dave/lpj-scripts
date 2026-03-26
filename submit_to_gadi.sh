@@ -148,7 +148,7 @@ GRIDLIST="$(get_gridlist "${INSFILE}")"
 OUTPATH="$(get_variable "${INSFILE}" outputdirectory 0)"
 # SAVE_STATE is an optional parameter in some model versions.
 SAVE_STATE="$(get_variable "${INSFILE}" save_state 1)"
-if [ -n "${SAVE_STATE:-0}" -a ${SAVE_STATE} -eq 1 ]
+if [ ${SAVE_STATE:-0} -eq 1 ]
 then
   STATE_PATH="$(get_variable "${INSFILE}" state_path 0)"
 fi
@@ -249,6 +249,7 @@ check_read "${BINARY}"
 check_read "${INSFILE}"
 check_read "${GRIDLIST}"
 check_execute "${BINARY}"
+mkdir -p "${OUT_DIR}"
 check_dir_exists "${OUT_DIR}"
 
 # Output path for this run.
