@@ -1,5 +1,5 @@
 import datetime, numpy, os, pandas, re, threading, time
-import multiprocessing, multiprocessing.connection
+import multiprocessing
 import traceback, sys, warnings
 from ozflux_common import *
 from ozflux_logging import *
@@ -144,10 +144,6 @@ mutex = multiprocessing.BoundedSemaphore(1)
 # get_data_*_prop variables.
 gd_tp_lock = multiprocessing.BoundedSemaphore(1)
 
-# copy_data_*() time proportion lock. Used to synchronise access to the
-# global_*_prop variables.
-cd_tp_lock = multiprocessing.BoundedSemaphore(1)
-
 # Some flux data file names don't exactly match what we use as the "canonical"
 # name for this site in our processing scripts. These are mapped here.
 _CANONICAL_SITE_NAMES_LOOKUP = {
@@ -263,6 +259,8 @@ def get_units(var_id: Variable) -> str:
 	"""
 	Get the units for the specified variable in the .nc file.
 	"""
+	if not hasattr(var_id, ATTR_UNITS):
+		raise ValueError(f"Variable {var_id.name} has no units attribute")
 	return var_id.units
 
 def get_data(in_file: Dataset \
@@ -396,6 +394,10 @@ def _get_data(in_file: Dataset \
 		data = read_data(var_id, lambda p:progress_cb(step_size * p))
 		read_tot = time.time() - read_start
 		log_debug("Successfully read %d values from netcdf" % len(data))
+
+		if missing_first_timestep(in_file):
+			log_warning("First timestep is missing from input file. This can cause problems with temporal aggregation, so adding a dummy first timestep with the same value as the second timestep.")
+			data = numpy.insert(data, 0, data[0])
 
 		step_start += step_size
 
@@ -730,6 +732,30 @@ def get_coord_indices(nc_out: Dataset, lon: float, lat: float) \
 	index_lat = get_coord_index(dim_lat, var_lat, lat)
 	return (index_lon, index_lat)
 
+def missing_first_timestep(in_file: Dataset) -> bool:
+	"""
+	Check if the first day in the input file is missing the first timestep. If
+	the first day is missing one timestep, we will pad the data with a copy of
+	the first value to get to the start of a year.
+
+	@param in_file: Input file.
+	"""
+	time = in_file.variables[VAR_TIME]
+	times = num2date(time[:], time.units, time.calendar, False, True)
+
+	# Get expected number of timesteps per day.
+	timestep_seconds = get_timestep(in_file)
+	timesteps_per_day = int(SECONDS_PER_DAY / timestep_seconds)
+
+	# Get dataframe of timestamp and date.
+	times_df = pandas.DataFrame({"datetime": times})
+	times_df["date"] = times_df.apply(lambda row: row["datetime"].date(), axis = 1)
+
+	# Group by date and count number of timesteps per day.
+	timesteps_per_day_actual = times_df.groupby("date").size()
+
+	return timesteps_per_day_actual.iloc[0] == timesteps_per_day - 1
+
 def trim_to_start_year(in_file: Dataset, timestep: int
 	, data: list[float]) -> list[float]:
 	"""
@@ -740,12 +766,13 @@ def trim_to_start_year(in_file: Dataset, timestep: int
 	@param data: The data to be trimmed.
 	"""
 	start_date = get_first_time(in_file)
-	if (start_date.minute == 30):
-		# temporal_aggregation() trims the first value if it lies on the
-		# half-hour boundary. We need to do the same here.
-		log_debug("Data starts on 30m boundary: 1st value is ignored")
-		start_date = start_date + datetime.timedelta(minutes = 30)
 	next_year = get_next_year(start_date)
+
+	if missing_first_timestep(in_file):
+		log_diagnostic("First day is missing one timestep; padding with copy of first value")
+		timestep_seconds = get_timestep(in_file)
+		start_date = start_date - datetime.timedelta(seconds = timestep_seconds)
+		next_year = get_next_year(start_date)
 
 	delta = next_year - start_date
 	hours_per_timestep = timestep / MINUTES_PER_HOUR
@@ -837,14 +864,7 @@ timestep (%d)"
 	n_start = len(data)
 
 	start_minute = get_start_minute(in_file)
-	if start_minute == 30 and input_timestep == 30:
-		# Don't include the first timestep value if it lies on the half-
-		# hour boundary. trim_to_start_year() relies on this assumption,
-		# so it will need to be updated if we change this and vice versa.
-		m = "Input data starts on 30m boundary. First value will be removed."
-		log_debug(m)
-		data = data[1:]
-	elif start_minute != 0:
+	if start_minute != 0:
 		m = "Strange start time: '%s'. Data must start on the hour or half-hour"
 		raise ValueError(m % in_file.time_coverage_start)
 
@@ -1063,6 +1083,18 @@ def get_site_name(nc_file: str) -> str:
 	"""
 	with open_netcdf(nc_file) as nc:
 		return nc.site_name
+
+def create_var_with_metadata(nc: Dataset, name: str, format: str,
+							 dims: tuple[str], std_name: str, long_name: str,
+							 units: str, compression_level: int = 0,
+							 compression_type: str = None,
+							 chunksizes: tuple[int] = None):
+	create_var_if_not_exists(nc, name, format, dims, compression_level,
+								compression_type, chunksizes)
+	var = nc.variables[name]
+	setattr(var, ATTR_STD_NAME, std_name)
+	setattr(var, ATTR_LONG_NAME, long_name)
+	setattr(var, ATTR_UNITS, units)
 
 def create_var_if_not_exists(nc: Dataset, name: str, format: str
 	, dims: tuple[str], compression_level: int = 0, compression_type: str = None
@@ -1828,8 +1860,11 @@ def get_first_time(nc: Dataset) -> datetime.datetime:
 	time = nc.variables[VAR_TIME][0]
 	units = getattr(var_time, ATTR_UNITS)
 	calendar = get_calendar(var_time)
-	return num2date(time, units, calendar, only_use_cftime_datetimes = False
+	dt = num2date(time, units, calendar, only_use_cftime_datetimes = False
 		, only_use_python_datetimes = True)
+	if missing_first_timestep(nc):
+		dt = dt - datetime.timedelta(seconds=get_timestep(nc))
+	return dt
 
 def get_calendar(var: Variable) -> str:
 	if hasattr(var, ATTR_STD_NAME) and getattr(var, ATTR_STD_NAME) != STD_TIME:
@@ -1844,12 +1879,16 @@ def get_calendar(var: Variable) -> str:
 def get_timestep(nc: Dataset) -> int:
 	"""
 	Get the timestep of the netcdf file, in seconds.
+
+	@param nc: Input NetCDF file.
 	"""
 	var_time = get_var_from_std_name(nc, STD_TIME)
 	units = getattr(var_time, ATTR_UNITS)
 	calendar = get_calendar(var_time)
 
-	times = num2date(var_time[0:2], units, calendar, only_use_cftime_datetimes = False, only_use_python_datetimes = True)
+	times = num2date(var_time[0:2], units, calendar,
+				     only_use_cftime_datetimes = False,
+					 only_use_python_datetimes = True)
 	return (times[1] - times[0]).total_seconds()
 
 def get_nexist(var: Variable) -> int:

@@ -1,4 +1,27 @@
 #!/usr/bin/env bash
+#
+# This script processes Ameriflux data (in .csv format) into NetCDF files
+# structured in a way that can be used by LPJ-GUESS-DAVE.
+#
+# Requirements/Assumptions:
+#
+# The input .csv file is assumed to have the following variables, in the
+# following units:
+#   - TA_F: Air temperature, in degC
+#   - SW_IN_F: Surface downwelling shortwave flux in air, in W/m^2
+#   - P_F: Thickness of rainfall amount, in mm
+#   - CO2_F_MDS: Mole fraction of carbon dioxide in air, in umol/mol
+#   - VPD_F: Water vapor saturation deficit in air, in hPa
+#   - PA_F: Surface air pressure, in kPa
+#   - WS_F: Wind speed, in m/s
+#
+# Usage:
+#
+# proces_ameriflux <in-file> <longitude> <latitude> <site name>
+#
+# The output file will be written to the same directory as the input file,
+# and will be called <site name>.nc.
+#
 
 set -euo pipefail
 
@@ -100,6 +123,7 @@ mv "${WORKING_FILE}" "${OUT_FILE}"
 
 # Units correction: air pressure: kPa -> Pa
 #                   vpd         : hPa -> kPa
+echo "Correcting units..."
 cdo -O -L aexpr,'ps = ps * 1000; vpd = vpd / 10' "${OUT_FILE}" "${WORKING_FILE}"
 mv "${WORKING_FILE}" "${OUT_FILE}"
 ncatted -O -a 'units,ps,o,c,Pa' -a 'units,vpd,o,c,kPa' "${OUT_FILE}"
@@ -113,3 +137,5 @@ rm "${FILE_PR}"
 echo "Fixing dimension order and chuning..."
 ncpdq -O -L 5 -a longitude,latitude,time --cnk_dmn longitude,1 --cnk_dmn latitude,1 \
     --cnk_dmn time,8760 "${OUT_FILE}" "${OUT_FILE}"
+
+echo "Done! Output file: ${OUT_FILE}"
