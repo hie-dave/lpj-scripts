@@ -490,6 +490,7 @@ function append_files {
         cat run\$i/\$file | awk 'NR!=1 || NF==0 || \$1 == \$1+0 { print \$0 }' >>"\${out_file}"
       fi
     done
+    gzip "\${out_file}"
 }
 pushd run1 &> /dev/null
 outfiles_unexpanded='${OUTPATH}/*.out'
