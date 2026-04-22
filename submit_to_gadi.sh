@@ -521,7 +521,7 @@ done
 
 # Technically, it should be safe to delete the individual run directories now.
 # However I don't think I'm brave enough to have this done automatically.
-# rm -rf "\${DIR}/runs"
+rm -rf "\${DIR}/runs"
 
 EOF
 chmod a+x "${append_cmd}"
