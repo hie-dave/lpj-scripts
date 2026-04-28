@@ -242,6 +242,28 @@ check_execute() {
   check_permission -x $1 "Error: $1 does not have execute permission"
 }
 
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+module_exists() {
+  type module >/dev/null 2>&1
+}
+
+write_sha256() {
+  local SOURCE_FILE="$1"
+  local OUTPUT_FILE="$2"
+  if command_exists sha256sum
+  then
+    sha256sum "${SOURCE_FILE}" > "${OUTPUT_FILE}"
+  elif command_exists shasum
+  then
+    shasum -a 256 "${SOURCE_FILE}" > "${OUTPUT_FILE}"
+  else
+    echo "No sha256 tool available (sha256sum/shasum)." > "${OUTPUT_FILE}"
+  fi
+}
+
 # Ensure the input files exist and have the required permissions.
 check_exists "${BINARY}"
 check_exists "${INSFILE}"
@@ -269,6 +291,64 @@ OUT_STATE_DIR="state"
 
 # Create links and directories.
 mkdir -p "${RUNS_DIR}"
+
+# Paths for reproducibility metadata.
+REPRO_DIR="${RUN_OUT_DIR}/reproducibility"
+REPRO_EXEC_DIR="${REPRO_DIR}/executable"
+REPRO_SOURCE_DIR="${REPRO_DIR}/source"
+REPRO_SUBMIT_DIR="${REPRO_DIR}/submit"
+REPRO_RUNTIME_DIR="${REPRO_DIR}/runtime"
+mkdir -p "${REPRO_EXEC_DIR}" "${REPRO_SOURCE_DIR}" "${REPRO_SUBMIT_DIR}" "${REPRO_RUNTIME_DIR}"
+
+# Capture executable metadata and a copy of the binary.
+BINARY_FILENAME="$(basename "${BINARY}")"
+cp -p "${BINARY}" "${REPRO_EXEC_DIR}/${BINARY_FILENAME}"
+write_sha256 "${BINARY}" "${REPRO_EXEC_DIR}/${BINARY_FILENAME}.sha256"
+stat "${BINARY}" > "${REPRO_EXEC_DIR}/${BINARY_FILENAME}.stat.txt" 2>&1 || true
+if command_exists ldd
+then
+  ldd "${BINARY}" > "${REPRO_EXEC_DIR}/${BINARY_FILENAME}.ldd.txt" 2>&1 || true
+else
+  echo "ldd not available" > "${REPRO_EXEC_DIR}/${BINARY_FILENAME}.ldd.txt"
+fi
+if command_exists readelf
+then
+  readelf -d "${BINARY}" > "${REPRO_EXEC_DIR}/${BINARY_FILENAME}.readelf_dynamic.txt" 2>&1 || true
+else
+  echo "readelf not available" > "${REPRO_EXEC_DIR}/${BINARY_FILENAME}.readelf_dynamic.txt"
+fi
+
+# Capture source repository metadata for the binary, if available.
+SOURCE_REPO="$(git -C "$(dirname "${BINARY}")" rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -n "${SOURCE_REPO}" ]
+then
+  echo "${SOURCE_REPO}" > "${REPRO_SOURCE_DIR}/source.repo_path.txt"
+  git -C "${SOURCE_REPO}" config --get remote.origin.url > "${REPRO_SOURCE_DIR}/source.remote_url.txt" 2>&1 || true
+  git -C "${SOURCE_REPO}" rev-parse HEAD > "${REPRO_SOURCE_DIR}/source.commit.txt" 2>&1 || true
+  git -C "${SOURCE_REPO}" rev-parse --abbrev-ref HEAD > "${REPRO_SOURCE_DIR}/source.branch.txt" 2>&1 || true
+  git -C "${SOURCE_REPO}" status --porcelain=v1 > "${REPRO_SOURCE_DIR}/source.status.txt" 2>&1 || true
+  git -C "${SOURCE_REPO}" diff > "${REPRO_SOURCE_DIR}/source.diff.patch" 2>&1 || true
+  git -C "${SOURCE_REPO}" submodule status > "${REPRO_SOURCE_DIR}/source.submodules.txt" 2>&1 || true
+else
+  echo "Git repository could not be resolved from binary path ${BINARY}" > "${REPRO_SOURCE_DIR}/source.unavailable.txt"
+fi
+
+# Capture submit-time environment metadata.
+date -Is > "${REPRO_SUBMIT_DIR}/submit.timestamp.txt"
+{
+  echo "host=$(hostname 2>/dev/null || uname -n)"
+  echo "user=$(whoami)"
+  echo "cwd=$(pwd -P)"
+  echo "submit_script=$(get_absolute_path "${BASH_SOURCE[0]}")"
+} > "${REPRO_SUBMIT_DIR}/submit.host_user.txt"
+env | sort > "${REPRO_SUBMIT_DIR}/submit.env.txt"
+if module_exists
+then
+  module -t list > "${REPRO_SUBMIT_DIR}/submit.module_list.txt" 2>&1 || true
+else
+  echo "module command unavailable in submit environment" > "${REPRO_SUBMIT_DIR}/submit.module_list.txt"
+fi
+cp -p "$(get_absolute_path "${BASH_SOURCE[0]}")" "${REPRO_SUBMIT_DIR}/submit.script_copy.sh"
 
 # Get the file name (without path) of the gridlist file.
 GRIDLIST_FILENAME=$(basename ${GRIDLIST})
@@ -451,6 +531,36 @@ module purge
 module load openmpi
 module load netcdf
 umask 022
+
+RUNTIME_DIR="${REPRO_RUNTIME_DIR}"
+mkdir -p "\${RUNTIME_DIR}"
+{
+  echo "runtime_capture_started=\$(date -Is)"
+  echo "host=\$(hostname 2>/dev/null || uname -n)"
+  echo "user=\$(whoami 2>/dev/null || true)"
+  echo "cwd=\$(pwd -P)"
+  echo "uname=\$(uname -a)"
+  echo "ulimit:"
+  ulimit -a
+} > "\${RUNTIME_DIR}/runtime.preamble.log" 2>&1
+env | sort > "\${RUNTIME_DIR}/runtime.env.txt"
+if type module >/dev/null 2>&1
+then
+  module -t list > "\${RUNTIME_DIR}/runtime.module_list.txt" 2>&1 || true
+else
+  echo "module command unavailable in runtime environment" > "\${RUNTIME_DIR}/runtime.module_list.txt"
+fi
+{
+  echo "which mpirun: \$(which mpirun 2>/dev/null || echo unavailable)"
+  mpirun --version 2>&1 || true
+  echo
+  echo "which nc-config: \$(which nc-config 2>/dev/null || echo unavailable)"
+  if command -v nc-config >/dev/null 2>&1; then nc-config --all 2>&1 || true; fi
+  echo
+  echo "which ldd: \$(which ldd 2>/dev/null || echo unavailable)"
+  if command -v ldd >/dev/null 2>&1; then ldd "${BINARY}" 2>&1 || true; fi
+} > "\${RUNTIME_DIR}/runtime.tool_versions.txt"
+
 cd "${RUNS_DIR}"
 mpirun -np ${NPROCESS} ${BINARY} -parallel -input ${INPUT_MODULE} ${TARGET_INSFILE}
 EOF
@@ -529,6 +639,7 @@ chmod a+x "${append_cmd}"
 
 if [ ${DRY_RUN} -eq 1 ]
 then
+  echo "Dry run: no PBS job submitted." > "${REPRO_SUBMIT_DIR}/qsub.job_ids.txt"
   echo "Dry run completed (job not submitted). Job run directory created at:"
   echo "${RUN_OUT_DIR}"
   exit 0
@@ -541,3 +652,8 @@ echo JOB_ID=${JOB_ID}
 # Submit append job
 APPEND_JOB_ID=$(qsub -W depend=afterok:${JOB_ID} "${append_cmd}")
 echo APPEND_JOB_ID=${APPEND_JOB_ID}
+{
+  echo "JOB_ID=${JOB_ID}"
+  echo "APPEND_JOB_ID=${APPEND_JOB_ID}"
+  echo "submitted_at=$(date -Is)"
+} > "${REPRO_SUBMIT_DIR}/qsub.job_ids.txt"
