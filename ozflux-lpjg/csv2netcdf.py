@@ -397,7 +397,7 @@ def read_input_file(opts: Options) -> pandas.DataFrame:
             continue
         # Filter out NaN values.
         if opts.filter_nan and data.dtypes[col] == "float64":
-            data[col] = remove_nans(data[col], lambda _: ...)
+            data[col] = remove_nans(data[col])
         bounds = get_bounds(col, opts.bounds)
         if bounds is not None:
             data[col] = [bounds.clamp(x) for x in data[col]]

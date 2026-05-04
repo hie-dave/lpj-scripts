@@ -71,26 +71,11 @@ VAR_TIME = "time"
 # Name of the zlib compression level.
 COMPRESSION_ZLIB = "zlib"
 
-# Global estimates of how much time it takes to perform various tasks (as a
-# proportion of total time spent in get_data() function [0, 1]). These get
-# updated during program execution and are used for progress reporting.
-get_data_read_prop = 0.5
-get_data_fixnan_prop = 0.05
-get_data_t_agg_prop = 0.35
-get_data_unit_prop = 0.05
-get_data_bounds_prop = 0.05
-
-# Global time estimates for reading vs writing data, as a proportion of time
-# spent reading (which includes aggregation, unit conversion, etc) vs writing.
-global_read_prop = 0.95
-global_write_prop = 0.05
+# Maximum number of out-of-bounds values to log when performing bounds checks.
+MAX_BOUNDS_LOG_INDICES = 20
 
 # Global mutex
 mutex = multiprocessing.BoundedSemaphore(1)
-
-# get_data() time proportion lock. Used to synchronise access to the
-# get_data_*_prop variables.
-gd_tp_lock = multiprocessing.BoundedSemaphore(1)
 
 # Some flux data file names don't exactly match what we use as the "canonical"
 # name for this site in our processing scripts. These are mapped here.
@@ -219,47 +204,50 @@ def _get_qc_var_name(name: str):
 	Return the name of the QF flag variable corresponding to the given variable.
 	@param name: Name of a NetCDF file variable.
 	"""
-	return "%s_QCFlag" % name
+	return f"{name}_QCFlag"
 
-def _filter_qc(data: list[float], qc: list[float]
-	, pcb: Callable[[float], None]) -> list[float]:
+def _filter_qc(data: numpy.ndarray, qc: numpy.ndarray) -> numpy.ndarray:
 	"""
 	Mask all data which have a corresponding QC flag which indicates bad/invalid
 	data.
 
 	@param data: Data to be filtered.
 	@param qc: List of same length as data containing QC flags.
-	@param pcb: Progress reporting function.
 	"""
-	if numpy.isscalar(data.mask):
-		data.mask = numpy.ma.make_mask_none(data.shape)
 	if len(data) != len(qc):
-		raise ValueError("Unable to filter from QC flag: data length mismatch")
-	for i in range(len(data)):
-		if i % PROGRESS_CHUNK_SIZE == 0:
-			pcb(i / len(data))
-		qc_flag = int(qc[i])
-		if qc_flag in qc_flag_definitions:
-			(result, msg) = qc_flag_definitions[qc_flag]
-			if not result:
-				data.mask[i] = True
-				log_debug("Filtering QC flag %d in row %d: %s" % (qc_flag, i, msg))
-	pcb(1)
+		raise RuntimeError(f"Unable to filter from QC flag: data array has length {len(data)} but QC array has length {len(qc)}")
+
+	data = numpy.ma.asarray(data)
+	qc = numpy.ma.asarray(qc)
+
+	bad_flags = numpy.array([
+		flag for flag, (passed, _) in qc_flag_definitions.items()
+		if not passed
+	])
+
+	qc_values = numpy.asarray(qc).astype(int, copy=False)
+	bad = numpy.isin(qc_values, bad_flags)
+
+	data.mask = numpy.ma.getmaskarray(data) | bad
+
+	for flag in numpy.unique(qc_values[bad]):
+		_, msg = qc_flag_definitions[int(flag)]
+		n = numpy.count_nonzero(qc_values[bad] == flag)
+		log_debug(f"Filtering {n} values with QC flag {flag}: {msg}")
+
 	return data
 
 def get_data(in_file: Dataset, var: ForcingVariable, time_plan: TimePlan,
-			 qc_filter: bool, nan_filter: bool,
-			 pcb: Callable[[float], None]) -> list[float]:
+			 qc_filter: bool, nan_filter: bool) -> numpy.ndarray:
 	"""
 	Get all data from the input file and convert it to a format suitable for the
 	output file.
 
 	@param in_file: Input .nc file.
 	@param var: Describes how the variable is to be processed.
-	@param time_plan: Describes how the input/output timesteps.
+	@param time_plan: Describes the input/output timesteps.
 	@param qc_filter: Iff true, data with invalid QC flags will be treated as NaN.
 	@param nan_filter: Iff true, NaN data will be interpolated from neighbouring values.
-	@param pcb: Progress callback function.
 	"""
 	# Some variables are not translated directly into the output
 	# file and can be ignored (ie filled with zeroes).
@@ -274,141 +262,51 @@ def get_data(in_file: Dataset, var: ForcingVariable, time_plan: TimePlan,
 	# Check if a unit conversion is required.
 	matching_units = units_match(in_units, var.out_units)
 
-	global get_data_read_prop, get_data_fixnan_prop, get_data_t_agg_prop
-	global get_data_unit_prop, get_data_bounds_prop
-
-	units_time_proportion = 0 if matching_units else get_data_unit_prop
-
-	prop_tot = get_data_read_prop + get_data_fixnan_prop + \
-		get_data_t_agg_prop + units_time_proportion + get_data_bounds_prop
-
-	read_time_proportion = get_data_read_prop / prop_tot
-
-	fixnan_time_proportion = get_data_fixnan_prop / prop_tot if nan_filter else 0
-
-	aggregation_time_proportion = get_data_t_agg_prop / prop_tot
-
-	bounds_time_prop = get_data_bounds_prop / prop_tot
-
-	units_time_proportion /= prop_tot
-
-	step_start = 0
-
-	step_size = read_time_proportion
-
+	# Get the name of the QC variable corresponding to this variable
 	qcvar_name = _get_qc_var_name(var.in_name)
+
 	if not qcvar_name in in_file.variables:
 		if qc_filter:
-			msg = "Unable to QC filter variable '%s': QC variable '%s' does not exist in file"
-			log_warning(msg % (var.in_name, qcvar_name))
+			log_warning(f"Unable to QC filter variable '{var.in_name}': "
+				        f"QC variable '{qcvar_name}' does not exist in file")
 		qc_filter = False
 
-	if qc_filter:
-		step_size /= 2
-
 	# Read data from netcdf file.
-	read_start = time.time()
 	data = read_data(var_in)
-	read_tot = time.time() - read_start
-	log_debug("Successfully read %d values from netcdf" % len(data))
-
-	step_start += step_size
+	log_debug(f"Successfully read {len(data)} values from netcdf")
 
 	if qc_filter:
 		qcvar = in_file.variables[qcvar_name]
-		step_size /= 2
 		qc_data = read_data(qcvar)
-		step_start += step_size
-		data = _filter_qc(data, qc_data, lambda p: pcb(step_start + step_size * p))
-		step_start += step_size
+		data = _filter_qc(data, qc_data)
 
 	# Replace NaN/masked values with a mean of nearby values.
-	log_diagnostic("Removing NaNs")
-	step_start = read_time_proportion
-	step_size = fixnan_time_proportion
-	fixnan_start = time.time()
+	log_diagnostic("Removing NaNs...")
 	if nan_filter:
-		data = remove_nans(data
-		, lambda p: pcb(step_start + step_size * p))
-		step_start += fixnan_time_proportion
-	fixnan_tot = time.time() - fixnan_start
+		data = remove_nans(data)
 
 	# Convert to flat array.
 	data = numpy.array(data).flatten()
 
 	# Change timestep to something suitable for lpj-guess.
-	log_diagnostic("Aggregating %s to output timestep" % var.in_name)
-	t_agg_start = time.time()
+	log_diagnostic(f"Aggregating {var.in_name} to output timestep...")
 	data = apply_time_plan(data, time_plan.aggregation, var.padder, var.aggregator)
-	step_start += aggregation_time_proportion
-	t_agg_tot = time.time() - t_agg_start
 
 	# Ensure units are correct.
-	unit_start = time.time()
 	if not matching_units:
-		log_diagnostic("Converting %s from %s to %s" % \
-			(var.in_name, in_units, var.out_units))
+		log_diagnostic(f"Converting {var.in_name} from {in_units} to "
+				       f"{var.out_units}...")
 		conversion = find_units_conversion(in_units, var.out_units)
 		step = time_plan.policy.output_timestep_minutes * SECONDS_PER_MINUTE
 		data = [conversion(d, step) for d in data]
 	else:
-		log_diagnostic("No units conversion required for %s" % var.in_name)
-	unit_tot = time.time() - unit_start
+		log_diagnostic(f"No units conversion required for {var.in_name}")
 
-	step_start += units_time_proportion
-
-	bounds_start = time.time()
-
-	# Note: these attributes are in the original units of the variable, so
-	# in order to use them, we would need to perform a units conversion on
-	# them as we did with the above data. In practice, this is probably not
-	# worth it, and even if it was, they're not part of the CF spec anyway.
-	#
-	# if hasattr(var_id, _ATTR_VALID_RANGE):
-	# 	# Use valid range to further restrict the range of the variable.
-	# 	valid_range = getattr(var_id, _ATTR_VALID_RANGE)
-	# 	lower_bound = max(valid_range[0], lower_bound)
-	# 	upper_bound = min(valid_range[1], upper_bound)
-	# else:
-	# 	# if hasattr(var_id, _ATTR_VALID_MIN):
-	# 	# 	valid_min = getattr(var_id, _ATTR_VALID_MIN)
-	# 	# 	lower_bound = max(lower_bound, valid_min)
-	# 	# if hasattr(var_id, _ATTR_VALID_MAX):
-	# 	# 	valid_max = getattr(var_id, _ATTR_VALID_MAX)
-	# 	# 	upper_bound = min(upper_bound, valid_max)
-	(data, passed) = bounds_checks(data, var.lbound, var.ubound,
-									lambda p: pcb(step_start + bounds_time_prop * p))
+	# Ensure data is within bounds.
+	(data, passed) = bounds_checks(data, var.lbound, var.ubound)
 	if not passed:
 		log_warning(f"Variable {var.in_name} failed its bounds checks")
-	bounds_tot = time.time() - bounds_start
 
-	time_tot = read_tot + fixnan_tot + t_agg_tot + bounds_tot + unit_tot
-	read_prop = read_tot / time_tot
-	fixnan_prop = fixnan_tot / time_tot
-	t_agg_prop = t_agg_tot / time_tot
-	bounds_prop = bounds_tot / time_tot
-	unit_prop = unit_tot / time_tot
-
-	# Update global time estimates of all activities.
-
-	# First acquire the global time proportion mutex. This isn't really
-	# necessary unless running in parallel mode, but it shouldn't really
-	# cost much time if not running in parallel mode. And it's hard to know
-	# if parallel mode is enabled from in here.
-	global gd_tp_lock
-	gd_tp_lock.acquire()
-
-	get_data_read_prop = read_prop
-	get_data_fixnan_prop = fixnan_prop
-	get_data_t_agg_prop = t_agg_prop
-	get_data_bounds_prop = bounds_prop
-	if not matching_units:
-		get_data_unit_prop = unit_prop
-
-	# Release global time proportion mutex.
-	gd_tp_lock.release()
-
-	# Done!
 	return data
 
 def get_data_timeseries(in_file: Dataset \
@@ -497,7 +395,7 @@ def get_data_timeseries(in_file: Dataset \
 			step_size /= 2
 			qc_data = read_data(qcvar)
 			step_start += step_size
-			data = _filter_qc(data, qc_data, lambda p: progress_cb(step_start + step_size * p))
+			data = _filter_qc(data, qc_data)
 			step_start += step_size
 
 		# Convert to flat array.
@@ -536,8 +434,7 @@ def get_data_timeseries(in_file: Dataset \
 		# 	# if hasattr(var_id, _ATTR_VALID_MAX):
 		# 	# 	valid_max = getattr(var_id, _ATTR_VALID_MAX)
 		# 	# 	upper_bound = min(upper_bound, valid_max)
-		(data, passed) = bounds_checks(data, lower_bound, upper_bound, lambda p: \
-			progress_cb(step_start + bounds_time_prop * p))
+		(data, passed) = bounds_checks(data, lower_bound, upper_bound)
 		if not passed:
 			log_warning(f"Variable {in_name} failed its bounds checks")
 		bounds_tot = time.time() - bounds_start
@@ -660,23 +557,24 @@ def trim_to_start_year(in_file: Dataset, timestep: int
 	log_debug(m % (n_trim, next_year.year))
 	return data[n_trim:]
 
-def remove_nans(data: list[float]
-	, progress_cb: Callable[[float], None]) -> list[float]:
+def remove_nans(data: numpy.ma.MaskedArray) -> numpy.ndarray:
 	"""
-	Replace any NaN in the list by interpolating between nearby non-NaN values.
+	Replace any masked values in the list by interpolating between nearby
+	unmasked values.
 	"""
-	n = len(data)
-	N_NEIGHBOUR = 2
-	for i in range(n):
-		if numpy.ma.is_masked(data[i]):
-			# Use mean of 5 closest values if value is nan.
-			x = neighbouring_mean(data, i, N_NEIGHBOUR)
-			m = "Replacing NaN at %d with mean %.2f (n = %d)"
-			log_debug(m % (i, x, N_NEIGHBOUR))
-			data[i] = x
-		if i % PROGRESS_CHUNK_SIZE == 0:
-			progress_cb(i / n)
-	return data
+	mask = numpy.ma.getmaskarray(data)
+	values = numpy.ma.asarray(data).filled(numpy.nan).astype(float)
+
+	if mask.any():
+		x = numpy.arange(values.size)
+		good = ~mask & numpy.isfinite(values)
+
+		if not good.any():
+			raise RuntimeError("Cannot interpolate data with no valid values")
+
+		values[mask] = numpy.interp(x[mask], x[good], values[good])
+
+	return values
 
 def aggregate(data: list[float], start: int, stop: int, chunk_size: int \
 	, aggregator: Callable[[list[float]], float] \
@@ -733,8 +631,32 @@ def fix_units(data: list[float], current_units: str, desired_units: str,
 			pcb(i / n)
 	return data
 
-def bounds_checks(data: list[float], xmin: float, xmax: float
-	, progress_cb: Callable[[float], None]) -> list[float]:
+def _fmt_bounds_failures(indices: numpy.ndarray, values: numpy.ndarray,
+							bound: float, direction: str) -> str:
+	"""
+	Format a message for values that exceed the specified bounds.
+
+	@param indices: The indices of the values that exceed the bounds.
+	@param values: The values that exceed the bounds.
+	@param bound: The boundary value.
+	@param direction: The direction of the bound ("lower" or "upper").
+	"""
+	n = len(indices)
+	sample_indices = indices[:MAX_BOUNDS_LOG_INDICES]
+	sample_values = values[:MAX_BOUNDS_LOG_INDICES]
+
+	cases = ", ".join(f"{i}: {v:.2f}"
+				      for i, v in zip(sample_indices, sample_values))
+	if n > MAX_BOUNDS_LOG_INDICES:
+		cases += f", ... ({n - MAX_BOUNDS_LOG_INDICES} more)"
+
+	return (
+		f"{n} values exceed {direction} bound of {bound:.2f}; "
+		f"first {min(n, MAX_BOUNDS_LOG_INDICES)} row/value pair(s): {cases}"
+	)
+
+def bounds_checks(data: numpy.ndarray, xmin: float,
+				  xmax: float) -> tuple[numpy.ndarray, bool]:
 	"""
 	Bounds checking. Any values in the list which exceed theses bounds will be
 	set to the boundary value.
@@ -742,23 +664,25 @@ def bounds_checks(data: list[float], xmin: float, xmax: float
 	@param data: The data to be checked.
 	@param xmin: Lower boundary.
 	@param xmax: Upper boundary.
-	@param progress_cb: Progress reporting function.
+
+	@return: A tuple of (new_data, passed) where new_data is the data after
+			 bounds checking and passed is a boolean indicating whether all
+			 values were within the bounds.
 	"""
-	n = len(data)
-	passed = True
-	for i in range(n):
-		if data[i] < xmin:
-			passed = False
-			m = "Value %.2f in row %d exceeds lower bound of %.2f"
-			log_diagnostic(m % (data[i], i, xmin))
-			data[i] = xmin
-		elif data[i] > xmax:
-			passed = False
-			m = "Value %.2f in row %d exceeds upper bound of %.2f"
-			log_diagnostic(m % (data[i], i, xmax))
-			data[i] = xmax
-		if i % PROGRESS_CHUNK_SIZE == 0:
-			progress_cb(i / n)
+	data = numpy.asarray(data)
+	below = numpy.flatnonzero(data < xmin)
+	above = numpy.flatnonzero(data > xmax)
+
+	passed = len(below) == 0 and len(above) == 0
+
+	if len(below) > 0:
+		log_diagnostic(_fmt_bounds_failures(below, data[below], xmin, "lower"))
+
+	if len(above) > 0:
+		log_diagnostic(_fmt_bounds_failures(above, data[above], xmax, "upper"))
+
+	if not passed:
+		numpy.clip(data, xmin, xmax, out=data)
 	return (data, passed)
 
 def index_of(xarr: list[float], x: float) -> int:

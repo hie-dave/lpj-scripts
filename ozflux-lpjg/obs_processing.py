@@ -645,8 +645,7 @@ def get_sw_data(file: str, timestep: int, pcb: Callable[[float], None]) \
             # Read volumetric SW content for this layer.
             var = ForcingVariable(layer.name, layer.name, "m3/m3", numpy.mean
                  , 0, 1)
-            layer_vol = get_data(nc, var, timestep_min, True, True
-                , lambda p: pcb(step_start + step_size * p))
+            layer_vol = get_data(nc, var, timestep_min, True, True)
 
             long_name = f"Volumetric soil water content at {layer.depth}cm"
 

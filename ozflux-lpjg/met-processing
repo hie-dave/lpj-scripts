@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 from argparse import ArgumentParser
 import os, time
-from pandas import date_range
-import ozflux_dave, ozflux_netcdf, ozflux_parallel
+import ozflux_netcdf, ozflux_parallel
 from traceback import format_exc
 from ozflux_logging import *
 from netCDF4 import Dataset, date2num
@@ -32,34 +31,38 @@ class Options:
     @param dataset_type: Type of dataset (OZFLUX or AMERIFLUX).
     """
     def __init__(self, log : LogLevel, files: list[str], odir: str, prog: bool,
-                 parallel: bool, timestep: int, compression_level: int,
-                 compression_type: str, dataset_type: DatasetType):
+                 parallel: bool, timestep: int, compression: CompressionOptions,
+                 dataset_type: DatasetType):
         self.log_level = log
         self.files = files
         self.out_dir = odir
         self.report_progress = prog
         self.parallel = parallel
         self.timestep = timestep
-        self.compression_level = compression_level
-        self.compression_type = compression_type
+        self.compression = compression
         self.dataset_type = dataset_type
+
+@dataclass(frozen = True)
+class CompressionOptions:
+    level: int
+    type: str
 
 class MetProcessingTask(ozflux_parallel.Task):
     def __init__(self, infile: str, outfile: str, timestep: int,
-                 compression_level: int, compression_type: str,
+                 compression: CompressionOptions,
                  dataset_type: DatasetType):
         self.infile = infile
         self.outfile = outfile
         self.timestep = timestep
-        self.compression_level = compression_level
-        self.compression_type = compression_type
+        self.compression = compression
         self.dataset_type = dataset_type
 
     def exec(self, pcb: Callable[[float], None]):
         try:
+            pcb(0)
             process_file(self.infile, self.outfile, self.timestep,
-                         self.compression_level, self.compression_type,
-                         self.dataset_type, pcb)
+                         self.compression, self.dataset_type)
+            pcb(1)
         except BaseException as err:
             raise ValueError(f"Failed to process {self.infile}") from err
 
@@ -75,7 +78,7 @@ def get_vars(timestep: int, dataset_type: DatasetType) -> list[ForcingVariable]:
     return get_ozflux_vars(timestep)
 
 def copy_data(nc_in: Dataset, nc_out: Dataset, plan: TimePlan,
-              vars: list[ForcingVariable], pcb: Callable[[float], None]):
+              vars: list[ForcingVariable]):
     """
     Copy data to the output file in dailygrass format.
 
@@ -83,43 +86,15 @@ def copy_data(nc_in: Dataset, nc_out: Dataset, plan: TimePlan,
     @param nc_out: Output NetCDF file.
     @param plan: Time plan for output data.
     @param vars: List of variables to be copied.
-    @param pcb: Progress callback function.
     """
-    i = 0
-
-    global global_read_prop, global_write_prop
-    read_prop = global_read_prop
-    write_prop = global_write_prop
-
-    nvar = len(vars)
-
-    n = 0
     for var in vars:
-        log_diagnostic("----- %s -----" % var.in_name)
-        log_diagnostic("Reading %s data" % var.in_name)
+        log_diagnostic("Reading %s data..." % var.in_name)
 
-        reporter = lambda p: pcb( (i + p * read_prop) / nvar)
-        read_start = time.time()
-        data = get_data(nc_in, var, plan, False, True, reporter)
-        read_time = time.time() - read_start
+        data = get_data(nc_in, var, plan, False, True)
 
-        n = max(n, len(data))
-
-        log_diagnostic("Writing %s data" % var.in_name)
-        reporter = lambda p: pcb( (i + read_prop + write_prop * p) / nvar)
-        write_start = time.time()
+        log_diagnostic("Writing %s data..." % var.in_name)
         var_out = nc_out.variables[var.out_name]
         var_out[:] = numpy.reshape(data, var_out.shape)
-        write_time = time.time() - write_start
-
-        # Bookkeeping.
-        total_time = read_time + write_time
-        read_prop = read_time / total_time
-        write_prop = write_time / total_time
-        log_debug(f"read_prop={read_prop:.2f}")
-        log_debug(f"write_prop={write_prop:.2f}")
-
-        i += 1
 
 def create_dimensions(nc: Dataset, ngridcell: int):
     """
@@ -134,7 +109,8 @@ def create_dimensions(nc: Dataset, ngridcell: int):
     # Create time dimension with unlimited size.
     create_dim_if_not_exists(nc, DIM_TIME)
 
-def create_variables(nc: Dataset, timestep: int, clevel: int, ctype: str,
+def create_variables(nc: Dataset, timestep: int,
+                     compression: CompressionOptions,
                      vars: list[ForcingVariable]):
     """
     Create the required variables in the output file.
@@ -142,8 +118,7 @@ def create_variables(nc: Dataset, timestep: int, clevel: int, ctype: str,
     @param nc: The output .nc file.
     @param version: The lpj-guses version selected by the user.
     @param timestep: Output timestep in minutes.
-    @param clevel: Compression level [1-9], 9 = slowest/smallest.
-    @param ctype: Compression algorithm to be used (or None).
+    @param compression: Compression options for the output file.
     @param vars: List of variables to be created in the output file.
     """
     log_debug("Creating output variables")
@@ -159,7 +134,8 @@ def create_variables(nc: Dataset, timestep: int, clevel: int, ctype: str,
     time_chunks = (time_chunksize,)
     time_units = f"hours since {DATE_BASELINE}"
     create_var_with_metadata(nc, DIM_TIME, format, DIM_TIME, STD_TIME,
-                             LONG_TIME, time_units, clevel, ctype, time_chunks)
+                             LONG_TIME, time_units, compression.level,
+                             compression.type, time_chunks)
     nc.variables[DIM_TIME].calendar = CALENDAR_GREGORIAN
 
     # TODO: configurable dimension order (achieved via constants)
@@ -171,7 +147,8 @@ def create_variables(nc: Dataset, timestep: int, clevel: int, ctype: str,
         # TODO: variable detection should have multiple options:
         # 1. Look for user-specified names supplied via CLI
         # 2. Detect variables in input files based on standard_name
-        create_var_if_not_exists(nc, var.out_name, format, dims, clevel, ctype,
+        create_var_if_not_exists(nc, var.out_name, format, dims,
+                                 compression.level, compression.type,
                                  chunksizes)
         out_var = nc.variables[var.out_name]
         setattr(out_var, ATTR_UNITS, var.out_units)
@@ -197,7 +174,7 @@ def populate_coord_vars(nc: Dataset, lats: numpy.ndarray, lons: numpy.ndarray,
     time[:] = date2num(plan.output_time_values, time.units, time.calendar)
 
 def prepare_outfile(nc: Dataset, lats: numpy.ndarray, lons: numpy.ndarray,
-                    plan: TimePlan, clevel: int, ctype: str,
+                    plan: TimePlan, compression: CompressionOptions,
                     vars: list[ForcingVariable]):
     """
     Create the variables in the output NetCDF file. The variables created
@@ -207,13 +184,11 @@ def prepare_outfile(nc: Dataset, lats: numpy.ndarray, lons: numpy.ndarray,
     @param lats: Array of latitude values.
     @param lons: Array of longitude values.
     @param plan: Time plan for the output file.
-    @param clevel: Compression level [1-9], 9 = slowest/smallest.
-    @param ctype: Compression algorithm to be used (or None).
+    @param compression: Compression options for the output file.
     @param vars: List of variables to be created in the output file.
     """
     create_dimensions(nc, len(lats))
-    create_variables(nc, plan.policy.output_timestep_minutes, clevel, ctype,
-                     vars)
+    create_variables(nc, plan.policy.output_timestep_minutes, compression, vars)
     populate_coord_vars(nc, lats, lons, plan)
 
 def write_metadata(nc: Dataset, timestep: int):
@@ -226,18 +201,16 @@ def write_metadata(nc: Dataset, timestep: int):
     """
     ozflux_netcdf.write_common_metadata(nc, timestep)
 
-def process_dataset(nc_in: Dataset, nc_out: Dataset, plan: TimePlan, clevel: int,
-                    ctype: str, dataset_type: DatasetType, pcb: Callable[[float], None]):
+def process_dataset(nc_in: Dataset, nc_out: Dataset, plan: TimePlan,
+                    compression: CompressionOptions, dataset_type: DatasetType):
     """
     Process the given input dataset and write to the output dataset.
 
     @param nc_in: Input .nc file.
     @param nc_out: Output .nc file.
     @param plan: Time plan for the output file.
-    @param clevel: Compression level [1-9], 9 = slowest/smallest.
-    @param ctype: Compression algorithm to be used (or None).
+    @param compression: Compression options for the output file.
     @param dataset_type: Type of dataset (OZFLUX or AMERIFLUX).
-    @param pcb: Progress callback function.
     """
     lats = nc_in.variables[DIM_LAT][:]
     lons = nc_in.variables[DIM_LON][:]
@@ -249,19 +222,18 @@ def process_dataset(nc_in: Dataset, nc_out: Dataset, plan: TimePlan, clevel: int
     # We could also verify that the file only contains a single
     # gridcell, but later code verifies this anyway.
     log_diagnostic(f"Initialising output file...")
-    prepare_outfile(nc_out, lats, lons, plan, clevel, ctype, vars)
+    prepare_outfile(nc_out, lats, lons, plan, compression, vars)
 
     # Copy data into this variable.
     log_diagnostic("Copying data")
-    copy_data(nc_in, nc_out, plan, vars, pcb)
+    copy_data(nc_in, nc_out, plan, vars)
 
     # Write additional global/common metadata.
     log_diagnostic("Writing additional metadata")
     write_metadata(nc_out, plan.policy.output_timestep_minutes)
 
-def process_file(in_file: str, out_file: str, timestep: int, clevel: int,
-                 ctype: str, dataset_type: DatasetType,
-                 pcb: Callable[[float], None]):
+def process_file(in_file: str, out_file: str, timestep: int,
+                 compression: CompressionOptions, dataset_type: DatasetType):
     """
     Read the input file and generate an output file at the specified
     path in LPJ-GUESS-DAVE format.
@@ -269,10 +241,8 @@ def process_file(in_file: str, out_file: str, timestep: int, clevel: int,
     @param in_file: Input file path.
     @param out_file: Output file path.
     @param timestep: Output timestep length in minutes.
-    @param clevel: Compression level [1-9], 9 = slowest/smallest.
-    @param ctype: Compression algorithm to be used (or None).
+    @param compression: Compression options for the output file.
     @param dataset_type: Type of dataset (OZFLUX or AMERIFLUX).
-    @param pcb: Progress callback function.
     """
     log_information(f"Processing {in_file}...")
     policy = TimePolicy(output_timestep_minutes = timestep)
@@ -281,7 +251,7 @@ def process_file(in_file: str, out_file: str, timestep: int, clevel: int,
             # Quick sanity check of time step.
             plan = make_time_plan(nc_in, policy)
             validate_time_plan(plan)
-            process_dataset(nc_in, nc_out, plan, clevel, ctype, dataset_type, pcb)
+            process_dataset(nc_in, nc_out, plan, compression, dataset_type)
 
 def parse_args(argv: list[str]) -> Options:
     """
@@ -305,10 +275,11 @@ def parse_args(argv: list[str]) -> Options:
 
     parsed = parser.parse_args(argv[1:])
     dataset_type = DatasetType.AMERIFLUX if parsed.ameriflux else DatasetType.OZFLUX
+    compression = CompressionOptions(parsed.compression_level,
+                                     parsed.compression_type)
     return Options(parsed.verbosity, parsed.files, parsed.out_dir,
                    parsed.show_progress, parsed.parallel, parsed.timestep,
-                   parsed.compression_level, parsed.compression_type,
-                   dataset_type)
+                   compression, dataset_type)
 
 # @profile
 def main(opts: Options):
@@ -331,8 +302,7 @@ def main(opts: Options):
             os.remove(outfile)
 
         job = MetProcessingTask(infile, outfile, opts.timestep,
-                                opts.compression_level, opts.compression_type,
-                                opts.dataset_type)
+                                opts.compression, opts.dataset_type)
 
         job_manager.add_job(job, os.path.getsize(infile))
 
