@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Get path to the directory containing this script.
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P)"
+
+die() {
+    echo "Error: $1" >&2
+    exit 1
+}
+
+if [ "$#" -ne 1 ]; then die "Usage: $0 <output_dir>"; fi
+
+OUT_DIR="${1}"
+
+IN_DIR="${DIR}/data/flux/raw/daily/2025-10"
+
+# Verbosity for process_fluxes.py. 2=warning
+VERBOSITY=2
+
+process_fluxes() {
+    VARIABLE="${1}"
+    UNITS="${2}"
+    DATA_COL="${3}"
+    OUT_FILE="${OUT_DIR}/${DATA_COL}.csv.gz"
+    shift 3
+    "${DIR}/process_fluxes.py" --log-level ${VERBOSITY} \
+        --out-file "${OUT_FILE}" --variable "${VARIABLE}" \
+        --out-units "${UNITS}" --data-col "${DATA_COL}" $* "${IN_DIR}"/*.nc
+}
+
+echo "Processing GPP..."
+
+# Daily GPP.
+process_fluxes GPP_LT gC/m2/day gpp_lt
+process_fluxes GPP_LL gC/m2/day gpp_ll
+process_fluxes GPP_SOLO gC/m2/day gpp_solo
+
+# Annual GPP.
+process_fluxes GPP_LT kgC/m2 agpp_lt --annual
+process_fluxes GPP_LL kgC/m2 agpp_ll --annual
+process_fluxes GPP_SOLO kgC/m2 agpp_solo --annual
+
+echo "Processing NEE..."
+
+# Daily NEE.
+process_fluxes NEE_LT gC/m2/day nee_lt
+process_fluxes NEE_LL gC/m2/day nee_ll
+process_fluxes NEE_SOLO gC/m2/day nee_solo
+
+# Annual NEE.
+process_fluxes NEE_LT kgC/m2 anee_lt --annual
+process_fluxes NEE_LL kgC/m2 anee_ll --annual
+process_fluxes NEE_SOLO kgC/m2 anee_solo --annual
+
+echo "Processing ER..."
+
+# Daily ER.
+process_fluxes ER_LL gC/m2/day er_ll
+process_fluxes ER_LT gC/m2/day er_lt
+process_fluxes ER_SOLO gC/m2/day er_solo
+
+# Annual ER.
+process_fluxes ER_LL kgC/m2 aer_ll --annual
+process_fluxes ER_LT kgC/m2 aer_lt --annual
+process_fluxes ER_SOLO kgC/m2 aer_solo --annual
+
+echo "Processing NEP..."
+
+# Daily NEP.
+process_fluxes NEP_LT gC/m2/day nep_lt
+process_fluxes NEP_LL gC/m2/day nep_ll
+process_fluxes NEP_SOLO gC/m2/day nep_solo
+
+# Annual NEP.
+process_fluxes NEP_LT kgC/m2 anep_lt --annual
+process_fluxes NEP_LL kgC/m2 anep_ll --annual
+process_fluxes NEP_SOLO kgC/m2 anep_solo --annual
+
+echo "Processing Ta..."
+
+# Daily air temperature.
+process_fluxes Ta degC temp
+
+echo "Processing Fsd..."
+
+# Daily shortwave downwelling solar radiation.
+process_fluxes Fsd W/m2 rsds
+
+echo "Processing Precip..."
+
+# Daily precipitation.
+process_fluxes Precip mm pr
+
+# ET
+echo "Processing ET..."
+
+# Daily ET.
+process_fluxes ET mm et
+
+# Annual ET.
+process_fluxes ET mm aet --annual
+
+# Soil Water Content
+echo "Processing Sws..."
+
+# Daily Sws.
+process_fluxes Sws m3/m3 sws
