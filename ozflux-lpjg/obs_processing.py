@@ -141,22 +141,6 @@ _layer_variable_map = {
     "YarIrr": [Layer("Sws_5cm", 5), Layer("Sws", 10)]
 }
 
-_inventory_site_names = {
-    "Alice_Mulga_diameter_height_biomass_data_lVZI0qg.csv": "AliceSpringsMulga",
-    "Boyagin_Wandoo_woodlands_diameter_height_biomass_da_iWYgPOL.csv": "Boyagin",
-    "Calperum_Mallee_diameter_height_biomass_data_2be0UM3.csv": "Calperum",
-    "Cumberland_Plain_diameter_height_biomass_data.csv": "CumberlandPlain",
-    "Gingin_Banksia_stem_diameter_height_biomass_basal_area_data.csv": "Gingin",
-    "GWW_diameter_height_biomass_basal_area_sapwood_data.csv": "GreatWesternWoodlands",
-    "Litchfield_Savanna_diameter_height_biomass_basal_area_data.csv": "Litchfield",
-    "Robson_Creek_diameter_height_biomass_data_CuQoBBH.csv": "RobsonCreek",
-    "Samford_diameter_height_biomass_data_mVFhel9.csv": "Samford",
-    "Tumbarumba_Wet_Eucalypt_diameter_height_biomass_dat_IbRz0nd.csv": "Tumbarumba",
-    "Warra_Tall_Eucalypt_diameter_height_biomass_data_teCJffC.csv": "Warra",
-    "Whroo_Dry_Eucalypt_diameter_height_biomass_data_15iHyyj.csv": "Whroo",
-    "Wombat_Stringybark_Eucalypt_diameter_height_biomass_EYriIKJ.csv": "WombatStateForest",
-}
-
 class Options:
     """
     Class for storing CLI arguments from the user.
@@ -697,103 +681,6 @@ def get_greenness_data(data: pandas.DataFrame, lon: float, lat: float
         for (date, row) in data.iterrows()
     ]
     return greenness
-
-def get_inventory_data_file(inventory_path: str, site: str) -> str | None:
-    """
-    Return the path to the inventory data file for the specified site.
-
-    @param inventory_path: Path to a directory containing site-level csv files containing timeseries of inventory data.
-    @param site: Site name.
-    """
-    inventory_files = [f for f in os.listdir(inventory_path) if f.endswith(".csv")]
-    inventory_files = [os.path.join(inventory_path, f) for f in inventory_files]
-    for file in inventory_files:
-        site_name = _inventory_site_names[os.path.basename(file)]
-        if site_name == site:
-            return file
-    return None
-
-def get_inventory_data(inventory_path: str, site: str) -> tuple[list[Observation], list[Observation], list[Observation], list[Observation]]:
-    """
-    Read inventory data from the specified path.
-
-    Returns a tuple containing the height, diameter, live biomass, and dead biomass observations.
-
-    Returns a tuple containing the height, diameter, live biomass, and dead biomass observations.
-    Note that any or all of these observations may be empty, depending on the
-    input data.
-
-    The outputs are gridcell-level values.
-
-    @param inventory_path: Path to a directory containing site-level csv files containing timeseries of inventory data.
-    @param site: Site name.
-    """
-    file = get_inventory_data_file(inventory_path, site)
-    if file is None:
-        log_warning(f"No inventory data for site '{site}'")
-        return ([], [], [], [])
-
-    # Read data from disk.
-    df = biom_processing.read_raw_data(file)
-    inventory = biom_processing.read_inventory_data(df)
-
-    # Initialise output lists.
-    heights: list[Observation] = []
-    diameters: list[Observation] = []
-    live_biomass: list[Observation] = []
-    dead_biomass: list[Observation] = []
-
-    # Probably not very pythonic but it works...
-    sorted_readings = sorted(inventory.readings, key=attrgetter("date"))
-    grouped = groupby(sorted_readings, key=attrgetter("date"))
-    for date, group in grouped:
-        sorted_patches = sorted(group, key=attrgetter("patch"))
-        patch_groups = groupby(sorted_patches, key=attrgetter("patch"))
-        date_heights = []
-        date_diameters = []
-        date_live_biomass = []
-        date_dead_biomass = []
-        for patch, patch_group in patch_groups:
-            # Convert iterator to list to avoid exhaustion
-            patch_group_list = list(patch_group)
-            # Get all values for this patch on this timestep.
-            patch_heights = [r.height for r in patch_group_list if not math.isnan(r.height)]
-            patch_diameters = [r.diameter for r in patch_group_list if not math.isnan(r.diameter)]
-            patch_live_biomass = [r.live_biomass for r in patch_group_list if not math.isnan(r.live_biomass)]
-            patch_dead_biomass = [r.dead_biomass for r in patch_group_list if not math.isnan(r.dead_biomass)]
-
-            # Store mean height/diameter (m), and total biomass (in kg/m2) for
-            # this patch.
-            mean_height = math.nan if len(patch_heights) == 0 else numpy.mean(patch_heights) # m
-            mean_diameter = math.nan if len(patch_diameters) == 0 else numpy.mean(patch_diameters) # m
-            total_live_biomass = math.nan if len(patch_live_biomass) == 0 else numpy.sum(patch_live_biomass) / inventory.get_area(patch) # kg/m2
-            total_dead_biomass = math.nan if len(patch_dead_biomass) == 0 else numpy.sum(patch_dead_biomass) / inventory.get_area(patch) # kg/m2
-            if not math.isnan(mean_height):
-                date_heights.append(mean_height)
-            if not math.isnan(mean_diameter):
-                date_diameters.append(mean_diameter)
-            if not math.isnan(total_live_biomass) and total_live_biomass > 0:
-                date_live_biomass.append(total_live_biomass)
-            if not math.isnan(total_dead_biomass) and total_dead_biomass > 0:
-                date_dead_biomass.append(total_dead_biomass)
-
-        # Mean value over all patches on this timestep. This should be
-        # comparable to gridcell-level model outputs (e.g. cmass.out).
-        mean_height = math.nan if len(date_heights) == 0 else numpy.mean(date_heights)
-        mean_diameter = math.nan if len(date_diameters) == 0 else numpy.mean(date_diameters)
-        mean_live_biomass = math.nan if len(date_live_biomass) == 0 else numpy.mean(date_live_biomass)
-        mean_dead_biomass = math.nan if len(date_dead_biomass) == 0 else numpy.mean(date_dead_biomass)
-
-        if not math.isnan(mean_height):
-            heights.append(Observation(date, mean_height))
-        if not math.isnan(mean_diameter):
-            diameters.append(Observation(date, mean_diameter))
-        if not math.isnan(mean_live_biomass):
-            live_biomass.append(Observation(date, mean_live_biomass))
-        if not math.isnan(mean_dead_biomass):
-            dead_biomass.append(Observation(date, mean_dead_biomass))
-
-    return (heights, diameters, live_biomass, dead_biomass)
 
 def get_smips_data_from_file(file: str, timestep: int, col: str, pcb: Callable[[float], None]) \
         -> list[Observation]:

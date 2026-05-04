@@ -19,6 +19,8 @@ from ozflux_common import find_units_conversion_opt
 
 _VERSION = "0.1.0"
 
+_ALLOWED_DUPLICATE_SITES = ["AliceSpringsMulga"] # ASM1, ASM2
+
 # Aggregation methods. These are applied to the variable in the *input units*.
 _AGGREGATORS = {
     "ER_LL": lambda x: numpy.mean(x), # umol/m2/s
@@ -120,11 +122,13 @@ def _filter_qc(df: pandas.DataFrame) -> pandas.DataFrame:
 
     # Optional, compact logging by flag value
     if bad.any():
+        log_debug(f"Total number of rows: {len(df)}")
         counts = qc_int[bad].value_counts()
         for flag, n in counts.items():
             msg = qc_flag_definitions.get(int(flag), (False, "Unknown QC flag"))[1]
-            log_debug(f"Filtering {n} rows for QC flag {flag}: {msg}")
+            log_debug(f"Filtering {n} rows for QC flag {flag}: {msg} ({100.0 * n / len(df):.2f}% of total)")
 
+    log_debug(f"Number of rows after QC filtering: {len(df.loc[~bad])}")
     # Drop rows with invalid QC flags entirely
     return df.loc[~bad]
 
@@ -279,9 +283,11 @@ def main(opts):
 
         # Check if any df in the list already has this site in the site column.
         if site in sites:
-            log_warning(f"Multiple input files contain site {site}; data from input file {file} will be ignored")
-            continue
-        sites.add(site)
+            if site not in _ALLOWED_DUPLICATE_SITES:
+                log_warning(f"Multiple input files contain site {site}; data from input file {file} will be ignored")
+                continue
+        else:
+            sites.add(site)
 
         dfs.append(df)
         i += 1
