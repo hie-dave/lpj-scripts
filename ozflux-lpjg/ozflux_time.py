@@ -2,8 +2,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import datetime, numpy
-from ozflux_netcdf import *
-from netCDF4 import Dataset, num2date, date2num
+from ozflux_common import *
+from ozflux_cf import *
+from ozflux_logging import *
+from netCDF4 import Dataset, num2date
+from typing import Callable
 
 # Abstract base class for padding options. Implementations may pad by repeating
 # nearest value, extrapolating, etc.
@@ -184,13 +187,8 @@ def align_times(times: numpy.ndarray, mode: AlignmentMode) -> numpy.ndarray:
 
 def inspect_input_time(nc: Dataset) -> InputTimeInfo:
     time = get_var_from_std_name(nc, STD_TIME)
-    if not hasattr(time, ATTR_UNITS):
-        raise RuntimeError("Time variable is missing 'units' attribute")
-    if not hasattr(time, ATTR_CALENDAR):
-        raise RuntimeError("Time variable is missing 'calendar' attribute")
-
-    units = getattr(time, ATTR_UNITS)
-    calendar = getattr(time, ATTR_CALENDAR)
+    units = get_units(time)
+    calendar = get_calendar(time)
     times = num2date(time[:], units, calendar,
                      only_use_cftime_datetimes = False,
                      only_use_python_datetimes = True)

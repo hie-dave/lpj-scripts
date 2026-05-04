@@ -7,6 +7,8 @@ from netCDF4 import Dataset, Variable, Dimension, default_fillvals, num2date
 from enum import IntEnum
 from sys import argv
 from typing import Callable
+from ozflux_time import *
+from ozflux_cf import *
 
 # Name of the time dimension in the output file.
 DIM_TIME = "time"
@@ -68,60 +70,6 @@ VAR_TIME = "time"
 
 # Name of the zlib compression level.
 COMPRESSION_ZLIB = "zlib"
-
-# Standard names defined by the CF spec. See here for all defined values:
-# https://cfconventions.org/Data/cf-standard-names/current/build/cf-standard-name-table.html
-
-# Name of the 'standard name' attribute (from the CF spec).
-ATTR_STD_NAME = "standard_name"
-
-# Name of the 'long name' attribute (from the CF spec).
-ATTR_LONG_NAME = "long_name"
-
-# Name of the 'units' attribute (from the CF spec).
-ATTR_UNITS = "units"
-
-# Name of the 'calendar' attribute (from the CF spec).
-ATTR_CALENDAR = "calendar"
-
-# Name of the 'missing value' attribute (from the CF spec).
-_ATTR_MISSING_VAL = "missing_value"
-
-# Name of the attribute which specifies the valid range of a variable.
-_ATTR_VALID_RANGE = "valid_range"
-
-# Name of the attribute which specifies the minimum valid value of a variable.
-_ATTR_VALID_MIN = "valid_min"
-
-# Name of the attribute which specifies the maximum valid value of a variable.
-_ATTR_VALID_MAX = "valid_max"
-
-# Name of the gregorian value of the calendar attribute (from the CF spec).
-CALENDAR_GREGORIAN = "gregorian"
-
-# Standard name of the latitude variable (from the CF spec).
-STD_LAT = "latitude"
-
-# Standard name of the longitude variable (from the CF spec).
-STD_LON = "longitude"
-
-# Standard name of the time variable (from the CF spec).
-STD_TIME = "time"
-
-# Long name of the latitude variable (from the CF spec).
-LONG_LAT = "latitude"
-
-# Long name of the longitude variable (from the CF spec).
-LONG_LON = "longitude"
-
-# Long name of the time variable (from the CF spec).
-LONG_TIME = "time"
-
-# Units used in the latitude variable.
-UNITS_LAT = "degrees_north"
-
-# Units used in the longitude variable.
-UNITS_LON = "degrees_east"
 
 # Global estimates of how much time it takes to perform various tasks (as a
 # proportion of total time spent in get_data() function [0, 1]). These get
@@ -231,21 +179,32 @@ _nc_type_lookup = {
 	"int16": FORMAT_SHORT,
 }
 
-class ForcingVariable():
-	# Create a new ForcingVariable instance.
-	# @param invert: If true, the variable will be multiplied by -1.
-	# @param lbound: Lower bound of the variable (in output units). Any data less than this value will be set to this value.
-	# @param lbound: Upper bound of the variable (in output units). Any data greater than this value will be set to this value.
-	def __init__(self, in_name: str, out_name: str, out_units: str
-		, aggregator: Callable[[list[float]], float], lbound: float
-		, ubound: float, invert: bool = False):
-		self.in_name = in_name
-		self.out_name = out_name
-		self.out_units = out_units
-		self.aggregator = aggregator
-		self.lbound = lbound
-		self.ubound = ubound
-		self.invert = invert
+@dataclass(frozen=True)
+class ForcingVariable:
+	"""
+	Encapsulates a variable in a NetCDF file and how it should be processed.
+	"""
+	# Name of the variable in the input file.
+	in_name: str
+	# Name of the variable in the output file.
+	out_name: str
+	# Units of the variable in the output file.
+	out_units: str
+	# Function which takes a list of values and returns a single value to be
+	# written to the output file. This is used to aggregate data when changing
+	# timestep.
+	aggregator: Callable[[numpy.ndarray, int], float]
+	# Object which specifies how to pad data when changing timestep.
+	padder: DataPadder
+	# Lower bound of the variable (in output units). Any data less than this
+	# value will be set to this value.
+	lbound: float
+	# Upper bound of the variable (in output units). Any data greater than this
+	# value will be set to this value.
+	ubound: float
+	# Standard name of the variable.
+	std_name: str
+
 	def __repr__(self):
 		return f"{self.in_name} -> {self.out_name} ({self.out_units})"
 
@@ -254,34 +213,6 @@ def zeroes(n: int) -> list[float]:
 	Create an array of zeroes of the specified length.
 	"""
 	return [0.0] * n
-
-def get_units(var_id: Variable) -> str:
-	"""
-	Get the units for the specified variable in the .nc file.
-	"""
-	if not hasattr(var_id, ATTR_UNITS):
-		raise ValueError(f"Variable {var_id.name} has no units attribute")
-	return var_id.units
-
-def get_data(in_file: Dataset \
-	, var: ForcingVariable \
-	, output_timestep: int \
-	, qc_filter: bool \
-	, nan_filter: bool \
-	, progress_cb: Callable[[float], None]) -> list[float]:
-	"""
-	Get all data from the input file and convert it to a format suitable for the
-	output file.
-
-	@param in_file: Input .nc file.
-	@param var: Describes how variable is to be read/aggregated.
-	@param progress_cb: Progress callback function.
-	@param qc_filter: Iff true, data with invalid QC flags will be treated as NaN.
-	@param nan_filter: Iff true, NaN data will be interpolated from neighbouring values.
-	"""
-	return _get_data(in_file, var.in_name, output_timestep, var.out_units
-	, var.aggregator, var.lbound, var.ubound, var.invert, qc_filter, nan_filter
-	, progress_cb)
 
 def _get_qc_var_name(name: str):
 	"""
@@ -316,191 +247,169 @@ def _filter_qc(data: list[float], qc: list[float]
 	pcb(1)
 	return data
 
-def _get_data(in_file: Dataset \
-	, in_name: str
-	, output_timestep: int \
-	, out_units: str \
-	, aggregator: Callable[[list[float]], float] \
-	, lower_bound: float \
-	, upper_bound: float \
-	, invert: bool \
-	, qc_filter: bool \
-	, nan_filter: bool \
-	, progress_cb: Callable[[float], None]) -> list[float]:
-		"""
-		Get all data from the input file and convert it to a format
-		suitable for the output file.
+def get_data(in_file: Dataset, var: ForcingVariable, time_plan: TimePlan,
+			 qc_filter: bool, nan_filter: bool,
+			 pcb: Callable[[float], None]) -> list[float]:
+	"""
+	Get all data from the input file and convert it to a format suitable for the
+	output file.
 
-		@param in_name: Name of the variable in the input file.
-		@param out_name: Name of the variable in the output file.
-		@param output_timestep: Output timestep width in minutes.
-		@param qc_filter: Iff true, data with invalid QC flags will be treated as NaN.
-		@param nan_filter: Iff true, NaN data will be interpolated from neighbouring values.
-		"""
-		# Some variables are not translated directly into the output
-		# file and can be ignored (ie filled with zeroes).
-		if in_name == "zero":
-			log_diagnostic("Using zeroes for %s" % in_name)
-			input_timestep = int(in_file.time_step)
-			timestep_ratio = output_timestep // input_timestep
-			n = in_file.variables[VAR_TIME].size // timestep_ratio
-			data = zeroes(n)
-			return trim_to_start_year(in_file, output_timestep, data)
-		if not in_name in in_file.variables:
-			raise ValueError(f"Variable {in_name} does not exist in input file")
+	@param in_file: Input .nc file.
+	@param var: Describes how the variable is to be processed.
+	@param time_plan: Describes how the input/output timesteps.
+	@param qc_filter: Iff true, data with invalid QC flags will be treated as NaN.
+	@param nan_filter: Iff true, NaN data will be interpolated from neighbouring values.
+	@param pcb: Progress callback function.
+	"""
+	# Some variables are not translated directly into the output
+	# file and can be ignored (ie filled with zeroes).
+	if var.in_name not in in_file.variables:
+		raise ValueError(f"Variable {var.in_name} does not exist in input file")
 
-		var_id = in_file.variables[in_name]
+	var_in = in_file.variables[var.in_name]
 
-		# Get units of the input variable.
-		in_units = get_units(var_id)
+	# Get units of the input variable.
+	in_units = get_units(var_in)
 
-		# Check if a unit conversion is required.
-		matching_units = units_match(in_units, out_units)
+	# Check if a unit conversion is required.
+	matching_units = units_match(in_units, var.out_units)
 
-		global get_data_read_prop, get_data_fixnan_prop, get_data_t_agg_prop
-		global get_data_unit_prop, get_data_bounds_prop
+	global get_data_read_prop, get_data_fixnan_prop, get_data_t_agg_prop
+	global get_data_unit_prop, get_data_bounds_prop
 
-		units_time_proportion = 0 if matching_units else get_data_unit_prop
+	units_time_proportion = 0 if matching_units else get_data_unit_prop
 
-		prop_tot = get_data_read_prop + get_data_fixnan_prop + \
-			get_data_t_agg_prop + units_time_proportion + get_data_bounds_prop
+	prop_tot = get_data_read_prop + get_data_fixnan_prop + \
+		get_data_t_agg_prop + units_time_proportion + get_data_bounds_prop
 
-		read_time_proportion = get_data_read_prop / prop_tot
+	read_time_proportion = get_data_read_prop / prop_tot
 
-		fixnan_time_proportion = get_data_fixnan_prop / prop_tot if nan_filter else 0
+	fixnan_time_proportion = get_data_fixnan_prop / prop_tot if nan_filter else 0
 
-		aggregation_time_proportion = get_data_t_agg_prop / prop_tot
+	aggregation_time_proportion = get_data_t_agg_prop / prop_tot
 
-		bounds_time_prop = get_data_bounds_prop / prop_tot
+	bounds_time_prop = get_data_bounds_prop / prop_tot
 
-		units_time_proportion /= prop_tot
+	units_time_proportion /= prop_tot
 
-		step_start = 0
+	step_start = 0
 
-		step_size = read_time_proportion
+	step_size = read_time_proportion
 
-		qcvar_name = _get_qc_var_name(in_name)
-		if not qcvar_name in in_file.variables:
-			if qc_filter:
-				msg = "Unable to QC filter variable '%s': QC variable '%s' does not exist in file"
-				log_warning(msg % (in_name, qcvar_name))
-			qc_filter = False
-
+	qcvar_name = _get_qc_var_name(var.in_name)
+	if not qcvar_name in in_file.variables:
 		if qc_filter:
-			step_size /= 2
+			msg = "Unable to QC filter variable '%s': QC variable '%s' does not exist in file"
+			log_warning(msg % (var.in_name, qcvar_name))
+		qc_filter = False
 
-		# Read data from netcdf file.
-		read_start = time.time()
-		data = read_data(var_id, lambda p:progress_cb(step_size * p))
-		read_tot = time.time() - read_start
-		log_debug("Successfully read %d values from netcdf" % len(data))
+	if qc_filter:
+		step_size /= 2
 
-		if missing_first_timestep(in_file):
-			log_warning("First timestep is missing from input file. This can cause problems with temporal aggregation, so adding a dummy first timestep with the same value as the second timestep.")
-			data = numpy.insert(data, 0, data[0])
+	# Read data from netcdf file.
+	read_start = time.time()
+	data = read_data(var_in)
+	read_tot = time.time() - read_start
+	log_debug("Successfully read %d values from netcdf" % len(data))
 
+	step_start += step_size
+
+	if qc_filter:
+		qcvar = in_file.variables[qcvar_name]
+		step_size /= 2
+		qc_data = read_data(qcvar)
+		step_start += step_size
+		data = _filter_qc(data, qc_data, lambda p: pcb(step_start + step_size * p))
 		step_start += step_size
 
-		if qc_filter:
-			qcvar = in_file.variables[qcvar_name]
-			step_size /= 2
-			qc_data = read_data(qcvar, lambda p: progress_cb(step_start + step_size * p))
-			step_start += step_size
-			data = _filter_qc(data, qc_data, lambda p: progress_cb(step_start + step_size * p))
-			step_start += step_size
+	# Replace NaN/masked values with a mean of nearby values.
+	log_diagnostic("Removing NaNs")
+	step_start = read_time_proportion
+	step_size = fixnan_time_proportion
+	fixnan_start = time.time()
+	if nan_filter:
+		data = remove_nans(data
+		, lambda p: pcb(step_start + step_size * p))
+		step_start += fixnan_time_proportion
+	fixnan_tot = time.time() - fixnan_start
 
-		# Replace NaN/masked values with a mean of nearby values.
-		log_diagnostic("Removing NaNs")
-		step_start = read_time_proportion
-		step_size = fixnan_time_proportion
-		fixnan_start = time.time()
-		if nan_filter:
-			data = remove_nans(data
-			, lambda p: progress_cb(step_start + step_size * p))
-			step_start += fixnan_time_proportion
-		fixnan_tot = time.time() - fixnan_start
+	# Convert to flat array.
+	data = numpy.array(data).flatten()
 
-		# Convert to flat array.
-		data = numpy.array(data).flatten()
+	# Change timestep to something suitable for lpj-guess.
+	log_diagnostic("Aggregating %s to output timestep" % var.in_name)
+	t_agg_start = time.time()
+	data = apply_time_plan(data, time_plan.aggregation, var.padder, var.aggregator)
+	step_start += aggregation_time_proportion
+	t_agg_tot = time.time() - t_agg_start
 
-		# Change timestep to something suitable for lpj-guess.
-		log_diagnostic("Aggregating %s to output timestep" % in_name)
-		t_agg_start = time.time()
-		data = temporal_aggregation(in_file, data, output_timestep, aggregator
-		, lambda p: progress_cb(step_start + aggregation_time_proportion * p))
-		step_start += aggregation_time_proportion
-		t_agg_tot = time.time() - t_agg_start
+	# Ensure units are correct.
+	unit_start = time.time()
+	if not matching_units:
+		log_diagnostic("Converting %s from %s to %s" % \
+			(var.in_name, in_units, var.out_units))
+		conversion = find_units_conversion(in_units, var.out_units)
+		step = time_plan.policy.output_timestep_minutes * SECONDS_PER_MINUTE
+		data = [conversion(d, step) for d in data]
+	else:
+		log_diagnostic("No units conversion required for %s" % var.in_name)
+	unit_tot = time.time() - unit_start
 
-		# Trim data to the start of a year.
-		data = trim_to_start_year(in_file, output_timestep, data)
+	step_start += units_time_proportion
 
-		# Ensure units are correct.
-		unit_start = time.time()
-		if not matching_units:
-			log_diagnostic("Converting %s from %s to %s" % \
-				(in_name, in_units, out_units))
-			data = fix_units(data, in_units, out_units, output_timestep, invert,
-				lambda p: progress_cb( \
-					step_start + units_time_proportion * p))
-		else:
-			log_diagnostic("No units conversion required for %s" % in_name)
-		unit_tot = time.time() - unit_start
+	bounds_start = time.time()
 
-		step_start += units_time_proportion
+	# Note: these attributes are in the original units of the variable, so
+	# in order to use them, we would need to perform a units conversion on
+	# them as we did with the above data. In practice, this is probably not
+	# worth it, and even if it was, they're not part of the CF spec anyway.
+	#
+	# if hasattr(var_id, _ATTR_VALID_RANGE):
+	# 	# Use valid range to further restrict the range of the variable.
+	# 	valid_range = getattr(var_id, _ATTR_VALID_RANGE)
+	# 	lower_bound = max(valid_range[0], lower_bound)
+	# 	upper_bound = min(valid_range[1], upper_bound)
+	# else:
+	# 	# if hasattr(var_id, _ATTR_VALID_MIN):
+	# 	# 	valid_min = getattr(var_id, _ATTR_VALID_MIN)
+	# 	# 	lower_bound = max(lower_bound, valid_min)
+	# 	# if hasattr(var_id, _ATTR_VALID_MAX):
+	# 	# 	valid_max = getattr(var_id, _ATTR_VALID_MAX)
+	# 	# 	upper_bound = min(upper_bound, valid_max)
+	(data, passed) = bounds_checks(data, var.lbound, var.ubound,
+									lambda p: pcb(step_start + bounds_time_prop * p))
+	if not passed:
+		log_warning(f"Variable {var.in_name} failed its bounds checks")
+	bounds_tot = time.time() - bounds_start
 
-		bounds_start = time.time()
+	time_tot = read_tot + fixnan_tot + t_agg_tot + bounds_tot + unit_tot
+	read_prop = read_tot / time_tot
+	fixnan_prop = fixnan_tot / time_tot
+	t_agg_prop = t_agg_tot / time_tot
+	bounds_prop = bounds_tot / time_tot
+	unit_prop = unit_tot / time_tot
 
-		# Note: these attributes are in the original units of the variable, so
-		# in order to use them, we would need to perform a units conversion on
-		# them as we did with the above data. In practice, this is probably not
-		# worth it, and even if it was, they're not part of the CF spec anyway.
-		#
-		# if hasattr(var_id, _ATTR_VALID_RANGE):
-		# 	# Use valid range to further restrict the range of the variable.
-		# 	valid_range = getattr(var_id, _ATTR_VALID_RANGE)
-		# 	lower_bound = max(valid_range[0], lower_bound)
-		# 	upper_bound = min(valid_range[1], upper_bound)
-		# else:
-		# 	# if hasattr(var_id, _ATTR_VALID_MIN):
-		# 	# 	valid_min = getattr(var_id, _ATTR_VALID_MIN)
-		# 	# 	lower_bound = max(lower_bound, valid_min)
-		# 	# if hasattr(var_id, _ATTR_VALID_MAX):
-		# 	# 	valid_max = getattr(var_id, _ATTR_VALID_MAX)
-		# 	# 	upper_bound = min(upper_bound, valid_max)
-		(data, passed) = bounds_checks(data, lower_bound, upper_bound, lambda p: \
-			progress_cb(step_start + bounds_time_prop * p))
-		if not passed:
-			log_warning(f"Variable {in_name} failed its bounds checks")
-		bounds_tot = time.time() - bounds_start
+	# Update global time estimates of all activities.
 
-		time_tot = read_tot + fixnan_tot + t_agg_tot + bounds_tot + unit_tot
-		read_prop = read_tot / time_tot
-		fixnan_prop = fixnan_tot / time_tot
-		t_agg_prop = t_agg_tot / time_tot
-		bounds_prop = bounds_tot / time_tot
-		unit_prop = unit_tot / time_tot
+	# First acquire the global time proportion mutex. This isn't really
+	# necessary unless running in parallel mode, but it shouldn't really
+	# cost much time if not running in parallel mode. And it's hard to know
+	# if parallel mode is enabled from in here.
+	global gd_tp_lock
+	gd_tp_lock.acquire()
 
-		# Update global time estimates of all activities.
+	get_data_read_prop = read_prop
+	get_data_fixnan_prop = fixnan_prop
+	get_data_t_agg_prop = t_agg_prop
+	get_data_bounds_prop = bounds_prop
+	if not matching_units:
+		get_data_unit_prop = unit_prop
 
-		# First acquire the global time proportion mutex. This isn't really
-		# necessary unless running in parallel mode, but it shouldn't really
-		# cost much time if not running in parallel mode. And it's hard to know
-		# if parallel mode is enabled from in here.
-		global gd_tp_lock
-		gd_tp_lock.acquire()
+	# Release global time proportion mutex.
+	gd_tp_lock.release()
 
-		get_data_read_prop = read_prop
-		get_data_fixnan_prop = fixnan_prop
-		get_data_t_agg_prop = t_agg_prop
-		get_data_bounds_prop = bounds_prop
-		if not matching_units:
-			get_data_unit_prop = unit_prop
-
-		# Release global time proportion mutex.
-		gd_tp_lock.release()
-
-		# Done!
-		return data
+	# Done!
+	return data
 
 def get_data_timeseries(in_file: Dataset \
 	, in_name: str
@@ -577,7 +486,7 @@ def get_data_timeseries(in_file: Dataset \
 
 		# Read data from netcdf file.
 		read_start = time.time()
-		data = read_data(var_id, lambda p:progress_cb(step_size * p))
+		data = read_data(var_id)
 		read_tot = time.time() - read_start
 		log_debug("Successfully read %d values from netcdf" % len(data))
 
@@ -586,7 +495,7 @@ def get_data_timeseries(in_file: Dataset \
 		if qc_filter:
 			qcvar = in_file.variables[qcvar_name]
 			step_size /= 2
-			qc_data = read_data(qcvar, lambda p: progress_cb(step_start + step_size * p))
+			qc_data = read_data(qcvar)
 			step_start += step_size
 			data = _filter_qc(data, qc_data, lambda p: progress_cb(step_start + step_size * p))
 			step_start += step_size
@@ -651,42 +560,11 @@ def get_data_timeseries(in_file: Dataset \
 		# Done!
 		return data
 
-def read_data(variable: Variable, progress_callback: Callable[[float], None]) \
-	-> list[float]:
-	"""
-	Read all data for a variable from the .nc input file.
-	"""
-	for (shape, dim) in zip(variable.shape, variable.dimensions):
+def read_data(var: Variable) -> list[float]:
+	for (shape, dim) in zip(var.shape, var.dimensions):
 		if dim != DIM_TIME and shape > 1:
-			raise ValueError(f"This read_data() function does not work with truly multi-dimensional variables")
-
-	n = variable.size
-	arr = numpy.ma.MaskedArray([float] * n)
-	time_index = index_of_throw(DIM_TIME, variable.dimensions, lambda: f"Variable {variable.name} has no time dimension")
-	indices = [range(0, 1)] * len(variable.dimensions)
-
-	for i in range(0, n, CHUNK_SIZE):
-		lower = i
-		upper = min(variable.size, i + CHUNK_SIZE)
-		indices[time_index] = range(lower, upper)
-
-		arr[lower:upper] = variable[indices].ravel()
-		progress_callback(upper / n)
-	return arr
-
-# def read_data(variable: Variable, progress_callback: Callable[[float], None]) \
-# 	-> list[float]:
-# 	"""
-# 	Read all data for a variable from the .nc input file.
-# 	"""
-# 	n = variable.size
-# 	arr = [float] * n
-# 	for i in range(0, n, CHUNK_SIZE):
-# 		lower = i
-# 		upper = min(n, i + CHUNK_SIZE)
-# 		arr[lower:upper] = variable[lower:upper].ravel()
-# 		progress_callback(upper / n)
-# 	return arr
+			raise ValueError(f"read_data() does not work with truly multi-dimensional variables")
+	return var[:].ravel()
 
 def get_steps_per_year(timestep: int) -> int:
 	"""
@@ -785,7 +663,7 @@ def trim_to_start_year(in_file: Dataset, timestep: int
 def remove_nans(data: list[float]
 	, progress_cb: Callable[[float], None]) -> list[float]:
 	"""
-	Replace any NaN in the list with a mean of nearby values.
+	Replace any NaN in the list by interpolating between nearby non-NaN values.
 	"""
 	n = len(data)
 	N_NEIGHBOUR = 2
@@ -834,119 +712,8 @@ def aggregate(data: list[float], start: int, stop: int, chunk_size: int \
 			progress_cb(i / niter)
 	return result
 
-def temporal_aggregation(in_file: Dataset, data: list[float] \
-	, output_timestep: float, aggregator: Callable[[list[float]], float]
-	, progress_callback: Callable[[float], None]) -> list[float]:
-	"""
-	Aggregate the input data to destination timestep.
-
-	@param in_file: Input netcdf file.
-	@param data: Data to be aggregated.
-	@param forcing: The variable represented by the data.
-	@param output_timestep: The desired output timestep.
-	@param aggregator: The function used to aggregate values (typically mean or sum).
-	@param progress_callback: Function used for progress reporting.
-	"""
-	# todo: support other timesteps (both source and target)?
-	input_timestep = get_timestep(in_file) // SECONDS_PER_MINUTE
-	if input_timestep == output_timestep:
-		return data
-	if output_timestep < input_timestep:
-		m = "Invalid output timestep (%d); must be >= input timestep (%d)"
-		raise ValueError(m % (output_timestep, input_timestep))
-	if output_timestep % input_timestep != 0:
-		m = "Invalid timestep; output (%d) must be an integer multiple of input\
-timestep (%d)"
-		raise ValueError(m % (output_timestep, input_timestep))
-
-	# Record the amount of data at the start of the function. This is
-	# written as a diagnostic later.
-	n_start = len(data)
-
-	start_minute = get_start_minute(in_file)
-	if start_minute != 0:
-		m = "Strange start time: '%s'. Data must start on the hour or half-hour"
-		raise ValueError(m % in_file.time_coverage_start)
-
-	# Guaranteed to be an integer division, given the above error checks.
-	timestep_ratio = output_timestep // input_timestep
-
-	out: list[float]
-	out = []
-
-	if PARALLEL_AGGREGATION:
-		# This can be quite slow for large datasets, so I've parallelised it.
-
-		# Get number of CPUs.
-		ncpu = multiprocessing.cpu_count()
-
-		# Number of timesteps to be processed by each thread.
-		chunk_size = len(data) // ncpu
-
-		# As we're aggregating every 2 timesteps together, we need to ensure
-		# that each thread is processing an even number of values.
-		if chunk_size % 2 == 1:
-			chunk_size += 1
-
-		global thread_progress
-		thread_progress = [0.0] * ncpu
-		def update_progress(progress: float, tid: int):
-			global thread_progress
-			global mutex
-			with mutex:
-				thread_progress[tid] = progress
-				progress_callback(numpy.mean(thread_progress))
-
-		class Aggregator(threading.Thread):
-			def __init__(self, data: list[float], start: int, stop: int
-				, chunk_size: int, tid: int
-				, aggregation_func: Callable[[list[float]], float]):
-				threading.Thread.__init__(self)
-				self.data = data
-				self.istart = start
-				self.stop = stop
-				self.chunk_size = chunk_size
-				self.thread_id = tid
-				self.aggregation_func = aggregation_func
-			def run(self):
-				self.result = aggregate(self.data, self.istart, self.stop
-				, self.chunk_size, self.aggregation_func
-				, lambda p: update_progress(p, self.thread_id))
-
-		# Create an array to hold the thread objects.
-		threads = []
-		for i in range(ncpu):
-			# Calculate start and stop indices for this thread. Each thread
-			# is operating on the same input data array, but they operate
-			# on different parts (slices) of the array.
-			start = i * chunk_size
-			stop = len(data) if i == ncpu - 1 else start + chunk_size
-
-			# Create the thread object.
-			t = Aggregator(data, start, stop, timestep_ratio, i, aggregator)
-
-			# Start the thread and store the object reference for later.
-			t.start()
-			threads.append(t)
-
-		# Now we wait for all of the threads to finish, and retrieve their
-		# results.
-		for t in threads:
-			t.join()
-			out.extend(t.result)
-	else:
-		out = aggregate(data, 0, len(data), timestep_ratio, aggregator
-		, progress_callback)
-
-	n_end = len(out)
-	m = "Temporal aggregation reduced array length by %d values"
-	log_debug(m % (n_start - n_end))
-
-	return out
-
-def fix_units(data: list[float], current_units: str, desired_units: str, \
-	timestep: int, invert: bool, progress_callback: Callable[[float], None]) \
-		-> list[float]:
+def fix_units(data: list[float], current_units: str, desired_units: str,
+		      timestep: int, pcb: Callable[[float], None]) -> list[float]:
 	"""
 	Convert data to the units required for the output file.
 	This will modify the existing array.
@@ -955,16 +722,15 @@ def fix_units(data: list[float], current_units: str, desired_units: str, \
 	@param current_units: The input units.
 	@param desired_units: The output units.
 	@param timestep: The input timestep length in minutes.
-	@param progress_callback: Function for progress reporting.
+	@param pcb: Function for progress reporting.
 	"""
 	conversion = find_units_conversion(current_units, desired_units)
 	n = len(data)
 	timestep *= SECONDS_PER_MINUTE
-	scalar = -1 if invert else 1
 	for i in range(n):
-		data[i] = conversion(data[i], timestep) * scalar
+		data[i] = conversion(data[i], timestep)
 		if i % PROGRESS_CHUNK_SIZE == 0:
-			progress_callback(i / n)
+			pcb(i / n)
 	return data
 
 def bounds_checks(data: list[float], xmin: float, xmax: float
@@ -1116,10 +882,10 @@ def create_var_if_not_exists(nc: Dataset, name: str, format: str
 		, complevel = compression_level, chunksizes = chunksizes)
 		log_debug(f"Variable {name} created successfully")
 
-		log_debug(f"Setting attribute {_ATTR_MISSING_VAL} on variable {name}")
+		log_debug(f"Setting attribute {ATTR_MISSING_VAL} on variable {name}")
 		var = nc.variables[name]
-		setattr(var, _ATTR_MISSING_VAL, default_fillvals[format])
-		log_debug(f"Attribute {_ATTR_MISSING_VAL} created successfully on variable {name}")
+		setattr(var, ATTR_MISSING_VAL, default_fillvals[format])
+		log_debug(f"Attribute {ATTR_MISSING_VAL} created successfully on variable {name}")
 	else:
 		log_diagnostic(f"Variable {name} will not be created because it already exists")
 
@@ -1648,6 +1414,30 @@ def check_ndims(var, expected):
 	if actual != expected:
 		raise ValueError(f"Unable to copy variable {var.name} as {expected}-dimensional variable: variable has {actual} dimensions")
 
+def get_chunk_sizes_for_append(var: Variable, min_chunk_size: int) -> list[int]:
+	"""
+	Get safe chunk sizes for append operations.
+
+	For contiguous variables, chunking() returns the string "contiguous".
+	In that case we derive chunk sizes from the variable shape and cap total
+	chunk volume to avoid large reads.
+	"""
+	chunking = var.chunking()
+	if chunking == "contiguous" or chunking is None:
+		chunk_sizes = [max(1, s) for s in var.shape]
+	else:
+		chunk_sizes = [max(min_chunk_size * c, c) for c in chunking]
+
+	# Cap aggregate chunk size to limit memory consumption.
+	while numpy.prod(chunk_sizes) > MAX_CHUNK_SIZE:
+		# Reduce the largest chunk dimension first.
+		imax = max(range(len(chunk_sizes)), key = lambda i: chunk_sizes[i])
+		if chunk_sizes[imax] <= 1:
+			break
+		chunk_sizes[imax] = max(1, chunk_sizes[imax] // 2)
+
+	return chunk_sizes
+
 def _append_1d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int, pcb: Callable[[float], None]):
 	"""
 	Append (along the time axis) the contents of the specified 1-dimensional
@@ -1668,8 +1458,7 @@ def _append_1d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int, 
 	check_ndims(var_in, 1)
 	check_ndims(var_out, 1)
 
-	chunk_size = var_in.chunking()[0]
-	chunk_size = max(chunk_size, min_chunk_size * chunk_size)
+	chunk_size = get_chunk_sizes_for_append(var_in, min_chunk_size)[0]
 
 	n = len(var_in)
 	nexist = len(var_out)
@@ -1714,8 +1503,7 @@ def _append_2d(nc_in: Dataset, nc_out: Dataset, name:str, min_chunk_size: int, p
 	dims = [nc_in.dimensions[name] for name in dim_names_in]
 
 	# The chunk size of each dimension in the input file.
-	chunk_sizes = var_in.chunking()
-	chunk_sizes = [max(min_chunk_size * cs, cs) for cs in chunk_sizes]
+	chunk_sizes = get_chunk_sizes_for_append(var_in, min_chunk_size)
 
 	# The length of each dimension in the input file.
 	shape = var_in.shape
@@ -1835,21 +1623,6 @@ def find_var(nc: Dataset, std_name: str, long_name: str,
 		return var
 	return get_var_from_std_name_or_units(nc, std_name, units)
 
-def get_var_from_std_name(nc: Dataset, name: str) -> Variable:
-	"""
-	Find a variable in the input file with the specified standard name. Raise
-	an exception if no matching variable is found.
-
-	@param nc: The input netcdf file.
-	@param name: The standard name for which we search.
-	"""
-	for var in nc.variables:
-		var = nc.variables[var]
-		if hasattr(var, ATTR_STD_NAME):
-			if getattr(var, ATTR_STD_NAME) == name:
-				return var
-	raise ValueError(f"No variable found in file '{nc.filepath()}' with standard_name '{name}'")
-
 def get_first_time(nc: Dataset) -> datetime.datetime:
 	"""
 	Get the first date/time point in the specified input file.
@@ -1865,16 +1638,6 @@ def get_first_time(nc: Dataset) -> datetime.datetime:
 	if missing_first_timestep(nc):
 		dt = dt - datetime.timedelta(seconds=get_timestep(nc))
 	return dt
-
-def get_calendar(var: Variable) -> str:
-	if hasattr(var, ATTR_STD_NAME) and getattr(var, ATTR_STD_NAME) != STD_TIME:
-		raise ValueError(f"Cannot get calendar attribute for variable {var.name}")
-
-	if hasattr(var, ATTR_CALENDAR):
-		return getattr(var, ATTR_CALENDAR)
-
-	# Use default calendar.
-	return "standard"
 
 def get_timestep(nc: Dataset) -> int:
 	"""
@@ -1938,8 +1701,7 @@ def _append_3d(nc_in: Dataset, nc_out: Dataset, name: str, min_chunk_size: int
 	dims = [nc_in.dimensions[name] for name in dim_names_in]
 
 	# The chunk size of each dimension in the input file.
-	chunk_sizes = var_in.chunking()
-	chunk_sizes = [max(min_chunk_size * cs, cs) for cs in chunk_sizes]
+	chunk_sizes = get_chunk_sizes_for_append(var_in, min_chunk_size)
 
 	# The length of each dimension in the input file.
 	shape = var_in.shape

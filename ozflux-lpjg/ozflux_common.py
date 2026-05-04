@@ -22,119 +22,6 @@ DATE_FORMAT = r"%Y-%m-%d %H:%M:%S"
 DATE_BASELINE = datetime.datetime(1800, 1, 1)
 
 ################################################################################
-# Upper and lower bounds for error checking of forcing data.
-################################################################################
-
-# Temperature lower bound (°C).
-MIN_TEMP = -100
-
-# Temperature upper bound (°C).
-MAX_TEMP = 100
-
-# Atmospheric pressure lower bound (Pa). todo: is this too conservative?
-MIN_PS = 50000
-
-# Atmospheric pressure upper bound (Pa). todo: is this too conservative?
-MAX_PS = 150000
-
-# SWDOWN lower bound (units).
-MIN_SWDOWN = 0
-
-# SWDOWN upper bound (units).
-MAX_SWDOWN = 1e5
-
-# PARDF lower bound (units).
-MIN_PARDF = 0
-
-# PARDF upper bound (units).
-MAX_PARDF = 1e5
-
-# PARDR lower bound (units).
-MIN_PARDR = 0
-
-# PARDR upper bound (units).
-MAX_PARDR = 1e5
-
-# LWDOWN lower bound (units).
-MIN_LWDOWN = 0
-
-# LWDOWN upper bound (units).
-MAX_LWDOWN = 1e5
-
-# PRECLS lower bound (units).
-MIN_PRECLS = 0
-
-# PRECLS upper bound (units).
-MAX_PRECLS = 1e4
-
-# PRECCO lower bound (units).
-MIN_PRECCO = 0
-
-# PRECCO upper bound (units).
-MAX_PRECCO = 1e3
-
-# TAIR lower bound (units).
-MIN_TAIR = 200
-
-# TAIR upper bound (units).
-MAX_TAIR = 373
-
-# UAIR lower bound (units).
-MIN_UAIR = 0
-
-# UAIR upper bound (units).
-MAX_UAIR = 100
-
-# VAIR lower bound (units).
-MIN_VAIR = 0
-
-# VAIR upper bound (units).
-MAX_VAIR = 1
-
-# QAIR lower bound (units).
-MIN_QAIR = 0
-
-# QAIR upper bound (units).
-MAX_QAIR = 0.2
-
-# PSURF lower bound (units).
-MIN_PSURF = 3e4
-
-# PSURF upper bound (units).
-MAX_PSURF = 1.5e5
-
-################################################################################
-# Variable names in the input files.
-################################################################################
-
-# Name of the temperature variable in the input file.
-IN_TEMP = "Ta"
-
-# Name of the shortwave radiation variable in the input file.
-IN_SWDOWN = "Fsd"
-
-# Name of the longwave radiation variable in the input file.
-IN_LWDOWN = "Fld"
-
-# Name of the precipitation variable in the input file.
-IN_PRECLS = "Precip"
-
-# Name of the co2 concentration variable in the input file.
-IN_CO2 = "CO2"
-
-# Name of the VPD variable in the input file.
-IN_VPD = "VPD"
-
-# Name of the atmospheric pressure variable in the input file.
-IN_PS = "ps"
-
-# Name of the UAIR variable in the input file.
-IN_UAIR = "Ws"
-
-# Name of the QAIR variable in the input file.
-IN_QAIR = "SH"
-
-################################################################################
 # Units conversions.
 ################################################################################
 
@@ -197,9 +84,10 @@ _LENGTH_CONVERSIONS = {
 
 # Common alternative names for various units which we may reasonably encounter.
 _units_synonyms = [
-    ["W/m2", "W/m^2", "Wm^-2"],
+    ["W/m2", "W/m^2", "Wm^-2", "W m-2"],
     ["kg/m2/s", "kg/m^2/s", "kgm^-2s^-1", "kg m-2 s-1"],
     ["kg/m2/day", "kg/m^2/day", "mm/day"],
+    ["mm", "kg/m2", "kg m-2"],
     ["K", "k"],
     ["m/s", "ms^-1"],
     ["Pa", "pa"],
@@ -457,7 +345,9 @@ def find_units_conversion(current_units: str, desired_units: str) \
     -> Callable[[float], float]:
     """
     Find a conversion between two different units. Throw if not found.
-    The return value is a function which takes and returns a float.
+    The return value is a function which takes a float (the number to be
+    converted) and an integer (the timestep width in seconds) and returns a
+    float.
     """
     # units_conversions is a dict mapping unit combos to a conversion.
     # units_conversions: dict[tuple[str, str], Callable[[float],float]]
