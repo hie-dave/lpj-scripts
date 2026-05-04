@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [ "$#" -ne 2 ]; then
+    echo "Usage: $0 <input_directory> <output_directory>"
+    exit 1
+fi
+
+IN_DIR="${1}"
+OUT_DIR="${2}"
+
+# IN_DIR="${HOME}/code/lpj-guess/.data/fullcam/site-potential-and-fpi-version-2.0"
+IN_FILE="${IN_DIR}/New_M_2019.tif"
+
+# OUT_DIR="${IN_DIR}/out"
+OUT_FILE="${OUT_DIR}/$(basename "${IN_FILE/.tif/.nc}")"
+
+mkdir -p "${OUT_DIR}"
+
+gdal_translate -of netCDF -co "FORMAT=NC4" "${IN_FILE}" "${OUT_FILE}"
+
+# Convert from t/ha to kg/m2 by dividing by 10.
+cdo divc,10 "${OUT_FILE}" "${OUT_FILE}2"
+mv "${OUT_FILE}2" "${OUT_FILE}"
+
+# Rename variable and set metadata.
+VAR="agb"
+ncrename -O -v "Band1,${VAR}" "${OUT_FILE}" "${OUT_FILE}"
+ncatted -O -a "units,${VAR},o,c,kg.m-2" "${OUT_FILE}"
+ncatted -O -a "long_name,${VAR},o,c,Above-Ground Biomass" "${OUT_FILE}"
+nccopy -d5 "${OUT_FILE}" "${OUT_FILE}2"
+mv "${OUT_FILE}2" "${OUT_FILE}"
