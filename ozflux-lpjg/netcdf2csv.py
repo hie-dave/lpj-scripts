@@ -27,9 +27,14 @@ class Options:
                  lon_column: str,
                  time_column: str,
                  max_chunk_size: int,
+                 coord_decimals: int,
                  date_fmt: str,
                  log_level: LogLevel,
-                 show_progress: bool):
+                 show_progress: bool,
+                 write_year_day: bool,
+                 write_tsv: bool,
+                 year_column: str,
+                 day_column: str):
         self.input_file = input_file
         self.output_file = output_file
         self.variable = variable
@@ -38,9 +43,14 @@ class Options:
         self.lon_column = lon_column
         self.time_column = time_column
         self.max_chunk_size = max_chunk_size
+        self.coord_decimals = coord_decimals
         self.date_fmt = date_fmt
         self.log_level = log_level
         self.show_progress = show_progress
+        self.write_year_day = write_year_day
+        self.write_tsv = write_tsv
+        self.year_column = year_column
+        self.day_column = day_column
 
 def parse_cli(argv: list[str]) -> Options:
     """
@@ -55,9 +65,14 @@ def parse_cli(argv: list[str]) -> Options:
     parser.add_argument("--lon-column", default="Lon", help="Name of the longitude column in the output file")
     parser.add_argument("--time-column", default="Time", help="Name of the time column in the output file")
     parser.add_argument("--max-chunk-size", type=int, default=DEFAULT_MAX_CHUNK_SIZE, help="Maximum chunk size in number of elements")
-    parser.add_argument("--date-fmt", default="%Y-%m-%d", help="Date format (default: %Y-%m-%d)")
+    parser.add_argument("--date-fmt", default="%Y-%m-%d", help="Date format (default: %(default)s)")
     parser.add_argument("--log-level", "-l", type=int, default=LogLevel.WARNING, choices=[LogLevel.NONE, LogLevel.ERROR, LogLevel.WARNING, LogLevel.INFORMATION, LogLevel.DIAGNOSTIC, LogLevel.DEBUG], help="Log level")
     parser.add_argument("--show-progress", "-p", action="store_true", default=False, help="Show progress")
+    parser.add_argument("--coord-decimals", type=int, default=6, help="Number of decimal places for latitude/longitude in CSV (default: %(default)s)")
+    parser.add_argument("--write-year-day", action="store_true", default=False, help="Write year and day of year as discrete columns (e.g. 2022 32) instead of date (e.g. 2022-02-01). Recommended only for daily data.")
+    parser.add_argument("--write-tsv", action="store_true", default=False, help="Write tab-separated values instead of CSV.")
+    parser.add_argument("--year-column", default="Year", help="Name of the year column in the output file. Only used if --write-year-day is enabled.")
+    parser.add_argument("--day-column", default="Day", help="Name of the day column in the output file. Only used if --write-year-day is enabled.")
     parsed = parser.parse_args(argv)
     return Options(parsed.in_file,
                    parsed.out_file,
@@ -67,9 +82,14 @@ def parse_cli(argv: list[str]) -> Options:
                    parsed.lon_column,
                    parsed.time_column,
                    parsed.max_chunk_size,
+                   parsed.coord_decimals,
                    parsed.date_fmt,
                    parsed.log_level,
-                   parsed.show_progress)
+                   parsed.show_progress,
+                   parsed.write_year_day,
+                   parsed.write_tsv,
+                   parsed.year_column,
+                   parsed.day_column)
 
 def choose_chunk_sizes(nc: Dataset, var: Variable, max_chunk_size: int) -> list[int]:
     """
@@ -95,6 +115,9 @@ def choose_chunk_sizes(nc: Dataset, var: Variable, max_chunk_size: int) -> list[
             break
         if i < len(chunk_sizes) - 1:
             # First N dimensions set to chunksize=1
+            if chunk_sizes[i] != 1:
+                chunk_bytes = total_chunk_size * var.dtype.itemsize
+                log_diagnostic(f"Reducing chunk size for dimension {i} from {chunk_sizes[i]} to 1, because total chunk size of {total_chunk_size} exceeds max chunk size of {max_chunk_size}. Increasing your max chunk size (via --max-chunk-size) would likely improve performance, if the computer has enough memory ({chunk_bytes} bytes would be enough to hold the chunk size before this particular reduction in size).")
             chunk_sizes[i] = 1
         else:
             # Last dimension set to chunksize=8192
@@ -106,9 +129,9 @@ def copy_to_csv(nc: Dataset, file: TextIO, opts: Options, progress_callback: Cal
     Copy a variable from a NetCDF file to a CSV file.
     """
     # Get the dimension variables.
-    lat = get_var_from_std_name(nc, STD_LAT)
-    lon = get_var_from_std_name(nc, STD_LON)
-    time = get_var_from_std_name(nc, STD_TIME)
+    lat = find_var(nc, STD_LAT, LONG_LAT, UNITS_LAT)
+    lon = find_var(nc, STD_LON, LONG_LON, UNITS_LON)
+    time = find_var(nc, STD_TIME, LONG_TIME, "?")
 
     # Get the variable to extract.
     if not opts.variable in nc.variables:
@@ -124,9 +147,22 @@ def copy_to_csv(nc: Dataset, file: TextIO, opts: Options, progress_callback: Cal
     if len(dimensions) != 3:
         raise Exception(f"Variable '{opts.variable}' has {len(dimensions)} dimensions, but only 3D variables (lat, lon, time) are supported.")
 
-    time_index = index_of_throw(DIM_TIME, dimensions, lambda: f"Variable {opts.variable} has no time dimension")
-    lat_index = index_of_throw(DIM_LAT, dimensions, lambda: f"Variable {opts.variable} has no latitude dimension")
-    lon_index = index_of_throw(DIM_LON, dimensions, lambda: f"Variable {opts.variable} has no longitude dimension")
+    if len(time.dimensions) != 1:
+        raise Exception(f"Variable '{time}' has {len(time.dimensions)} dimensions, but only 1D variables (time) are supported.")
+
+    if len(lat.dimensions) != 1:
+        raise Exception(f"Variable '{lat}' has {len(lat.dimensions)} dimensions, but only 1D variables (lat) are supported.")
+
+    if len(lon.dimensions) != 1:
+        raise Exception(f"Variable '{lon}' has {len(lon.dimensions)} dimensions, but only 1D variables (lon) are supported.")
+
+    dim_time = time.dimensions[0]
+    dim_lat = lat.dimensions[0]
+    dim_lon = lon.dimensions[0]
+
+    time_index = index_of_throw(dim_time, dimensions, lambda: f"Variable {opts.variable} has no time dimension")
+    lat_index = index_of_throw(dim_lat, dimensions, lambda: f"Variable {opts.variable} has no latitude dimension")
+    lon_index = index_of_throw(dim_lon, dimensions, lambda: f"Variable {opts.variable} has no longitude dimension")
 
     # Get dimension values.
     log_diagnostic(f"Reading coordinates for {opts.variable}...")
@@ -134,6 +170,11 @@ def copy_to_csv(nc: Dataset, file: TextIO, opts: Options, progress_callback: Cal
     lon_values = lon[:]
     time_values = time[:]
     log_debug(f"Successfully read all coordinates for {opts.variable}")
+
+    # Round coordinates to a human-friendly number of decimals for CSV output
+    if isinstance(lat_values, numpy.ndarray) and isinstance(lon_values, numpy.ndarray):
+        lat_values = numpy.round(lat_values.astype(float), opts.coord_decimals)
+        lon_values = numpy.round(lon_values.astype(float), opts.coord_decimals)
 
     # Convert time values to datetime objects if they're numeric
     if hasattr(time, 'units'):
@@ -214,8 +255,16 @@ def copy_to_csv(nc: Dataset, file: TextIO, opts: Options, progress_callback: Cal
                             opts.variable: values
                         })
 
+                        if opts.write_year_day:
+                            df[opts.year_column] = [td.year for td in dt]
+                            df[opts.day_column] = [td.timetuple().tm_yday for td in dt]
+                            df.drop(opts.time_column, axis=1, inplace=True)
+                            # Reorder: lon, lat, year, day, ...
+                            df = df[[opts.lon_column, opts.lat_column, opts.year_column, opts.variable]]
+
                         # Write this chunk to the CSV file
-                        df.to_csv(file, index=False, header=False)
+                        header = True if it == 0 else False
+                        df.to_csv(file, index=False, header=header, sep="\t" if opts.write_tsv else ",")
 
                 # Write progress update.
                 it += 1
@@ -240,9 +289,6 @@ def main(opts: Options, progress_callback: Callable[[float], None]):
 
         # Write the header row first
         with open_func(output_file, "w") as f:
-            header = f"{opts.lat_column},{opts.lon_column},{opts.time_column},{opts.variable}\n"
-            f.write(header.encode() if output_file.endswith(".gz") else header)
-
             copy_to_csv(nc, f, opts, progress_callback)
 
         log_information(f"Successfully wrote data to {output_file}")
@@ -254,5 +300,5 @@ if __name__ == "__main__":
         set_show_progress(opts.show_progress)
         main(opts, log_progress)
     except Exception as e:
-        print(f"Failed to process file {opts.input_file}: {e}")
+        print(f"Failed to process file: {e}")
         exit(1)
