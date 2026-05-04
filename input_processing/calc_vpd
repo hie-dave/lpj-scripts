@@ -147,6 +147,10 @@ check_units "${FILE_PATM}" "${VAR_PATM}" "Pa"
 # Processing.
 ################################################################################
 
+# Notes:
+# - _esat in kPa
+# - _es in kPa
+
 # Create a temporary file to hold the equation.
 EQN_FILE="$(mktemp vpd.eqn.XXXXXX)"
 echo "_esat=0.001*611.2*exp((17.62*(${VAR_TAS} - 273.15))/(${VAR_TAS} - 30.11));
