@@ -10,9 +10,8 @@ from ozflux_logging import *
 from ozflux_netcdf import *
 from argparse import ArgumentParser
 from sys import argv
-from netCDF4 import Dataset, Dimension, num2date, date2num
+from netCDF4 import Dataset, Dimension, Variable, num2date, date2num
 from typing import Callable
-from ozflux_parallel import JobManager
 from os import path
 from functools import reduce
 
@@ -57,7 +56,7 @@ class Options:
 	def __init__(self, log : LogLevel, files: list[str], out: str, prog: bool,
 		parallel: bool, chunk_size: int, units: str, workdir: str,
 		restart_file: str, walltime_limit: datetime.timedelta,
-		compression_level: int, chunk_sizes = list[tuple[str, int]]):
+		compression_level: int, chunk_sizes: list[tuple[str, int]]):
 
 		self.log_level = log
 		self.files = files
@@ -129,8 +128,8 @@ def parse_args(argv: list[str]) -> Options:
 		walltime_limit = pandas.Timedelta(p.walltime_limit).to_pytimedelta()
 	chunks = parse_chunksizes(p.chunk_sizes)
 
-	if p.compression_level > 9:
-		raise ValueError(f"Compression level must be between 0-9, but was: {p.compression_level}")
+	if p.compression_level < -1 or p.compression_level > 9:
+		raise ValueError(f"Compression level must be between -1 and 9, but was: {p.compression_level}")
 
 	return Options(p.verbosity, p.files, p.out_file, p.show_progress
 		, p.parallel, p.min_chunk_size, p.units, p.work_dir, p.restart_file
@@ -164,7 +163,67 @@ def get_ntime(file: str) -> int:
 	with open_netcdf(file) as nc:
 		return nc.dimensions[DIM_TIME].size
 
-def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int, units: str):
+def get_chunk_size_1d(var: Variable, min_chunk_size: int) -> int:
+	"""
+	Get an integer chunk size for a 1D variable.
+
+	Some NetCDF variables are contiguous and report chunking() as the string
+	"contiguous". In that case, fall back to a bounded chunk size.
+	"""
+	chunking = var.chunking()
+	if chunking is None or chunking == "contiguous":
+		return max(1, min(len(var), MAX_CHUNK_SIZE))
+
+	chunk_size = chunking[0]
+	return max(chunk_size * min_chunk_size, chunk_size)
+
+def validate_file_sequence(files: list[str]):
+	"""
+	Validate that input files are strictly increasing in time with no overlap.
+	"""
+	if len(files) < 2:
+		return
+
+	prev_name = None
+	prev_last = None
+	ref_units = None
+	ref_calendar = None
+	for file in files:
+		with open_netcdf(file) as nc:
+			if VAR_TIME not in nc.variables:
+				raise ValueError(f"Input file {file} has no time variable '{VAR_TIME}'")
+
+			var_time = nc.variables[VAR_TIME]
+			n = len(var_time)
+			if n < 1:
+				raise ValueError(f"Input file {file} has no timepoints")
+
+			if not hasattr(var_time, ATTR_UNITS):
+				raise ValueError(f"Input file {file} has no '{ATTR_UNITS}' attribute on '{VAR_TIME}'")
+
+			units = getattr(var_time, ATTR_UNITS)
+			calendar = getattr(var_time, ATTR_CALENDAR, "standard")
+			bounds = num2date([var_time[0], var_time[n - 1]], units, calendar)
+
+			if ref_units is None:
+				ref_units = units
+				ref_calendar = calendar
+
+			bounds_ref = date2num(bounds, ref_units, ref_calendar)
+			first = bounds_ref[0]
+			last = bounds_ref[1]
+			if prev_last is not None and first <= prev_last:
+				raise ValueError(
+					f"Input files are not strictly sequential by time. "
+					f"File '{file}' starts at {bounds[0]}, which is not after the previous file "
+					f"'{prev_name}' (ending at {num2date(prev_last, ref_units, ref_calendar)}). "
+					f"Reorder inputs or remove overlapping timesteps."
+				)
+			prev_name = file
+			prev_last = last
+
+def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int, units: str
+	, compression_level: int, chunk_sizes: list[tuple[str, int]]):
 	"""
 	Initialise the output file by creating dimensions and variables as required.
 
@@ -199,7 +258,7 @@ def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int, units: st
 			fmt = get_nc_datatype(var.datatype.__str__())
 			filters = var.filters()
 			# Compression level
-			cl = opts.compression_level
+			cl = compression_level
 			if cl < 0:
 				cl = filters['complevel']
 
@@ -208,8 +267,8 @@ def init_outfile(nc_out: Dataset, infiles: list[str], chunk_size: int, units: st
 
 			# Chunk sizes.
 			cs = None
-			if len(opts.chunk_sizes) > 0:
-				cs = tuple([get_chunk_size(nc_in, nc_out, dim, opts.chunk_sizes) for dim in dims])
+			if len(chunk_sizes) > 0:
+				cs = tuple([get_chunk_size(nc_in, nc_out, dim, chunk_sizes) for dim in dims])
 			else:
 				# Chunking from input file.
 				chunking = var.chunking()
@@ -257,8 +316,7 @@ def append_timepoints(nc_in: Dataset, nc_out: Dataset, min_chunk_size: int, pcb:
 	check_ndims(var_in, 1)
 	check_ndims(var_out, 1)
 
-	chunk_size = var_in.chunking()[0]
-	chunk_size = max(chunk_size * min_chunk_size, chunk_size)
+	chunk_size = get_chunk_size_1d(var_in, min_chunk_size)
 
 	n = len(var_in)
 	nexist = get_nexist(var_out)
@@ -362,6 +420,9 @@ def main(opts: Options):
 	if len(opts.files) < 1:
 		return
 
+	if opts.parallel:
+		log_warning("--parallel is currently unsupported for ncmergetime output appends; running in serial mode.")
+
 	if opts.walltime_limit is not None and opts.restart_file is None:
 		raise ValueError(f"Walltime limit is set, but no restart file is being used. This doesn't really make sense - what do you plan to do with the resultant incomplete file?")
 
@@ -396,9 +457,14 @@ def main(opts: Options):
 		log_diagnostic(f"Deleting existing output file '{out_file}'")
 		os.remove(out_file)
 
+	validate_file_sequence(opts.files)
+
 	if not restart:
 		with open_netcdf(out_file, write = True) as nc_out:
-			init_outfile(nc_out, opts.files, opts.min_chunk_size, opts.units)
+			init_outfile(
+				nc_out, opts.files, opts.min_chunk_size, opts.units,
+				opts.compression_level, opts.chunk_sizes
+			)
 	# todo: order by start time ascending?
 
 	init_walltime()
