@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+#PBS -l ncpus=1
+#PBS -l walltime=12:00:00
+#PBS -l mem=4GB
+#PBS -q normal
+#PBS -l wd
+#PBS -j oe
+#PBS -m abe
+#PBS -M d.holzworth@westernsydney.edu.au
+#PBS -W umask=0022
+#PBS -l storage=scratch/pt17
+#PBS -o /home/590/dh7190/code/lpj-guess/scripts/extract-gridcells-barra2.log
+#PBS -N extract-gridcells-barra2
+
+# If environment variable DEBUG is set to 1, run in debug mode.
+if [ "${DEBUG:-}" = 1 ]
+then
+  echo "Running in debug mode. Set DEBUG to 0 to disable."
+  set -x
+fi
+
+#
+# This script extracts data for specific gridcells from a climate dataset.
+# It also optimises their structure for lpj-guess performance.
+#
+# NOTE: this script does NOT change units. It probably should. Currently
+# though, outputs are unlikely to work in LPJ-Guess without further tweaks.
+#
+
+set -euo pipefail
+
+################################################################################
+# Configuration.
+################################################################################
+
+# Get path to grid file. This file must end with a newline character.
+GRID="/home/590/dh7190/code/lpj-guess/scripts/ozflux.grid"
+
+# Separator character in the grid file.
+SEP=","
+
+# 1 if the file contains a header row at the top which should be ignored.
+# 0 otherwise.
+SKIP_HEADER=1
+
+# Column (1-indexed) containing site name.
+NAME_COL=3
+
+# Column (1-indexed) containing latitude.
+LAT_COL=2
+
+# Column (1-indexed) containing longitude.
+LON_COL=1
+
+# Path to the climate dataset.
+IN_DIR="/scratch/pt17/dh7190/silo/output"
+
+# Path to which outputs will be saved.
+OUT_DIR="/scratch/pt17/dh7190/silo/site"
+
+# Name of the longitude variable in the dataset.
+VAR_LON=lon
+
+# Name of the latitude variable in the dataset.
+VAR_LAT=lat
+
+# Number of timesteps per day.
+TIMESTEP=1
+
+# Compression level, 0-9. 9 = max compression, 1 = lowest compression, 0 = no
+# compression.
+COMPRESSION_LEVEL=5
+
+################################################################################
+# Script.
+################################################################################
+
+# Print the specified message and exit.
+die() { echo $* >&2; exit 1; }
+
+# Chunk size on the time dimension.
+CNK_TIME="$((TIMESTEP * 365))"
+
+if [ "${SKIP_HEADER}" = 1 ]
+then
+    TMP_GRID="$(mktemp)"
+    # fixme
+    tail -n +2 "${GRID}" >"${TMP_GRID}"
+    GRID="${TMP_GRID}"
+fi
+
+while read LINE
+do
+    # Sanitise dodgy characters emitted by "helpful" text editors on windows.
+    LINE="$(echo "${LINE}" | sed -r 's/\r//g')"
+
+    if [ -z "${LINE}" ]; then continue; fi
+
+    # Parse line.
+    LON="$(echo "${LINE}" | cut -d$"${SEP}" -f${LON_COL})"
+    LAT="$(echo "${LINE}" | cut -d$"${SEP}" -f${LAT_COL})"
+    SITE="$(echo "${LINE}" | cut -d$"${SEP}" -f${NAME_COL})"
+
+    # Replace spaces in site name. CDO doesn't allow spaces in file names.
+    SITE="${SITE// /}"
+
+    # Remove quotes from site name.
+    SITE="${SITE//\"/}"
+    SITE="${SITE//\'/}"
+
+    echo "Extracting data for ${SITE} (${LON}, ${LAT})..."
+
+    # Create an output directory for this site. Individual files go in here.
+    SITE_OUT="${OUT_DIR}/${SITE}"
+    mkdir -p "${SITE_OUT}"
+
+    # Remove any existing files.
+    rm -f "${SITE_OUT}"/*.nc
+
+    # Extract this site's gridcell from all files in the climate dataset.
+    for NC_IN in "${IN_DIR}"/*.nc
+    do
+        # If the input directory contains no files, we iterate once with '*.nc'.
+        if [ ! -f "${NC_IN}" ]; then continue; fi
+
+        FILE_NAME="$(basename "${NC_IN}")"
+        NC_OUT="${SITE_OUT}/${FILE_NAME}"
+
+        echo "[${SITE}] Extracting ${FILE_NAME}..."
+
+        # Extract data for this gridcell.
+        ncks -O -d "${VAR_LON},${LON}" -d "${VAR_LAT},${LAT}" \
+            "${NC_IN}" "${NC_OUT}"
+
+        # CDO likes time as first dimension. Fortunately, reordering the
+        # dimensions in a file containing only a single gridcell is very fast.
+        echo "[${SITE}] Reordering ${FILE_NAME} dimensions for cdo..."
+        ncpdq -O -a "time,${VAR_LAT},${VAR_LON}" "${NC_OUT}" "${NC_OUT}"
+    done
+
+    # Merge individual per-variable files into a single site-level file.
+    echo "[${SITE}] Merging per-variable files..."
+    OUT_FILE="${OUT_DIR}/${SITE}.nc"
+    cdo -O merge "${SITE_OUT}"/*.nc "${OUT_FILE}"
+
+    # Optimise output file for LPJ-Guess access patterns.
+    echo "[${SITE}] Reordering dimensions..."
+    ncpdq -O -L${COMPRESSION_LEVEL} -a "${VAR_LAT},${VAR_LON},time" \
+        --cnk_dmn "${VAR_LAT},1" --cnk_dmn "${VAR_LON},1" \
+        --cnk_dmn time,${CNK_TIME} \
+        "${OUT_FILE}" "${OUT_FILE}"
+
+    # Remove temporary per-variable files.
+    rm -rf "${SITE_OUT}"
+
+    echo "[${SITE}] Finished."
+done <"${GRID}"
+
+echo "Done."
