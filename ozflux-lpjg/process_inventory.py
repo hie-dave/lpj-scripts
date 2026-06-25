@@ -64,6 +64,10 @@ COL_DIAMETER_90 = f"{COL_DIAMETER}{SFX_90}"
 # (in m2).
 COL_BA_90 = f"{COL_BA}{SFX_90}"
 
+# DIAM_AGG_METHOD = "mean"
+# Diameter now aggregated using quadratic mean.
+DIAM_AGG_METHOD = lambda s: numpy.sqrt(numpy.mean(s ** 2))
+
 # Possible column names for live biomass in the input data.
 COLS_LIVE_BIOMASS = [
     "aboveGroundBiomass_kilograms",
@@ -276,7 +280,7 @@ def get_inventory_data(inventory_path: str, site: str, opts: Options) -> pandas.
         opts.dead_col: (in_col_biomass_dead, "sum"),
         # Calculate mean height, diameter, and basal area.
         opts.height_col: (in_col_height, "mean"),
-        opts.diameter_col: (in_col_diam, "mean"),
+        opts.diameter_col: (in_col_diam, DIAM_AGG_METHOD),
         # Calculate 90th percentile height and diameter, ignoring NaN values.
         col_diameter_90: (in_col_diam, lambda s: numpy.nanpercentile(s, 90)),
         col_height_90: (in_col_height, lambda s: numpy.nanpercentile(s, 90)),
