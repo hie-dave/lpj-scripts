@@ -365,6 +365,9 @@ def main(opts: Options):
     # Order data frames by site name, then date.
     df_global = df_global.sort_values([opts.site_col, opts.date_col])
 
+    # Create output directory if it doesn't already exist.
+    os.makedirs(opts.output_dir, exist_ok=True)
+
     # Write the per-variable files.
     write(df_global, opts.live_col, opts, opts.live_file)
     write(df_global, opts.dead_col, opts, opts.dead_file)
