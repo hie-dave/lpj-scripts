@@ -12,8 +12,8 @@ class Options:
 
 def parse_args() -> Options:
     parser = ArgumentParser(description="Convert monthly ps to daily using daily time axis.")
-    parser.add_argument("--in-file", required=True, help="Input monthly file.")
-    parser.add_argument("--out-file", required=True, help="Output daily file.")
+    parser.add_argument("-i", "--in-file", required=True, help="Input monthly file.")
+    parser.add_argument("-o", "--out-file", required=True, help="Output daily file.")
     args = parser.parse_args()
     return Options(in_file=args.in_file, out_file=args.out_file)
 
