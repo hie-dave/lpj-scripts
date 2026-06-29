@@ -2,6 +2,7 @@
 
 from argparse import ArgumentParser
 from attr import dataclass
+import numpy as np
 import xarray as xr
 import pandas as pd
 
@@ -43,9 +44,23 @@ def main(opts: Options):
     ds_daily["time"].encoding["units"] = units
     ds_daily["time"].encoding["calendar"] = calendar
 
-    if "time_bnds" in ds_daily:
-        ds_daily["time_bnds"].encoding["units"] = units
-        ds_daily["time_bnds"].encoding["calendar"] = calendar
+    time_bounds_name = ds_in["time"].attrs.get("bounds", "time_bnds")
+    bounds_dim = (
+        ds_in[time_bounds_name].dims[-1]
+        if time_bounds_name in ds_in and len(ds_in[time_bounds_name].dims) > 1
+        else "bnds"
+    )
+    daily_bounds = np.column_stack(
+        (daily_time.values, (daily_time + pd.Timedelta(days=1)).values)
+    )
+    ds_daily[time_bounds_name] = xr.DataArray(
+        daily_bounds,
+        dims=("time", bounds_dim),
+        coords={"time": ds_daily["time"]},
+    )
+    ds_daily["time"].attrs["bounds"] = time_bounds_name
+    ds_daily[time_bounds_name].encoding["units"] = units
+    ds_daily[time_bounds_name].encoding["calendar"] = calendar
 
     ds_daily.to_netcdf(opts.out_file)
 
