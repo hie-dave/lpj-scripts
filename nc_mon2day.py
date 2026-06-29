@@ -37,6 +37,16 @@ def main(opts: Options):
         + "\nMonthly ps linearly interpolated to daily using tasmax daily time axis."
     )
 
+    units = ds_in.time.encoding.get("units", "days since 1900-01-01 00:00:00")
+    calendar = ds_in.time.encoding.get("calendar", "standard")
+
+    ds_daily["time"].encoding["units"] = units
+    ds_daily["time"].encoding["calendar"] = calendar
+
+    if "time_bnds" in ds_daily:
+        ds_daily["time_bnds"].encoding["units"] = units
+        ds_daily["time_bnds"].encoding["calendar"] = calendar
+
     ds_daily.to_netcdf(opts.out_file)
 
 if __name__ == "__main__":
