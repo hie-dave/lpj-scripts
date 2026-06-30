@@ -94,7 +94,10 @@ def plot_netcdf_map(netcdf_file, variable='s0', timestep=0, output_file=None):
             time_units = time_var.units
             if timestep < len(time_var):
                 time_value = time_var[timestep]
-                time_str = f"{time_value} {time_units}"
+                calendar = time_var.calendar if hasattr(time_var, 'calendar') else 'standard'
+                # Parse the time value.
+                dt = nc.num2date(time_value, time_units, calendar)
+                time_str = f"{dt.strftime('%Y-%m-%d %H:%M:%S')} (timestep {timestep})"
     
     # Create the plot
     plt.figure(figsize=(10, 8))
