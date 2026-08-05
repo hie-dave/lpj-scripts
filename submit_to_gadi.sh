@@ -567,13 +567,15 @@ EOF
 chmod a+x "${guess_cmd}"
 
 # Create PBS script to generate combined output files. This will be run after
-# the main job has finished running.
+# the main job has finished running. Note: always request maximum possible
+# walltime (48h) so the job doesn't time out. The job will be cheap even if
+# something goes wrong and we use all walltime.
 APPEND_JOB_NAME="${JOB_NAME}_append"
 append_cmd="${RUN_OUT_DIR}/append.cmd"
 cat <<EOF > "${append_cmd}"
 #!/usr/bin/env bash
 #PBS -l ncpus=1
-#PBS -l walltime=${WALLTIME}
+#PBS -l walltime=48:00:00
 #PBS -l mem=8GB
 #PBS -q normal
 #PBS -l wd
