@@ -42,8 +42,8 @@ def print_sinfo(nc: netCDF4.Dataset):
     lats = lat[:]
     lons = lon[:]
 
-    dlat = numpy.diff(lats)
-    dlon = numpy.diff(lons)
+    dlat = numpy.unique(numpy.diff(lats))
+    dlon = numpy.unique(numpy.diff(lons))
 
     # Print latitude and longitude coverage and resolution.
     print(f"Latitude coverage: {lats[0]} to {lats[-1]}")
