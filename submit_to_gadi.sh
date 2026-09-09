@@ -580,6 +580,7 @@ cat <<EOF > "${append_cmd}"
 #PBS -q normal
 #PBS -l wd
 #PBS -j oe
+#PBS -P ${PROJECT}
 #PBS -m ${EMAIL_OPT}
 #PBS -M ${EMAIL}
 #PBS -o ${RUN_OUT_DIR}/${APPEND_JOB_NAME}.log
