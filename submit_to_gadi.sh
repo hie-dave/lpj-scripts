@@ -605,14 +605,10 @@ function append_files {
     done
     gzip -f "\${out_file}"
 }
-pushd run1 &> /dev/null
-outfiles_unexpanded='${OUTPATH}/*.out'
-outfiles_expanded=\$(echo \$outfiles_unexpanded)
-popd &> /dev/null
-for file in \$outfiles_expanded
+while IFS= read -r -d '' file
 do
-  append_files ${NPROCESS} "\$file" "\${DIR}/${OUTPUT_DIR}"
-done
+  append_files ${NPROCESS} "${file#./}" "${DIR}/${OUTPUT_DIR}"
+done < <(cd run1 && find "${OUTPATH}" -maxdepth 1 -type f -name '*.out' -print0)
 
 # Now combine the log files.
 log_dir="\${DIR}/${LOGS_DIR}"
