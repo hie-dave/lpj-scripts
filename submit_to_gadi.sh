@@ -117,13 +117,9 @@ function get_gridlist() {
 	return 1
 }
 
-# Find a variable value in the .ins file (or any .ins file which is
-# imported, recursively).
-# Required Arguments:
-# 1. Path to the .ins file.
-# 2. Variable name.
-# 3. 1 if a numeric variable, 0 otherwise.
-get_variable() {
+# Print all values assigned to a variable in the .ins file, expanding imported
+# files recursively at the position of each import directive.
+get_variable_values() {
 	local ins="${1}"
 	local var="${2}"
 	local num="${3}"
@@ -134,11 +130,33 @@ get_variable() {
 	else
 		local val='"([^"]+)"'
 	fi
-	local regex="^[ \t]*${var}[ \t]+${val}.*$"
-	while IFS=$'\n' read ins_file
+	local regex="^[[:space:]]*${var}[[:space:]]+${val}.*$"
+	local import_regex='^[[:space:]]*import[[:space:]]*"([^"]+)"'
+	local line
+	while IFS= read -r line || [ -n "${line}" ]
 	do
-		sed -rn "s/${regex}/\1/gmp" "${ins_file}"
-	done < <(get_all_insfiles "${ins}")
+		if [[ "${line}" =~ ${import_regex} ]]
+		then
+			local imported_file="${BASH_REMATCH[1]}"
+			local imported_path
+			imported_path="$(readlink -f "$(dirname "${ins}")/${imported_file}")"
+			get_variable_values "${imported_path}" "${var}" "${num}"
+		elif [[ "${line}" =~ ${regex} ]]
+		then
+			echo "${BASH_REMATCH[1]}"
+		fi
+	done < "${ins}"
+}
+
+# Find the effective variable value in the .ins file. Imports are treated like
+# C-style includes, so the last assignment after recursively expanding them is
+# returned.
+# Required Arguments:
+# 1. Path to the .ins file.
+# 2. Variable name.
+# 3. 1 if a numeric variable, 0 otherwise.
+get_variable() {
+	get_variable_values "${1}" "${2}" "${3}" | tail -n 1
 }
 
 # Read gridlist file name from the .ins file.
