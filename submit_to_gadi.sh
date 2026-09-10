@@ -87,8 +87,8 @@ resolve_imported_insfile() {
   then
     printf 'Error: unable to read imported instruction file.\n' >&2
     printf '  Importing file: %s\n' "${importing_file}" >&2
-    printf '  Import target: %s\n' "${imported_file}" >&2
-    printf '  Resolved path: %s\n' "${imported_path}" >&2
+    printf '  Import target: %q\n' "${imported_file}" >&2
+    printf '  Resolved path: %q\n' "${imported_path}" >&2
     return 1
   fi
 
@@ -106,7 +106,9 @@ function get_all_insfiles() {
 	fi
 	printf '%s\n' "${ins_file}"
 	# import "file.ins"
-	local rx='^[ \t]*import[ \t]*"([^"]+)"\r?'
+	# Match the whole line so whitespace or comments after the closing quote
+	# are discarded rather than becoming part of the captured path.
+	local rx='^[ \t]*import[ \t]*"([^"]+)".*$'
 	local referenced_files
 	if ! referenced_files="$(sed -rn "s/${rx}/\1/gmp" "${ins_file}")"
 	then
@@ -130,7 +132,7 @@ function get_all_insfiles() {
 function get_gridlist() {
   # Note to self: sed does not currently support non-capturing groups.
   # (Although grep -P does...)
-	local gridlist_regex="[ \t]*param[ \t]*\"file_gridlist(_cf)?\"[ \t]*\(str[ \t]*\"([^\"]+)\"[ \t]*\)\r?"
+	local gridlist_regex="[ \t]*param[ \t]*\"file_gridlist(_cf)?\"[ \t]*\(str[ \t]*\"([^\"]+)\"[ \t]*\).*$"
   local nc_gridlist_regex="[ \t]*file_gridlist[ \t]*\"([^\"]+)\".*"
 
 	# Resolve the complete list first so failures in the producer cannot be
