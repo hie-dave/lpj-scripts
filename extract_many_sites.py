@@ -119,8 +119,6 @@ def init_outfile(nc_in: Dataset,
                  sites: List[Site],
                  compression_level: int = 5,
                  compression_type: str = "zlib") -> str:
-    print(f"  Initialising output file...")
-
     # Create 3 dimensions. Bounds are ignored by LPJ-GUESS so don't copy them.
     dim_time = resolve_dimension(nc_in, STD_TIME)
     nc_out.createDimension(dim_time.name, len(dim_time))
@@ -265,7 +263,6 @@ def copy_data(nc_in: Dataset, nc_out: Dataset, sites: List[Site], var_name: str)
     resolved_sites = resolve_sites(nc_in, sites)
 
     for i, site in enumerate(resolved_sites):
-        print(f"  Copying data for site {i + 1}/{len(resolved_sites)}...")
 
         # Input access range uses the resolved indices.
         iq, jq, kq = data_ranges(var_in, indices_in, site.lon_index,
@@ -276,6 +273,10 @@ def copy_data(nc_in: Dataset, nc_out: Dataset, sites: List[Site], var_name: str)
 
         # Copy data for this site.
         var_out[ir, jr, kr] = var_in[iq, jq, kq]
+
+        progress = 1.0 * (i + 1) / len(resolved_sites)
+        print(f"  Working: {progress:.1%} complete", end="\r")
+    print("  Working: 100.0% complete")
 
 def _extract_sites(nc_in: Dataset, nc_out: Dataset, gridlist: List[Site],
                    compression_level: int, compression_type: str):
