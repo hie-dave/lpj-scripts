@@ -189,7 +189,8 @@ def init_outfile(nc_in: Dataset,
                                     complevel=compression_level,
                                     chunksizes=chunk_sizes(var))
     for attr in var.ncattrs():
-        setattr(var_out, attr, getattr(var, attr))
+        if attr[0] != "_":
+            setattr(var_out, attr, getattr(var, attr))
 
     # Don't copy data yet.
     return var.name
