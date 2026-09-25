@@ -64,43 +64,94 @@ fi
 # This function will print the absolute path to the given filename.
 # We could use readlink, but it's a Linux tool - not available on MacOS (afaik).
 get_absolute_path() {
-  echo $( cd "$(dirname "$1")"; pwd -P )/$(basename "$1")
+  local directory
+  directory="$(cd "$(dirname "$1")" && pwd -P)" || return 1
+  printf '%s/%s\n' "${directory}" "$(basename "$1")"
+}
+
+# Resolve an instruction file imported by another instruction file. Import
+# paths may be absolute or relative to the importing file.
+resolve_imported_insfile() {
+  local importing_file="${1}"
+  local imported_file="${2}"
+  local imported_path
+
+  if [[ "${imported_file}" = /* ]]
+  then
+    imported_path="${imported_file}"
+  else
+    imported_path="$(dirname "${importing_file}")/${imported_file}"
+  fi
+
+  if [ ! -f "${imported_path}" ] || [ ! -r "${imported_path}" ]
+  then
+    printf 'Error: unable to read imported instruction file.\n' >&2
+    printf '  Importing file: %s\n' "${importing_file}" >&2
+    printf '  Import target: %q\n' "${imported_file}" >&2
+    printf '  Resolved path: %q\n' "${imported_path}" >&2
+    return 1
+  fi
+
+  get_absolute_path "${imported_path}"
 }
 
 # Function which prints the name of all instruction files imported,
 # recursively, by the specified instruction file.
 function get_all_insfiles() {
-	echo $1
+	local ins_file="${1}"
+	if [ -z "${ins_file}" ] || [ ! -f "${ins_file}" ] || [ ! -r "${ins_file}" ]
+	then
+		printf 'Error: unable to read instruction file: %s\n' "${ins_file:-<empty path>}" >&2
+		return 1
+	fi
+	printf '%s\n' "${ins_file}"
 	# import "file.ins"
-	local rx='^[ \t]*import[ \t]*"([^"]+)"\r?'
-	local referenced_files="$(sed -rn "s/${rx}/\1/gmp" $1)"
+	# Match the whole line so whitespace or comments after the closing quote
+	# are discarded rather than becoming part of the captured path.
+	local rx='^[ \t]*import[ \t]*"([^"]+)".*$'
+	local referenced_files
+	if ! referenced_files="$(sed -rn "s/${rx}/\1/gmp" "${ins_file}")"
+	then
+		printf 'Error: unable to parse imports from instruction file: %s\n' "${ins_file}" >&2
+		return 1
+	fi
 
-  # Any file path referenced by this .ins file could be relative to this .ins
-  # file. Therefore, we must cd to the directory containing the .ins file.
-  pushd "$(dirname $1 | xargs readlink -f)" >/dev/null 2>&1
-	for file in ${referenced_files}
+	local file
+	while IFS= read -r file
 	do
 		if [ -n "${file}" ]
 		then
-			get_all_insfiles "$(readlink -f "${file}")"
+			local imported_path
+			imported_path="$(resolve_imported_insfile "${ins_file}" "${file}")" || return 1
+			get_all_insfiles "${imported_path}" || return 1
 		fi
-	done
-  popd >/dev/null 2>&1
+	done <<< "${referenced_files}"
 }
 
 # Function which prints the name of the gridlist file in the specified ins file.
 function get_gridlist() {
   # Note to self: sed does not currently support non-capturing groups.
   # (Although grep -P does...)
-	local gridlist_regex="[ \t]*param[ \t]*\"file_gridlist(_cf)?\"[ \t]*\(str[ \t]*\"([^\"]+)\"[ \t]*\)\r?"
+	local gridlist_regex="[ \t]*param[ \t]*\"file_gridlist(_cf)?\"[ \t]*\(str[ \t]*\"([^\"]+)\"[ \t]*\).*$"
   local nc_gridlist_regex="[ \t]*file_gridlist[ \t]*\"([^\"]+)\".*"
+
+	# Resolve the complete list first so failures in the producer cannot be
+	# hidden by process substitution.
+	local ins_files
+	ins_files="$(get_all_insfiles "${1}")" || return 1
 
 	# Note: this will not work if any of the instruction file names contain
 	# a newline character.
 	while IFS=$'\n' read ins_file
 	do
-		local gridlist="$(sed -rn "s/${gridlist_regex}/\2/gmp" "${ins_file}")"
-    local nc_gridlist="$(sed -rn "s/${nc_gridlist_regex}/\1/gmp" "${ins_file}")"
+		local gridlist
+		local nc_gridlist
+		if ! gridlist="$(sed -rn "s/${gridlist_regex}/\2/gmp" "${ins_file}")" ||
+		   ! nc_gridlist="$(sed -rn "s/${nc_gridlist_regex}/\1/gmp" "${ins_file}")"
+		then
+			printf 'Error: unable to parse gridlist from instruction file: %s\n' "${ins_file}" >&2
+			return 1
+		fi
 		if [ -n "${gridlist}" ]
 		then
 			echo "${gridlist}"
@@ -110,20 +161,16 @@ function get_gridlist() {
       echo "${nc_gridlist}"
       return 0
 		fi
-	done < <(get_all_insfiles $1)
+	done <<< "${ins_files}"
 
 	# Gridlist not found.
   echo "Unable to parse gridlist file from .ins file ${ins_file}"
 	return 1
 }
 
-# Find a variable value in the .ins file (or any .ins file which is
-# imported, recursively).
-# Required Arguments:
-# 1. Path to the .ins file.
-# 2. Variable name.
-# 3. 1 if a numeric variable, 0 otherwise.
-get_variable() {
+# Print all values assigned to a variable in the .ins file, expanding imported
+# files recursively at the position of each import directive.
+get_variable_values() {
 	local ins="${1}"
 	local var="${2}"
 	local num="${3}"
@@ -134,11 +181,33 @@ get_variable() {
 	else
 		local val='"([^"]+)"'
 	fi
-	local regex="^[ \t]*${var}[ \t]+${val}.*$"
-	while IFS=$'\n' read ins_file
+	local regex="^[[:space:]]*${var}[[:space:]]+${val}.*$"
+	local import_regex='^[[:space:]]*import[[:space:]]*"([^"]+)"'
+	local line
+	while IFS= read -r line || [ -n "${line}" ]
 	do
-		sed -rn "s/${regex}/\1/gmp" "${ins_file}"
-	done < <(get_all_insfiles "${ins}")
+		if [[ "${line}" =~ ${import_regex} ]]
+		then
+			local imported_file="${BASH_REMATCH[1]}"
+			local imported_path
+			imported_path="$(resolve_imported_insfile "${ins}" "${imported_file}")" || return 1
+			get_variable_values "${imported_path}" "${var}" "${num}" || return 1
+		elif [[ "${line}" =~ ${regex} ]]
+		then
+			echo "${BASH_REMATCH[1]}"
+		fi
+	done < "${ins}"
+}
+
+# Find the effective variable value in the .ins file. Imports are treated like
+# C-style includes, so the last assignment after recursively expanding them is
+# returned.
+# Required Arguments:
+# 1. Path to the .ins file.
+# 2. Variable name.
+# 3. 1 if a numeric variable, 0 otherwise.
+get_variable() {
+	get_variable_values "${1}" "${2}" "${3}" | tail -n 1
 }
 
 # Read gridlist file name from the .ins file.
@@ -459,6 +528,10 @@ INPUTS_DIR="${RUN_OUT_DIR}/inputs"
 mkdir -p "${INPUTS_DIR}"
 cp "${CONFIG_FILE}" "${INPUTS_DIR}/"
 
+# Resolve the complete list first so an import error is reported before any
+# copy is attempted and no process-substitution process is left behind.
+ALL_INSFILES="$(get_all_insfiles "${INSFILE}")"
+
 # This won't work if any of the .ins file names contain a newline.
 while IFS=$'\n' read ins_file
 do
@@ -470,7 +543,7 @@ do
   # the file that has been copied into the local directory.
   rx='^[ \t]*import[ \t]+".*\/([^\/]+)"$'
   sed -ri "s/${rx}/import \"\1\"/gm" "${INPUTS_DIR}/$(basename "${ins_file}")"
-done < <(get_all_insfiles "${INSFILE}")
+done <<< "${ALL_INSFILES}"
 TARGET_INSFILE="${INPUTS_DIR}/$(basename "${INSFILE}")"
 
 README_FILE="${RUN_OUT_DIR}/README.md"
