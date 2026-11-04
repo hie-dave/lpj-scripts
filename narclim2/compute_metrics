@@ -1,0 +1,379 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "${DEBUG:-}" = 1 ]
+then
+  echo "Running in debug mode. Set DEBUG to 0 to disable."
+  set -x
+fi
+
+GCMS=(
+    "ACCESS-ESM1-5"
+    "EC-Earth3-Veg"
+    "MPI-ESM1-2-HR"
+    "NorESM2-MM"
+    "UKESM1-0-LL"
+)
+
+EXPERIMENTS=("ssp245" "ssp370")
+
+RCMS=("NARCliM2-0-WRF412R3" "NARCliM2-0-WRF412R5")
+
+OUT_DIR="/scratch/pt17/dh7190/narclim2/metrics"
+
+# 4km resolution, SE Australia.
+DOMAIN="NARCliM2-0-SEAus-04"
+
+# 20km resolution, entire country.
+# DOMAIN="AUS-18"
+
+VARIANT="r6i1p1f1"
+
+# Set to 1 to run in dry-run mode (i.e., don't actually submit jobs, just print
+# what would be done).
+DRY_RUN=1
+
+# Define time periods to be processed by the decadal mid-point.
+TIME_PERIODS=("2050" "2070")
+
+BASE_IN="/g/data/zz63/NARCliM2-0/output-CMIP6/DD"
+
+WALLTIME="01:00:00"
+NCPU=1
+MEMORY="4GB"
+QUEUE="normal"
+PROJECT="pt17"
+JOBFS="40GB"
+
+CORRECTED_RLON_AUS18="/g/data/zz63/NARCliM2-0/rlon-correction-AUS-18.txt"
+CORRECTED_RLON_SEAUS="/g/data/zz63/NARCliM2-0/rlon-correction-NARCliM2-0-SEAus-04.txt"
+
+GRID_FILE_AUS18="/home/590/dh7190/uploads/narclim.grid"
+GRID_FILE_SEAUS="/home/590/dh7190/uploads/narclim_0.04deg.grid"
+
+SCRIPT_DIR="${OUT_DIR}/scripts"
+LOG_DIR="${OUT_DIR}/logs"
+STREAM_DIR="${OUT_DIR}/stream"
+mkdir -p "${SCRIPT_DIR}" "${LOG_DIR}" "${STREAM_DIR}"
+
+submit() {
+    local SCRIPT="$1"
+    local JOB_NAME="$2"
+    if [ "${DRY_RUN}" -eq 1 ]; then
+        echo "Dry run: would submit job ${JOB_NAME} with script ${SCRIPT}"
+    else
+        qsub "${SCRIPT}"
+    fi
+}
+
+SCRIPTS=()
+for GCM in "${GCMS[@]}"; do
+    for EXPERIMENT in "${EXPERIMENTS[@]}"; do
+        for RCM in "${RCMS[@]}"; do
+            echo "Processing GCM: $GCM, Experiment: $EXPERIMENT, RCM: $RCM"
+
+            IN_DIR="${BASE_IN}/${DOMAIN}/NSW-Government/${GCM}/${EXPERIMENT}"
+            VARIANT="$(echo "${IN_DIR}"/* | xargs basename)"
+            if [ -z "${VARIANT}" ]; then
+                echo "No variant found in ${IN_DIR}. Skipping."
+                continue
+            fi
+            NVARIANTS=$(echo "${VARIANT}" | wc -w)
+            if [ "${NVARIANTS}" -gt 1 ]; then
+                echo "Multiple variants found in ${IN_DIR}: ${VARIANT}. Skipping."
+                continue
+            fi
+
+            IN="${IN_DIR}/${VARIANT}/${RCM}/v1-r1"
+            IN_TAS="${IN}/mon/tas/latest"
+            IN_PR="${IN}/day/pr/latest"
+
+            if [ ! -d "${IN_TAS}" ] || [ ! -d "${IN_PR}" ]; then
+                echo "Input directories for tas or pr do not exist. Skipping."
+                continue
+            fi
+
+            OUT_FILE_SFX="${DOMAIN}_${GCM}_${EXPERIMENT}_${VARIANT}_NSW-Government_${RCM}_v1-r1_yearmean"
+
+            if [ "${DOMAIN}" = "AUS-18" ]; then
+                CORRECTED_RLON="${CORRECTED_RLON_AUS18}"
+                GRID_FILE="${GRID_FILE_AUS18}"
+            elif [ "${DOMAIN}" = "NARCliM2-0-SEAus-04" ]; then
+                CORRECTED_RLON="${CORRECTED_RLON_SEAUS}"
+                GRID_FILE="${GRID_FILE_SEAUS}"
+            else
+                echo "Unknown domain: ${DOMAIN}. Skipping."
+                continue
+            fi
+
+            JOB_NAME="${GCM}_${EXPERIMENT}_${RCM}_tas"
+            SCRIPT="${SCRIPT_DIR}/${JOB_NAME}"
+            STREAM_FILE="${STREAM_DIR}/${JOB_NAME}.stream"
+            cat >"${SCRIPT}" <<EOF
+#!/usr/bin/env bash
+#PBS -l ncpus=${NCPU}
+#PBS -l walltime=${WALLTIME}
+#PBS -l mem=${MEMORY}
+#PBS -l jobfs=${JOBFS}
+#PBS -q ${QUEUE}
+#PBS -l wd
+#PBS -j oe
+#PBS -l storage=scratch/pt17+gdata/zz63
+#PBS -N ${JOB_NAME}
+#PBS -o ${LOG_DIR}/${JOB_NAME}.log
+set -euo pipefail
+
+# Load required modules.
+module purge
+module load pbs netcdf cdo nco python3/3.12.1
+
+# Print a log message.
+log() {
+    echo "[\$(date)] \$*"
+}
+
+STREAM_FILE="${STREAM_FILE}"
+rm -f "\${STREAM_FILE}"
+exec 1> >(tee -a "\${STREAM_FILE}") 2>&1
+
+IN_DIR="${IN_TAS}"
+OUT_DIR="${OUT_DIR}/output/${GCM}/${EXPERIMENT}/${RCM}/tas"
+RLON_VALUES_FILE="${CORRECTED_RLON}"
+TIME_PERIODS=(${TIME_PERIODS[@]})
+
+# Create temporary directory and cd into it.
+WORK_DIR="\$(mktemp -d -p "\${PBS_JOBFS}")"
+
+cleanup() {
+    cd "\${PBS_JOBFS}"
+    rm -rf "\${WORK_DIR}"
+}
+trap cleanup EXIT
+
+cd "\${WORK_DIR}"
+
+mkdir -p "\${OUT_DIR}"
+
+get_start_year() {
+    local FILE="\$1"
+    # Parse file name. E.g. xxxxxxxxxxxx_YYYYMM-YYYYMM.nc
+    local BASENAME="\$(basename "\${FILE}")"
+    local START_DATE="\${BASENAME##*_}"
+    START_DATE="\${START_DATE%%-*}"
+    local START_YEAR="\${START_DATE:0:4}"
+    echo "\${START_YEAR}"
+}
+
+get_end_year() {
+    local FILE="\$1"
+    # Parse file name. E.g. xxxxxxxxxxxx_YYYYMM-YYYYMM.nc
+    local BASENAME="\$(basename "\${FILE}")"
+    local END_DATE="\${BASENAME##*-}"
+    END_DATE="\${END_DATE%%.*}"
+    local END_YEAR="\${END_DATE:0:4}"
+    echo "\${END_YEAR}"
+}
+
+# Check if a given file name is required (ie it falls within one of the time
+# periods).
+required() {
+    local START_YEAR="\$(get_start_year "\$1")"
+    local END_YEAR="\$(get_end_year "\$1")"
+
+    # Optional 2nd argument: periods to check. Default to all periods.
+    local PERIODS=("\${TIME_PERIODS[@]}")
+    if [ "\${#}" -gt 1 ]; then
+        PERIODS=("\${2}")
+    fi
+    for PERIOD in "\${PERIODS[@]}"; do
+        # e.g. 2050: 2045-2055
+        local PERIOD_START=\$((PERIOD - 5))
+        local PERIOD_END=\$((PERIOD + 5))
+        if [ "\${START_YEAR}" -le "\${PERIOD_END}" ] && [ "\${END_YEAR}" -ge "\${PERIOD_START}" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+CORRECTED_RLON_DIR="\${WORK_DIR}/corrected_rlon"
+mkdir -p "\${CORRECTED_RLON_DIR}"
+log "Correcting rlon values..."
+for FILE in "\${IN_DIR}"/*.nc; do
+    if ! required "\${FILE}"; then
+        log "Skipping file \$(basename "\${FILE}") as it does not fall within the required time periods."
+        continue
+    fi
+
+    log "Correcting rlon values in file \$(basename "\${FILE}")..."
+    setvar.py --in-file "\${FILE}" --out-file "\${CORRECTED_RLON_DIR}/\$(basename "\${FILE}")" --values-file "\${RLON_VALUES_FILE}" --var rlon
+done
+IN_DIR="\${CORRECTED_RLON_DIR}"
+log "Successfully corrected all rlon values."
+
+REGRID_DIR="\${WORK_DIR}/regrid"
+GRID_FILE="${GRID_FILE}"
+mkdir -p "\${REGRID_DIR}"
+log "Regridding yearly mean..."
+for FILE in "\${IN_DIR}"/*.nc
+do
+    cdo -L -O -v -z zip1 remapbil,"\${GRID_FILE}" -yearmean -unpack "\${FILE}" "\${REGRID_DIR}/\$(basename "\${FILE}")"
+done
+
+for PERIOD in "\${TIME_PERIODS[@]}"; do
+    log "Merging files for period \${PERIOD}..."
+    IN_FILES=()
+    for FILE in "\${REGRID_DIR}"/*.nc; do
+        if ! required "\${FILE}" "\${PERIOD}"; then
+            log "Skipping file \$(basename "\${FILE}") as it does not fall within the required time periods."
+            continue
+        fi
+        IN_FILES+=("\${FILE}")
+    done
+    PERIOD_START=\$((PERIOD - 5))
+    PERIOD_END=\$((PERIOD + 5))
+    log "Number of input files: \${#IN_FILES[@]}"
+    cdo -L -O -v -z zip1 timmean -mergetime "\${IN_FILES[@]}" "\${OUT_DIR}/tas_${OUT_FILE_SFX}_\${PERIOD_START}-\${PERIOD_END}.nc"
+done
+EOF
+
+            chmod +x "${SCRIPT}"
+            submit "${SCRIPT}" "${JOB_NAME}"
+            SCRIPTS+=("${SCRIPT}")
+            
+
+            JOB_NAME="${GCM}_${EXPERIMENT}_${RCM}_pr"
+            SCRIPT="${SCRIPT_DIR}/${JOB_NAME}"
+            STREAM_FILE="${STREAM_DIR}/${JOB_NAME}.stream"
+            cat >"${SCRIPT}" <<EOF
+#!/usr/bin/env bash
+#PBS -l ncpus=${NCPU}
+#PBS -l walltime=${WALLTIME}
+#PBS -l mem=${MEMORY}
+#PBS -l jobfs=${JOBFS}
+#PBS -q ${QUEUE}
+#PBS -l wd
+#PBS -j oe
+#PBS -l storage=scratch/pt17+gdata/zz63
+#PBS -N ${JOB_NAME}
+#PBS -o ${LOG_DIR}/${JOB_NAME}.log
+set -euo pipefail
+
+# Load required modules.
+module purge
+module load pbs netcdf cdo nco python3/3.12.1
+
+# Print a log message.
+log() {
+    echo "[\$(date)] \$*"
+}
+
+STREAM_FILE="${STREAM_FILE}"
+rm -f "\${STREAM_FILE}"
+exec 1> >(tee -a "\${STREAM_FILE}") 2>&1
+
+IN_DIR="${IN_PR}"
+OUT_DIR="${OUT_DIR}/output/${GCM}/${EXPERIMENT}/${RCM}/pr"
+RLON_VALUES_FILE="${CORRECTED_RLON}"
+TIME_PERIODS=(${TIME_PERIODS[@]})
+
+# Create temporary directory and cd into it.
+WORK_DIR="\$(mktemp -d -p "\${PBS_JOBFS}")"
+
+cleanup() {
+    cd "\${PBS_JOBFS}"
+    rm -rf "\${WORK_DIR}"
+}
+trap cleanup EXIT
+
+cd "\${WORK_DIR}"
+
+mkdir -p "\${OUT_DIR}"
+
+get_start_year() {
+    local FILE="\$1"
+    # Parse file name. E.g. xxxxxxxxxxxx_YYYYMM-YYYYMM.nc
+    local BASENAME="\$(basename "\${FILE}")"
+    local START_DATE="\${BASENAME##*_}"
+    START_DATE="\${START_DATE%%-*}"
+    local START_YEAR="\${START_DATE:0:4}"
+    echo "\${START_YEAR}"
+}
+
+get_end_year() {
+    local FILE="\$1"
+    # Parse file name. E.g. xxxxxxxxxxxx_YYYYMM-YYYYMM.nc
+    local BASENAME="\$(basename "\${FILE}")"
+    local END_DATE="\${BASENAME##*-}"
+    END_DATE="\${END_DATE%%.*}"
+    local END_YEAR="\${END_DATE:0:4}"
+    echo "\${END_YEAR}"
+}
+
+# Check if a given file name is required (ie it falls within one of the time
+# periods).
+required() {
+    local START_YEAR="\$(get_start_year "\$1")"
+    local END_YEAR="\$(get_end_year "\$1")"
+
+    # Optional 2nd argument: periods to check. Default to all periods.
+    local PERIODS=("\${TIME_PERIODS[@]}")
+    if [ "\${#}" -gt 1 ]; then
+        PERIODS=("\${2}")
+    fi
+    for PERIOD in "\${PERIODS[@]}"; do
+        # e.g. 2050: 2045-2055
+        local PERIOD_START=\$((PERIOD - 5))
+        local PERIOD_END=\$((PERIOD + 5))
+        if [ "\${START_YEAR}" -le "\${PERIOD_END}" ] && [ "\${END_YEAR}" -ge "\${PERIOD_START}" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+CORRECTED_RLON_DIR="\${WORK_DIR}/corrected_rlon"
+mkdir -p "\${CORRECTED_RLON_DIR}"
+log "Correcting rlon values..."
+for FILE in "\${IN_DIR}"/*.nc; do
+    if ! required "\${FILE}"; then
+        log "Skipping file \$(basename "\${FILE}") as it does not fall within the required time periods."
+        continue
+    fi
+
+    log "Correcting rlon values in file \$(basename "\${FILE}")..."
+    setvar.py --in-file "\${FILE}" --out-file "\${CORRECTED_RLON_DIR}/\$(basename "\${FILE}")" --values-file "\${RLON_VALUES_FILE}" --var rlon
+done
+IN_DIR="\${CORRECTED_RLON_DIR}"
+log "Successfully corrected all rlon values."
+
+REGRID_DIR="\${WORK_DIR}/regrid"
+GRID_FILE="${GRID_FILE}"
+mkdir -p "\${REGRID_DIR}"
+log "Regridding yearly sum..."
+for FILE in "\${IN_DIR}"/*.nc
+do
+    cdo -L -O -v -z zip1 remapbil,"\${GRID_FILE}" -yearsum -mulc,86400 -setattribute,'pr@units=mm' -unpack "\${FILE}" "\${REGRID_DIR}/\$(basename "\${FILE}")"
+done
+
+for PERIOD in "\${TIME_PERIODS[@]}"; do
+    log "Merging files for period \${PERIOD}..."
+    IN_FILES=()
+    for FILE in "\${REGRID_DIR}"/*.nc; do
+        if ! required "\${FILE}" "\${PERIOD}"; then
+            log "Skipping file \$(basename "\${FILE}") as it does not fall within the required time periods."
+            continue
+        fi
+        IN_FILES+=("\${FILE}")
+    done
+    PERIOD_START=\$((PERIOD - 5))
+    PERIOD_END=\$((PERIOD + 5))
+    log "Number of input files: \${#IN_FILES[@]}"
+    cdo -L -O -v -z zip1 timmean -mergetime "\${IN_FILES[@]}" "\${OUT_DIR}/pr_${OUT_FILE_SFX}_\${PERIOD_START}-\${PERIOD_END}.nc"
+done
+EOF
+            chmod +x "${SCRIPT}"
+            submit "${SCRIPT}" "${JOB_NAME}"
+        done # for RCM in "${RCMS[@]}"; do
+    done # for EXPERIMENT in "${EXPERIMENTS[@]}"; do
+done # for GCM in "${GCMS[@]}"; do
