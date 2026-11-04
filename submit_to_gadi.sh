@@ -688,6 +688,7 @@ done < <(cd run1 && find "${OUTPATH}" -maxdepth 1 -type f -name '*.out' -print0)
 log_dir="\${DIR}/${LOGS_DIR}"
 mkdir -p "\${log_dir}"
 cat run*/guess.log > "\${log_dir}/guess.log"
+gzip -f "\${log_dir}/guess.log"
 
 # Aggregate any state files, if they exist.
 state_out="\${DIR}/${OUT_STATE_DIR}"
