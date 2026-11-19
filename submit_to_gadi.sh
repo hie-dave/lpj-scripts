@@ -362,7 +362,7 @@ OUT_STATE_DIR="state"
 mkdir -p "${RUNS_DIR}"
 
 # Paths for reproducibility metadata.
-REPRO_DIR="${RUN_OUT_DIR}/reproducibility"
+REPRO_DIR="${RUN_OUT_DIR}/repro"
 REPRO_EXEC_DIR="${REPRO_DIR}/executable"
 REPRO_SOURCE_DIR="${REPRO_DIR}/source"
 REPRO_SUBMIT_DIR="${REPRO_DIR}/submit"
